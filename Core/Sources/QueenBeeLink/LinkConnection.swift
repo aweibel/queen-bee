@@ -28,8 +28,14 @@ public final class LinkConnection: @unchecked Sendable {
 
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "dev.queenbee.link.connection")
+    /// The largest frame this end takes. An end that only ever expects small messages sets it low, so the
+    /// other end can't make it hold 64 MB for a frame it would throw away.
+    private let largestInbound: Int
 
-    public init(_ connection: NWConnection) { self.connection = connection }
+    public init(_ connection: NWConnection, largestInbound: Int = LinkConnection.largestFrame) {
+        self.connection = connection
+        self.largestInbound = min(largestInbound, Self.largestFrame)
+    }
 
     public convenience init(to endpoint: NWEndpoint, key: Data) {
         self.init(NWConnection(to: endpoint, using: LinkSecurity.parameters(key: key)))
@@ -82,7 +88,7 @@ public final class LinkConnection: @unchecked Sendable {
     public func receive() async throws -> Data {
         let header = try await read(4)
         let length = header.reduce(0) { $0 << 8 | Int($1) }
-        guard length <= Self.largestFrame else {
+        guard length <= largestInbound else {
             // Whatever follows a length like that can't be trusted to be frames, so the connection ends here.
             connection.cancel()
             throw LinkError("frame too large")
@@ -122,8 +128,12 @@ public final class LinkListener: @unchecked Sendable {
     /// Ends a `start` that hasn't returned yet.
     private var abandon: (@Sendable (LinkError) -> Void)?
 
+    private let largestInbound: Int
+
     /// `service` advertises the listener on the local network. `localOnly` keeps it to this machine, for tests.
-    public init(key: Data, service: NWListener.Service?, localOnly: Bool) throws {
+    /// `largestInbound` is the largest frame taken from an end that connects.
+    public init(key: Data, service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame) throws {
+        self.largestInbound = largestInbound
         let parameters = LinkSecurity.parameters(key: key)
         if localOnly { parameters.requiredInterfaceType = .loopback }
         listener = try NWListener(using: parameters)
@@ -140,7 +150,8 @@ public final class LinkListener: @unchecked Sendable {
         let started = Once()
         let failed = Once()
         let listener = listener
-        listener.newConnectionHandler = { onConnection(LinkConnection($0)) }
+        let largestInbound = largestInbound
+        listener.newConnectionHandler = { onConnection(LinkConnection($0, largestInbound: largestInbound)) }
         do {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
                 let giveUp: @Sendable (LinkError) -> Void = { error in started.run { continuation.resume(throwing: error) } }

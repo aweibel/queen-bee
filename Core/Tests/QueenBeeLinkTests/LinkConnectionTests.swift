@@ -17,8 +17,9 @@ private final class Tally: @unchecked Sendable {
     private func endpoint(_ port: UInt16) -> NWEndpoint { .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!) }
 
     /// A listener that sends back whatever it gets with "!" on the end.
-    private func echo(key: Data, frames: Tally? = nil) async throws -> (listener: LinkListener, port: UInt16) {
-        let listener = try LinkListener(key: key, service: nil, localOnly: true)
+    private func echo(key: Data, frames: Tally? = nil, largestInbound: Int = LinkConnection.largestFrame) async throws
+        -> (listener: LinkListener, port: UInt16) {
+        let listener = try LinkListener(key: key, service: nil, localOnly: true, largestInbound: largestInbound)
         let port = try await listener.start { server in
             Task {
                 do {
@@ -169,6 +170,22 @@ private final class Tally: @unchecked Sendable {
         try await client.start()
         await #expect(throws: LinkError("frame too large")) { _ = try await client.receive() }
         await #expect(throws: (any Error).self) { try await client.send(Data("hello".utf8)) }
+    }
+
+    /// A listener that expects only small messages takes nothing bigger, and ends the connection that sent it.
+    @Test func aFrameOverTheListenersOwnLimitClosesTheConnection() async throws {
+        let key = LinkSecurity.randomKey()
+        let frames = Tally()
+        let (listener, port) = try await echo(key: key, frames: frames, largestInbound: 1024)
+        defer { listener.stop() }
+        let client = LinkConnection(to: endpoint(port), key: key)
+        defer { client.close() }
+        try await client.start()
+        try await client.send(Data(count: 1024))
+        #expect(try await client.receive().count == 1025)
+        try await client.send(Data(count: 1025))
+        await #expect(throws: (any Error).self) { _ = try await client.receive() }
+        #expect(frames.value == 1)
     }
 
     @Test func aListenerStoppedBeforeItStartsThrows() async throws {
