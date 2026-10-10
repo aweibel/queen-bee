@@ -7,8 +7,16 @@ import QueenBeeLink
 final class RemoteSession {
     let connection: LinkConnection
     let device: PairedDevice
-    private let outbox: AsyncStream<HostMessage>.Continuation
+    /// One message, already encoded, with how much terminal output it carries that counts towards the flood limit.
+    private typealias Queued = (frame: Data, terminalBytes: Int)
+    private let outbox: AsyncStream<Queued>.Continuation
     private var pump: Task<Void, Never>?
+    /// Bytes of every kind queued and not yet sent.
+    private var queuedBytes = 0
+    /// A device this far behind is dropped. It connects again and starts from what is true then, which
+    /// costs less than the Mac holding everything it missed.
+    private static let backlogLimit = 32 * 1024 * 1024
+    private var isClosed = false
 
     /// The flow the device is looking at, what it was last told about it, and how many times the graph has changed.
     private var controller: FlowController?
@@ -34,23 +42,39 @@ final class RemoteSession {
     init(connection: LinkConnection, device: PairedDevice) {
         self.connection = connection
         self.device = device
-        let (stream, continuation) = AsyncStream.makeStream(of: HostMessage.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: Queued.self)
         outbox = continuation
         // One sender, so messages leave in the order they were queued.
         pump = Task { [weak self] in
-            for await message in stream {
-                do { try await connection.send(message) } catch { connection.close(); return }
-                self?.sent(message)
+            for await queued in stream {
+                do { try await connection.send(queued.frame) } catch { connection.close(); return }
+                self?.sent(queued)
             }
         }
     }
 
-    func send(_ message: HostMessage) { outbox.yield(message) }
+    func send(_ message: HostMessage) { queue(message, terminalBytes: 0) }
+
+    /// Encoded here, once, so what is waiting can be counted as it is queued.
+    private func queue(_ message: HostMessage, terminalBytes: Int) {
+        guard !isClosed, let frame = try? Remote.encode(message) else { return }
+        queuedBytes += frame.count
+        guard queuedBytes <= Self.backlogLimit else {
+            // Closing the connection ends `run`, and that tidies up. Doing it here would pull the flow out
+            // from under whoever is part-way through queueing its terminals.
+            isClosed = true
+            outbox.finish()
+            connection.close()
+            return
+        }
+        outbox.yield((frame, terminalBytes))
+    }
 
     /// Called after each message has gone.
-    private func sent(_ message: HostMessage) {
-        guard case .terminal(_, _, let chunk) = message, !chunk.reset else { return }
-        queuedTerminalBytes -= chunk.data.count
+    private func sent(_ queued: Queued) {
+        queuedBytes -= queued.frame.count
+        guard queued.terminalBytes > 0 else { return }
+        queuedTerminalBytes -= queued.terminalBytes
         if isFlooded, queuedTerminalBytes <= 0 {
             isFlooded = false
             queuedTerminalBytes = 0
@@ -62,6 +86,8 @@ final class RemoteSession {
     func run() async {
         while let message = try? await connection.receive(DeviceMessage.self) {
             switch message {
+            // Asking again for the flow already open would send the whole of it and every screen again.
+            case .open(let flowID) where flowID == controller?.flow.id: break
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
             }
@@ -71,6 +97,7 @@ final class RemoteSession {
 
     func close() {
         open(nil)
+        isClosed = true
         outbox.finish()
         connection.close()
     }
@@ -84,16 +111,22 @@ final class RemoteSession {
         controller = new
         last = nil
         guard let new else { return }
-        let snapshot = Self.snapshot(of: new)
+        let snapshot = watchedSnapshot(of: new)
         last = snapshot
         send(.opened(snapshot))
         followTerminals()
-        watch()
+    }
+
+    /// Lets go of the open flow if it has been deleted on the Mac, or its project taken out of the sidebar.
+    /// Holding on would keep the flow alive, and its terminals followed, with nobody able to see it.
+    func dropFlowIfGone() {
+        guard let controller, !AppServices.shared.allFlows.contains(where: { $0 === controller }) else { return }
+        open(nil)
     }
 
     private static func snapshot(of controller: FlowController) -> RemoteFlowSnapshot {
-        // Read so that a session being replaced counts as a change.
-        _ = controller.sessionGeneration
+        // Read so that a session being added, replaced or dropped counts as a change.
+        _ = controller.sessionsRevision
         let run = RemoteRunState(
             isRunning: controller.isRunning, marks: controller.marks, linkPasses: controller.linkPasses,
             liveLinkIDs: controller.liveLinkIDs.sorted(), handOffs: controller.handOffs, holds: controller.holds,
@@ -103,10 +136,10 @@ final class RemoteSession {
                                   runs: controller.runs)
     }
 
-    /// Asks to be told the next time anything a snapshot reads changes. It tells once, so each flush asks again.
-    private func watch() {
-        guard let controller else { return }
-        withObservationTracking { _ = Self.snapshot(of: controller) } onChange: { [weak self] in
+    /// The flow as it is now, and a request to be told the next time anything in it changes. It tells once,
+    /// so each flush asks again by building its snapshot here.
+    private func watchedSnapshot(of controller: FlowController) -> RemoteFlowSnapshot {
+        withObservationTracking { Self.snapshot(of: controller) } onChange: { [weak self] in
             Task { @MainActor in self?.flushSoon() }
         }
     }
@@ -123,12 +156,11 @@ final class RemoteSession {
 
     private func flush() {
         guard let controller, let old = last else { return }
-        let new = Self.snapshot(of: controller)
+        let new = watchedSnapshot(of: controller)
         if new.flow != old.flow { revision += 1 }
         RemoteSnapshot.updates(from: old, to: new, revision: revision).forEach(send)
         last = new
         followTerminals()
-        watch()
     }
 
     // MARK: Terminals
@@ -170,6 +202,6 @@ final class RemoteSession {
             }
             queuedTerminalBytes += chunk.data.count
         }
-        send(.terminal(id: flowID, key: key, chunk: chunk))
+        queue(.terminal(id: flowID, key: key, chunk: chunk), terminalBytes: chunk.reset ? 0 : chunk.data.count)
     }
 }

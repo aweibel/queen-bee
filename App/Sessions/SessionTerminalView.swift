@@ -54,11 +54,13 @@ final class SessionTerminalView: TerminalView, TerminalViewDelegate {
     // MARK: What the terminal asks of its host
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        // Forgotten before the process hears of the new size: it repaints as soon as it does, on another
+        // thread, and forgetting afterwards could throw away the start of that repaint.
+        if newCols < columns { output.forget() }
+        columns = newCols
         var size = windowSize()
         link.windowSize = size
         _ = process.updateWindowSize(&size)
-        if newCols < columns { output.forget() }
-        columns = newCols
         onResize?()
     }
 

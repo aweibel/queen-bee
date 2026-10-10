@@ -66,6 +66,9 @@ final class FlowController: ToolHost {
     private(set) var isRunning = false
     /// Bumped when a session object is replaced, so the canvas picks up its new terminal.
     private(set) var sessionGeneration = 0
+    /// Bumped whenever a session is added, replaced or dropped. `sessions` itself isn't watched, so this is
+    /// how a paired device's copy of the flow learns that the sessions it was told about have changed.
+    private(set) var sessionsRevision = 0
     /// Where the latest run has been, card by card. Kept after the run ends, cleared when the next starts.
     private(set) var marks: [String: RunMark] = [:]
     /// How many times each link has fired in the latest run.
@@ -105,7 +108,9 @@ final class FlowController: ToolHost {
     var viewport = CGRect.zero
 
     @ObservationIgnored weak var canvas: CanvasView?
-    @ObservationIgnored private(set) var sessions: [String: TerminalSession] = [:]
+    @ObservationIgnored private(set) var sessions: [String: TerminalSession] = [:] {
+        didSet { sessionsRevision += 1 }
+    }
     @ObservationIgnored private var engine: Engine?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var historyTask: Task<Void, Never>?
