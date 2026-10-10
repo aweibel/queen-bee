@@ -9,6 +9,7 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/e2e.py guard loop                        # some of them
 
 Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, subflow, timed, deep, noclaude.
+`mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
 """
 import atexit
 import glob
@@ -354,6 +355,93 @@ def scenario_scroll(app):
     time.sleep(0.3)
     m1 = app.state(fid)["canvas"]["magnification"]
     check("zoom changes the canvas's magnification", abs(m0 - 1.0) < 0.01 and abs(m1 - 0.5) < 0.01, f"{m0} -> {m1}")
+
+
+def cpu_seconds(pid):
+    """The processor time a process has used so far."""
+    out = subprocess.run(["ps", "-o", "time=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    total = 0.0
+    for part in out.replace("-", ":").split(":"):
+        total = total * 60 + float(part)
+    return total
+
+
+def scenario_mirror(app):
+    print("mirror: a second terminal fed only what a paired device is sent shows the same as the real one", flush=True)
+    fid = GUARD["id"]
+    app.open_flow(GUARD)
+
+    def count_to(first, last):
+        """Has Alice print a long reply. Returns how long it took and how much of one processor the app used."""
+        before = app.state(fid)["sessions"]["Alice"]["lastReply"]
+        t0, c0 = time.time(), cpu_seconds(app.pid)
+        app.op(fid, "type", card="Alice", text=f"Print the numbers {first} to {last}, one per line, as plain text. Do not use any tools and add nothing else.")
+        app.wait(fid, lambda s: s["sessions"]["Alice"]["lastReply"] not in (None, before) and s["sessions"]["Alice"]["state"] == "idle",
+                 180, f"Alice to count to {last}")
+        seconds = time.time() - t0
+        return seconds, 100 * (cpu_seconds(app.pid) - c0) / seconds
+
+    def same(what, also=lambda c: True):
+        """Checks the two screens match once the terminal has stopped changing."""
+        deadline = time.time() + 12
+        while True:
+            c = app.op(fid, "mirror-compare", card="Alice")
+            if (c["equal"] and also(c)) or time.time() > deadline:
+                break
+            time.sleep(0.5)
+        real, mirror = c["real"], c["mirror"]
+        rows = [i for i, (a, b) in enumerate(zip(real["screen"], mirror["screen"])) if a != b]
+        detail = f"real {real['cols']}x{real['rows']} cursor {real['cursor']}, mirror {mirror['cols']}x{mirror['rows']} cursor {mirror['cursor']}"
+        if rows:
+            detail += f", {len(rows)} rows differ, first is row {rows[0]}: {real['screen'][rows[0]]!r} against {mirror['screen'][rows[0]]!r}"
+        check(what, c["equal"] and also(c), detail)
+        return c
+
+    seconds, alone = count_to(1, 200)
+    print(f"        no mirror: {seconds:.1f}s, app at {alone:.1f}% of a processor", flush=True)
+    # The mirror joins late: the first reply is already on screen.
+    app.op(fid, "mirror", card="Alice")
+    time.sleep(2)
+    c = same("a mirror opened part-way through shows the same screen")
+    print(f"        the first chunk was {c['snapshotBytes']} bytes; history matches: {c['historyEqual']} "
+          f"({c['real']['scrollback']} lines against {c['mirror']['scrollback']})", flush=True)
+
+    seconds, mirrored = count_to(201, 400)
+    c = same("it still shows the same after another long reply")
+    check("the mirror can scroll back through earlier output", c["mirror"]["scrollback"] > 0 and c["mirror"]["scrollback"] == c["real"]["scrollback"],
+          f"real {c['real']['scrollback']} lines, mirror {c['mirror']['scrollback']}")
+    check("the earlier output is the same too", c["historyEqual"])
+    print(f"        mirror open: {seconds:.1f}s, app at {mirrored:.1f}% of a processor; {c['chunks']} chunks, {c['bytes']} bytes, "
+          f"{c['chunks'] / seconds:.1f} chunks a second, {c['bytes'] / max(1, c['chunks']):.0f} bytes a chunk, largest {c['largest']}", flush=True)
+
+    cols = c["real"]["cols"]
+    app.op(fid, "resize", card="Alice", width=660, height=420)
+    c = same("it shows the same after the card is resized", also=lambda c: c["real"]["cols"] != cols)
+    check("the resize reached the terminal and the mirror started again at the new size", c["real"]["cols"] != cols and c["resets"] >= 1,
+          f"{cols} columns before, {c['real']['cols']} after, {c['resets']} fresh starts")
+    print(f"        after the resize the first chunk would be {c['snapshotBytes']} bytes; history matches: {c['historyEqual']} "
+          f"({c['real']['scrollback']} lines against {c['mirror']['scrollback']})", flush=True)
+
+    # What the feed costs by itself: the chunks are counted and nothing is drawn. The kept output is
+    # made small for this reply, so the mirror opened after it starts from output with its beginning gone.
+    app.op(fid, "mirror", card="Alice", shown=False)
+    app.op(fid, "mirror-limit", card="Alice", bytes=3000)
+    seconds, counted = count_to(401, 600)
+    c = app.op(fid, "mirror-compare", card="Alice")
+    print(f"        chunks only counted: {seconds:.1f}s, app at {counted:.1f}% of a processor; {c['chunks'] / seconds:.1f} chunks a second, "
+          f"{c['bytes'] / max(1, c['chunks']):.0f} bytes a chunk", flush=True)
+    check("following the terminal costs little", counted - alone < 10, f"{alone:.1f}% without, {counted:.1f}% with")
+    app.op(fid, "mirror", card="Alice")
+    time.sleep(2)
+    c = same("a mirror opened after the oldest output was dropped shows the same screen")
+    check("only the newest output was kept", c["snapshotBytes"] < 8000, f"{c['snapshotBytes']} bytes")
+    app.op(fid, "mirror-limit", card="Alice", bytes=512 * 1024)
+
+    cols = c["real"]["cols"]
+    app.op(fid, "resize", card="Alice", width=400, height=300)
+    c = same("it shows the same after the card is made narrower", also=lambda c: c["real"]["cols"] < cols)
+    print(f"        after narrowing the mirror has {c['mirror']['scrollback']} lines of history against {c['real']['scrollback']}", flush=True)
+    app.op(fid, "mirror-close")
 
 
 def scenario_pan(app):
@@ -849,7 +937,7 @@ def main():
                     check(f"{name} ran to the end", False, f"{type(e).__name__}: {e}"[:500])
                 if name == "deep":
                     continue
-                flow_id = (GUARD if name in ("scroll", "settings") else FLOWS[name])["id"]
+                flow_id = (GUARD if name in ("scroll", "settings", "mirror") else FLOWS[name])["id"]
                 if name == "subflow":
                     app.op(INNER["id"], "close")
                 # Guard's sessions are shared by the scenarios that follow it on the same flow.

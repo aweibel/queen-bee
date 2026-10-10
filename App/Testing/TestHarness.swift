@@ -1,5 +1,6 @@
 import AppKit
 import QueenBeeCore
+import SwiftTerm
 
 /// A back door for automated checks, open only when the app is launched with `--testing`.
 /// A script asks what the app is showing and does what a person would do with the mouse
@@ -56,7 +57,7 @@ enum TestHarness {
             return [:]
         case "kill":
             // What a crash looks like from outside: the process is gone without a goodbye.
-            guard let cardID, let pid = controller.sessions[cardID]?.view.process?.shellPid, pid > 0 else { return ["error": "no process"] }
+            guard let cardID, let pid = controller.sessions[cardID]?.view.process.shellPid, pid > 0 else { return ["error": "no process"] }
             kill(pid, SIGKILL)
             return ["pid": .number(Double(pid))]
         case "restart":
@@ -185,6 +186,27 @@ enum TestHarness {
         case "undo":
             controller.undo()
             return [:]
+        case "resize":
+            // What a drag of a card's corner ends up doing.
+            guard let cardID, let width = payload["width"]?.doubleValue, let height = payload["height"]?.doubleValue else { return ["error": "resize needs card, width and height"] }
+            controller.resizeCard(cardID, width: width, height: height)
+            return [:]
+        case "mirror":
+            // A second terminal that sees only what a paired device would be sent.
+            guard let cardID else { return ["error": "mirror needs card"] }
+            MirrorWindow.show(controller.session(forCard: cardID), shown: payload["shown"]?.boolValue ?? true)
+            return [:]
+        case "mirror-limit":
+            // Makes the kept output small, so a check can see what a long session's mirror starts from.
+            guard let cardID, let bytes = payload["bytes"]?.doubleValue else { return ["error": "mirror-limit needs card and bytes"] }
+            controller.session(forCard: cardID).view.output.setLimit(Int(bytes))
+            return [:]
+        case "mirror-close":
+            MirrorWindow.close()
+            return [:]
+        case "mirror-compare":
+            guard let cardID else { return ["error": "mirror-compare needs card"] }
+            return MirrorWindow.compare(with: controller.session(forCard: cardID))
         default:
             return ["error": "unknown op"]
         }
@@ -261,3 +283,96 @@ enum TestHarness {
     }
     #endif
 }
+
+#if DEBUG
+/// A second terminal fed only by a session's feed, to check a paired device would see what
+/// the real one shows.
+enum MirrorWindow {
+    private static var window: NSWindow?
+    private static var view: TerminalView?
+    private static var held: (feed: TerminalFeed, token: UUID)?
+    private static var counts = (chunks: 0, bytes: 0, resets: 0, largest: 0)
+
+    /// Opens the mirror part-way through a session. With `shown` off nothing is drawn and the
+    /// chunks are only counted, which is what the feed costs by itself.
+    static func show(_ session: TerminalSession, shown: Bool) {
+        close()
+        counts = (0, 0, 0, 0)
+        if shown {
+            let made = TerminalView(frame: NSRect(x: 0, y: 0, width: 760, height: 480))
+            made.font = Theme.mono(12)
+            let holder = NSView(frame: made.frame)
+            holder.addSubview(made)
+            let frame = NSWindow(contentRect: made.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            frame.title = "Mirror of \(session.key)"
+            frame.contentView = holder
+            frame.isReleasedWhenClosed = false
+            frame.orderFront(nil)
+            view = made
+            window = frame
+        }
+        // The snapshot and the listener are taken in one go, so nothing printed between them is missed.
+        take(session.feed.snapshot(), counted: false)
+        held = (session.feed, session.feed.addListener { take($0, counted: true) })
+    }
+
+    static func close() {
+        if let held { held.feed.removeListener(held.token) }
+        held = nil
+        window?.close()
+        window = nil
+        view = nil
+    }
+
+    /// Does with a chunk what a device does with it.
+    private static func take(_ chunk: TerminalChunk, counted: Bool) {
+        if counted {
+            counts.chunks += 1
+            counts.bytes += chunk.data.count
+            counts.largest = max(counts.largest, chunk.data.count)
+            if chunk.reset { counts.resets += 1 }
+        }
+        guard let view else { return }
+        if chunk.reset {
+            // A reset starts from nothing: no screen, no history, no modes left over, and the size the chunk names.
+            view.resize(cols: chunk.cols, rows: chunk.rows)
+            view.resetToInitialState()
+            view.clearScrollback()
+            // A point to spare, so rounding can't cost the view a row or a column.
+            let fit = view.getOptimalFrameSize().size
+            view.setFrameSize(NSSize(width: fit.width + 1, height: fit.height + 1))
+            window?.setContentSize(view.frame.size)
+        }
+        view.feed(byteArray: [UInt8](chunk.data)[...])
+    }
+
+    static func compare(with session: TerminalSession) -> JSONValue {
+        var result: [String: JSONValue] = [
+            "chunks": .number(Double(counts.chunks)), "bytes": .number(Double(counts.bytes)),
+            "resets": .number(Double(counts.resets)), "largest": .number(Double(counts.largest)),
+            "snapshotBytes": .number(Double(session.view.output.count)),
+        ]
+        guard let view else { return .object(result) }
+        let real = describe(session.view), mirror = describe(view)
+        result["real"] = real
+        result["mirror"] = mirror
+        result["equal"] = .bool(real["screen"] == mirror["screen"] && real["cols"] == mirror["cols"] && real["rows"] == mirror["rows"]
+            && real["cursor"] == mirror["cursor"])
+        result["historyEqual"] = .bool(real["history"] == mirror["history"])
+        return .object(result)
+    }
+
+    private static func describe(_ view: TerminalView) -> JSONValue {
+        let state = view.terminalStateSnapshot()
+        let all = String(decoding: view.getBufferAsData(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+        return [
+            "cols": .number(Double(state.dimensions.cols)), "rows": .number(Double(state.dimensions.rows)),
+            "cursor": .array([.number(Double(state.cursor.col)), .number(Double(state.cursor.row))]),
+            "screen": .array(state.visibleRows.map { .string($0.text) }),
+            "scrollback": .number(Double(max(0, all.count - state.dimensions.rows))),
+            "history": .string(all.dropLast(state.dimensions.rows).joined(separator: "\n")),
+        ]
+    }
+}
+#endif
+

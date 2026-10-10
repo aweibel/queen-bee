@@ -2488,3 +2488,69 @@ git commit -m "Say what Remote does and how it is kept safe"
 - The iOS target in `project.yml`, with its team id read from a git-ignored `Mobile/Local.xcconfig`.
 - A client built on `LinkConnection`: browse `_queenbee-pair._tcp` to pair, then `_queenbee._tcp` with the record's `device` equal to its own id.
 - A mirror model fed by `HostMessage`, the touch canvas, terminals fed by `TerminalChunk`, and the panels.
+
+---
+
+## Result of Task 2
+
+**Way B won: the session owns its process link, and the device gets the output itself, history included.**
+(The task brief tried it first, ahead of Way A, because the owner wants scroll-back on the device.)
+
+**What was built**
+
+- `App/Sessions/SessionTerminalView.swift`: a `TerminalView` subclass that owns the `LocalProcess`. A small
+  delegate object takes each batch of output on the reading thread, feeds the view with `feedSender` (the same
+  parse-on-the-reading-thread path SwiftTerm's own view uses) and appends the bytes to an `OutputLog`.
+- `App/Remote/TerminalFeed.swift`: the protocol, the `OutputLog` (the last 512 KB or so per session, behind a lock)
+  and `OutputFeed`. `snapshot()` is the whole log with `reset` set. Listeners get each further batch, gathered for
+  16 ms, as chunks without `reset`.
+- `TerminalSession.feed` is lazy. Until it is read, the only extra work per session is appending bytes to the log.
+  With no listeners the same holds: collection for listeners is switched off again at the first batch that finds none.
+- Test harness ops `mirror`, `mirror-close`, `mirror-compare`, `mirror-limit` and `resize`, and the e2e scenario
+  `mirror` (run only when named).
+
+**Was there a cleaner way that keeps `LocalProcessTerminalView`? No.** Its process is `public internal(set)`, its
+adapter is private, `setProcessOutputHandler` carries no bytes, and the only other tap, `setHostLogging`, writes
+one file per read.
+
+**Why Way A (send the screen) would not have done.** SwiftTerm 1.99.0 no longer gives out its terminal:
+`getTerminal()` is gone. The public copied reads (`terminalStateSnapshot()`, `visibleRowsText`, `getBufferAsData`)
+give text, cursor and size but no colours or styles, so a screen written out from them would be plain text.
+It was not needed, so it was not built.
+
+**What was found by testing**
+
+- No forced repaint is needed on a late join. Fed the log from the start, the mirror's screen, cursor and all 202
+  lines of history matched the real terminal exactly.
+- On a resize Claude Code (2.1.296) repaints the visible screen only and leaves the history alone. So after a
+  resize the mirror starts again (one chunk with `reset`, 400 ms after the size last changed) and its screen
+  matches, but history from before the resize is not laid out exactly as on the Mac: 399 lines against 407 after
+  widening a card.
+- Output laid out for a wider terminal comes out scrambled when a narrower one is fed it. So when a terminal gets
+  narrower the log is emptied, and the device's history starts from that moment (3 lines against the Mac's 500 in
+  the test). The screen still matches.
+- When the oldest output has been dropped (a long session), the snapshot first puts the cursor on the bottom row,
+  because the program draws upwards from where it left the cursor. Checked with the log held to 3 KB: screen equal.
+
+**Measurements** (`./scripts/e2e.py mirror`, Haiku printing 200 numbers, four sessions open in the test copy)
+
+| | App's share of one processor | Chunks a second | Bytes a chunk |
+|---|---|---|---|
+| No mirror, `feed` never read | 1.6% | | |
+| Chunks counted, nothing drawn | 3.6% | 6.9 | 677 |
+| Mirror window drawn too | 3.9% | 6.2 | 616 (largest 1,347) |
+
+The replies took 3 to 6 seconds, so these are short samples: an earlier run gave 2.2%, 2.9% and 4.6%. The first
+chunk for a late join was 17 KB after one reply and 30 KB after two. It can be as large as the log: about 576 KB.
+
+**Limits**
+
+- History on the device goes back as far as the log does, and no further than the last time the card got narrower.
+  A busy session prints a lot (spinner frames count), so 512 KB may be minutes, not hours.
+- History from before a resize can differ from the Mac's by a few lines.
+- The chunks are the program's own output, so they hold the questions it asks its terminal (device attributes,
+  colours, keyboard mode). Whatever is fed them must not send the answers anywhere.
+- `snapshot()` and `addListener` must be called together, with no `await` between, or output printed in between is
+  missed.
+- Heavy output was not timed against the old view. Each batch now costs two extra copies and a lock; parsing and
+  drawing, which dominate, are unchanged.
