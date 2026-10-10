@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import QueenBeeCore
-import SwiftTerm
 
 extension SessionState {
     var color: NSColor {
@@ -27,7 +26,9 @@ extension SessionState {
 final class TerminalSession: NSObject {
     /// "<flowID>/<cardID>" or "<flowID>/orchestrator": the QB_SESSION the helper reports as.
     let key: String
-    @ObservationIgnored let view: LocalProcessTerminalView
+    @ObservationIgnored let view: SessionTerminalView
+    /// What the terminal shows, for a paired device. Nothing runs for it until it is first asked for.
+    @ObservationIgnored private(set) lazy var feed: TerminalFeed = makeFeed()
     private(set) var state: SessionState = .notStarted
     /// The session's last finished reply, as its turn-end reported it.
     var lastReply: String?
@@ -45,10 +46,10 @@ final class TerminalSession: NSObject {
 
     init(key: String) {
         self.key = key
-        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        view = SessionTerminalView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
         super.init()
         view.font = Theme.mono(12)
-        view.processDelegate = self
+        view.onExit = { [weak self] code in self?.processExited(code) }
         applyTheme()
         // The terminal takes plain colours, so it is told again whenever light and dark swap.
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
@@ -60,6 +61,16 @@ final class TerminalSession: NSObject {
         let appearance = NSApp.effectiveAppearance
         view.nativeBackgroundColor = Theme.terminal.fixed(in: appearance)
         view.nativeForegroundColor = Theme.terminalInk.fixed(in: appearance)
+    }
+
+    private func makeFeed() -> TerminalFeed {
+        let view = view
+        let feed = OutputFeed(log: view.output) {
+            let size = view.terminalDimensions
+            return (size.cols, size.rows)
+        }
+        view.onResize = { [weak feed] in feed?.sizeChanged() }
+        return feed
     }
 
     var isLive: Bool { state != .notStarted && state != .exited }
@@ -112,6 +123,12 @@ final class TerminalSession: NSObject {
         flushSoon()
     }
 
+    private func processExited(_ exitCode: Int32?) {
+        state = .exited
+        waiting.removeAll()
+        onExit?(exitCode)
+    }
+
     private func flushSoon() {
         guard state == .idle, !waiting.isEmpty else { return }
         let delay = max(0, readyAt.timeIntervalSinceNow)
@@ -125,18 +142,6 @@ final class TerminalSession: NSObject {
             try? await Task.sleep(for: .milliseconds(350))
             self.view.send(txt: "\r")
         }
-    }
-}
-
-extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
-        state = .exited
-        waiting.removeAll()
-        onExit?(exitCode)
     }
 }
 
