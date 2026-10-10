@@ -26,6 +26,18 @@ struct SidebarView: View {
             .padding(.vertical, 6)
             .background(Theme.bar.ui)
             Rectangle().fill(Theme.hairline.ui).frame(height: 1)
+            if !RemoteHost.shared.sessions.isEmpty {
+                let names = RemoteHost.shared.sessions.map(\.device.name).joined(separator: ", ")
+                Label(names, systemImage: "ipad.and.iphone")
+                    .font(.dsMono(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .lineLimit(1)
+                    .padding(.horizontal, Theme.Space.s)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help("Connected to this Mac now. You can remove a device in Settings.")
+                Rectangle().fill(Theme.hairline.ui).frame(height: 1)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
