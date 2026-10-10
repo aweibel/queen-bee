@@ -1,42 +1,5 @@
 import Foundation
-
-/// What a Claude Code session has used: tokens, and what they would cost at API prices.
-nonisolated struct Usage: Codable, Equatable, Sendable {
-    var cost = 0.0
-    var input = 0
-    var output = 0
-    var cacheRead = 0
-    var cacheWrite = 0
-
-    var tokens: Int { input + output + cacheRead + cacheWrite }
-    var isZero: Bool { cost == 0 && tokens == 0 }
-
-    static func + (a: Usage, b: Usage) -> Usage {
-        Usage(cost: a.cost + b.cost, input: a.input + b.input, output: a.output + b.output,
-              cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite)
-    }
-
-    /// What was used since `earlier`, never less than nothing.
-    func since(_ earlier: Usage) -> Usage {
-        Usage(cost: max(0, cost - earlier.cost), input: max(0, input - earlier.input), output: max(0, output - earlier.output),
-              cacheRead: max(0, cacheRead - earlier.cacheRead), cacheWrite: max(0, cacheWrite - earlier.cacheWrite))
-    }
-
-    /// "$0.37", "<$0.01", "$124".
-    var price: String {
-        if cost <= 0 { return "$0.00" }
-        if cost < 0.01 { return "<$0.01" }
-        return cost >= 100 ? String(format: "$%.0f", cost) : String(format: "$%.2f", cost)
-    }
-
-    /// "182k tokens", "1.2M tokens".
-    var tokenCount: String {
-        let n = Double(tokens)
-        if n >= 1_000_000 { return String(format: "%.1fM tokens", n / 1_000_000) }
-        if n >= 1_000 { return String(format: "%.0fk tokens", n / 1_000) }
-        return "\(tokens) tokens"
-    }
-}
+import QueenBeeCore
 
 /// What a model's tokens cost, in dollars per million, for pricing the turns Claude Code hasn't totalled yet.
 nonisolated struct ModelPrice: Sendable {

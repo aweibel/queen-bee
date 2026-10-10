@@ -3,22 +3,7 @@ import Observation
 import QueenBeeCore
 import SwiftTerm
 
-/// What a session is doing, as Claude Code's hooks report it.
-enum SessionState: String {
-    case notStarted, starting, idle, working, needsYou, failed, exited
-
-    var label: String {
-        switch self {
-        case .notStarted: "Not started"
-        case .starting: "Starting"
-        case .idle: "Idle"
-        case .working: "Working"
-        case .needsYou: "Needs you"
-        case .failed: "Failed"
-        case .exited: "Exited"
-        }
-    }
-
+extension SessionState {
     var color: NSColor {
         switch self {
         case .notStarted, .starting, .idle: Theme.inkSecondary

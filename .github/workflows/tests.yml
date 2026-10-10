@@ -14,6 +14,9 @@ jobs:
       - name: swift test
         working-directory: Core
         run: swift test
+      - name: Build for iOS
+        working-directory: Core
+        run: xcodebuild -scheme QueenBeeCore-Package -destination 'generic/platform=iOS Simulator' build
 
   clean:
     name: Nothing private in the repository
