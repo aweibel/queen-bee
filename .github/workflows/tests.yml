@@ -14,3 +14,17 @@ jobs:
       - name: swift test
         working-directory: Core
         run: swift test
+
+  clean:
+    name: Nothing private in the repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Signing details, keys and home paths
+        run: ./scripts/check-clean.sh
+      - name: Secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

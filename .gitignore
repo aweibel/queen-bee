@@ -8,3 +8,10 @@ build/
 .queenbee/
 .claude/
 dist/
+
+# Signing details stay on the machine that made them.
+Local.xcconfig
+*.mobileprovision
+*.p12
+*.cer
+*.xcarchive

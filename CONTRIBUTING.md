@@ -49,6 +49,9 @@ The README's [How it works](README.md#how-it-works) section maps the four parts:
 
 Fork, branch from `main`, keep the pull request to one thing, and describe what you changed and how you checked it.
 
+The repository is public, so run `./scripts/check-clean.sh` before you push. It fails if a signing file, team id, key
+or home folder path is about to be committed.
+
 ## Known issues and where help is wanted
 
 Bugs:
