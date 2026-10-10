@@ -47,8 +47,21 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   or an agent you have allowed to run any shell command, could read another session's secret.
 - **Updates are signed.** The app only installs an update signed with the project's update key. Releases are signed
   with a Developer ID but are not yet notarized by Apple.
+- **Remote is off until you turn it on.** With "Let your iPad or iPhone connect" on in Settings, an iPad or iPhone
+  you paired can connect over your local network and see your flows, their runs and their terminals. For now a
+  paired device can only watch: it cannot type into a terminal, start a run or change a flow. Pairing takes a
+  one-time code shown on this Mac, which works once and for two minutes. Each paired device has its own key, kept
+  in the Keychain on both sides and never in a file, and every connection is encrypted with it; a device without a
+  key is told nothing. Removing a device in Settings deletes its key and closes its connection at once. A paired
+  device cannot add a project folder, answer the "trust this folder" prompt, or change the Remote settings. Queen
+  Bee does not connect to any server for this, and nothing is reachable from outside your network unless your
+  network makes it so.
 
 ## Known limits
 
 - The session plugin is copied to Application Support at launch, where another program running as you could change it.
 - A flow's regular-expression checks run as written. A pathological pattern can stall a run.
+- A Remote connection is encrypted with a key both sides already hold, and that key is not replaced by a fresh one
+  for each connection. So someone who recorded the Wi-Fi traffic while a device was being paired, and who also saw
+  the code that pairing used, could work out that device's key and read what it is sent. The code is on screen for
+  two minutes at most. Treat it like a password: don't share your screen or photograph it while it shows.

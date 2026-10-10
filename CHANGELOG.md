@@ -6,6 +6,10 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi. This release has the Mac side only; the companion app is still being built.
+
 ## [0.3.3] - 2026-10-11
 
 ### Added

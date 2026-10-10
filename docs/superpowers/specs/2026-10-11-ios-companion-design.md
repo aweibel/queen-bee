@@ -120,11 +120,11 @@ One undo history, on the Mac. Undo on a device undoes the last edit, whichever d
 
 ### Joining a terminal part-way through
 
-A device that opens a flow needs each terminal's current screen, not only new output. The Mac replays the recent
-buffer for the session, then makes the session repaint the way a window resize does.
-
-This is the main technical risk: how cleanly Claude Code's screen recovers from a replay is untested. It is the
-first thing built in stage 1.
+A device that opens a flow needs each terminal's current screen, not only new output. The Mac keeps each
+session's most recent output, about 512 KB, and sends it when a device opens the flow. Fed that, the device shows
+the same screen as the Mac and can scroll back through earlier output. No repaint is forced on the session; testing
+showed it isn't needed. When a card is made narrower the kept output is emptied, so the device's history starts
+again from that point. History never reaches back further than the kept 512 KB or so.
 
 ## Pairing and security
 
@@ -144,11 +144,12 @@ the Wi-Fi traffic. The app also accepts the secret as pasted text, since the Sim
 ### Every later connection
 
 Encrypted, and both sides prove they hold the device's key before any data moves. An unpaired device cannot make a
-request.
+request. Each paired device has its own listener and its own key on the Mac, so removing one device stops its
+listener and leaves the others as they were.
 
 ### On the Mac
 
-- The listener exists only while "Allow remote devices" is on.
+- The listeners exist only while "Let your iPad or iPhone connect" is on.
 - Each paired device is listed with Remove, which discards its key at once and closes its connection.
 - Each paired device has a "Can control" switch. Off means watch only.
 - The Mac window shows an indicator while a device is connected.

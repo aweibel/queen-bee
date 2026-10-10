@@ -82,6 +82,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - When the app is in the background, a notification tells you that a card needs you or a run has ended. **Settings** turns this off.
 - A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
 - **View → Appearance** switches between light, dark and following the system.
+- **Remote (in progress).** The Mac side of an iPad and iPhone companion that works over local Wi-Fi with no server. **Settings → Remote** turns it on and pairs a device; the companion app is still being built. [SECURITY.md](SECURITY.md) says what a paired device can see.
 
 ## How it works
 
@@ -93,7 +94,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 ## Tests
 
 ```sh
-cd Core && swift test        # 174 unit tests on the model, store, engine, link router, snapping, layout, triggers and tools
+cd Core && swift test        # 194 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools and the Remote link
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
