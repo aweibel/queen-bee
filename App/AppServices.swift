@@ -150,6 +150,7 @@ final class AppServices {
             Task { @MainActor in AppServices.shared.projects.forEach { $0.rescan() } }
         }
         restoreProjects()
+        RemoteHost.shared.start()
         // A test run isn't a first run, unless it asks to see the walk-through.
         showsWelcome = remembersProjects ? !UserDefaults.standard.bool(forKey: OnboardingView.seenKey) : LaunchArguments.welcome
         if remembersProjects { dismissedHints = Set(UserDefaults.standard.stringArray(forKey: Self.hintsKey) ?? []) }
@@ -260,6 +261,7 @@ final class AppServices {
     }
 
     func shutDown() {
+        RemoteHost.shared.shutDown()
         projects.forEach { $0.close() }
         unlink(socketPath)
     }

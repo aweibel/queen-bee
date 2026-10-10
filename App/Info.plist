@@ -9,5 +9,13 @@
 	<string>yY7DQmoNMLvc0wlsV3MUWNmagTIZ2hTFZG9RoZZA8RQ=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- Remote: a paired iPad or iPhone finds this Mac on the local network. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Queen Bee uses your local network so an iPad or iPhone you paired can show your flows.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_queenbee._tcp</string>
+		<string>_queenbee-pair._tcp</string>
+	</array>
 </dict>
 </plist>
