@@ -38,6 +38,8 @@ targets:
         buildPhase: resources
     dependencies:
       - package: QueenBeeCore
+      - package: QueenBeeCore
+        product: QueenBeeLink
       - package: SwiftTerm
       - package: swift-subprocess
         product: Subprocess
