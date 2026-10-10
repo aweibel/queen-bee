@@ -11,13 +11,19 @@ public enum LinkSecurity {
     /// 32 random bytes: a device's key, or a pairing code's secret.
     public static func randomKey() -> Data {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        // Carrying on would hand out a key of zeros, which anyone could guess.
+        precondition(status == errSecSuccess, "Queen Bee couldn't make a random key (SecRandomCopyBytes gave \(status)).")
         return Data(bytes)
     }
 
     /// TLS over TCP where both ends must hold `key`. Nothing is exchanged with an end that doesn't.
     public static func parameters(key: Data) -> NWParameters {
+        precondition(key.count == 32, "A link key is 32 bytes, and this one is \(key.count).")
         let tls = NWProtocolTLS.Options()
+        // Only TLS 1.2 has the key-only suite below. Any other version would bring its own suites, which need no key.
+        sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+        sec_protocol_options_set_max_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
         let secret = key.withUnsafeBytes { DispatchData(bytes: $0) }
         let identity = Data("queenbee".utf8).withUnsafeBytes { DispatchData(bytes: $0) }
         sec_protocol_options_add_pre_shared_key(tls.securityProtocolOptions, secret as __DispatchData, identity as __DispatchData)
