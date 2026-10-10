@@ -90,10 +90,24 @@ targets:
       base:
         PRODUCT_NAME: qb
         SKIP_INSTALL: YES
+  qb-remote-check:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Tools/RemoteCheck
+    dependencies:
+      - package: QueenBeeCore
+      - package: QueenBeeCore
+        product: QueenBeeLink
+    settings:
+      base:
+        PRODUCT_NAME: qb-remote-check
+        SKIP_INSTALL: YES
 schemes:
   QueenBee:
     build:
       targets:
         QueenBee: all
+        qb-remote-check: all
     run:
       config: Debug

@@ -8,23 +8,26 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/build.sh && ./scripts/e2e.py            # every scenario
     ./scripts/e2e.py guard loop                        # some of them
 
-Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, subflow, timed, deep, noclaude.
+Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, subflow, timed, deep, noclaude.
 `mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
 """
 import atexit
 import glob
 import json
 import os
+import queue
 import shutil
 import socket
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "build/Build/Products/Debug/QueenBee.app")
+CHECK = os.path.join(ROOT, "build/Build/Products/Debug/qb-remote-check")
 # Unix socket paths are capped at 104 bytes, so the test copy's support folder has to be short.
 # Each run has its own, named for its process, so two runs at once leave each other alone.
 SUPPORT_PREFIX = os.path.expanduser("~/Library/Application Support/QBTest-")
@@ -307,6 +310,100 @@ def scenario_settings(app):
     s = app.wait(fid, lambda s: s["sessions"]["Alice"]["state"] == "idle", 90, "Alice to come back")
     check("after Restart to apply nothing is waiting", s["sessions"]["Alice"]["awaitingRestart"] == [], str(s["sessions"]["Alice"]["awaitingRestart"]))
     app.op(fid, "edit", card="Alice", effort="")
+
+
+class Device:
+    """The stand-in for a paired device: runs qb-remote-check and reads what it prints."""
+
+    def __init__(self, *args):
+        self.proc = subprocess.Popen([CHECK, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.lines = queue.Queue()
+        self.seen = []
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            self.lines.put(json.loads(line))
+        self.lines.put({"type": "exited"})
+
+    def tell(self, text):
+        self.proc.stdin.write(text + "\n")
+        self.proc.stdin.flush()
+
+    def until(self, wanted, timeout=20):
+        """The next message that passes `wanted` (a type name or a test), or None. Earlier ones stay in `seen`."""
+        test = wanted if callable(wanted) else (lambda m: m["type"] == wanted)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                message = self.lines.get(timeout=max(0.1, deadline - time.time()))
+            except queue.Empty:
+                return None
+            self.seen.append(message)
+            if test(message):
+                return message
+            if message["type"] == "exited":
+                return None
+        return None
+
+    def stop(self):
+        self.proc.kill()
+
+
+def scenario_remote(app):
+    print("remote: a paired device gets the flow, its changes and its terminals, and nobody else gets anything", flush=True)
+    fid = GUARD["id"]
+    app.open_flow(GUARD)
+    check("Remote turns on", app.op("app", "remote-on").get("on") is True)
+    offer = app.op("app", "remote-pair")
+    check("pairing puts a one-time code on offer", str(offer.get("code", "")).startswith("queenbee-pair:1:"), str(offer.keys()))
+
+    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "60")
+    try:
+        paired = device.until("paired")
+        check("the device pairs", paired is not None, str(device.seen))
+        check("the code is put away once it has been used", app.op("app", "remote-state")["pairing"] is False)
+        port = int(app.op("app", "remote-port", device=paired["device"])["port"])
+        device.tell(str(port))
+
+        welcome = device.until("welcome")
+        check("a paired device is let in, to watch only", welcome is not None and welcome["canControl"] is False, str(device.seen))
+        library = device.until("library")
+        check("it is sent the flow list", library is not None and "Guard" in library["flows"], str(library))
+        opened = device.until("opened")
+        check("it is sent the flow it opened", opened is not None and opened["name"] == "Guard" and opened["cards"] == 3, str(opened))
+        check("with each session's state", opened is not None and "orchestrator" in opened["sessions"], str(opened))
+        first = device.until(lambda m: m["type"] == "terminal" and m["reset"] and m["bytes"] > 0)
+        check("and each terminal's screen as it is now", first is not None, str(device.seen[-4:]))
+
+        app.op(fid, "edit", card="Alice", effort="high")
+        changed = device.until(lambda m: m["type"] == "flow" and "high" in m["efforts"])
+        check("a change on the Mac reaches the device", changed is not None and changed["revision"] >= 1, str(device.seen[-4:]))
+        app.op(fid, "edit", card="Alice", effort="")
+        check("and so does changing it back", device.until(lambda m: m["type"] == "flow" and "high" not in m["efforts"]) is not None)
+
+        again = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid)
+        check("a used code pairs nothing", again.until(lambda m: m["type"] in ("pair-failed", "pair-refused"), 10) is not None, str(again.seen))
+        again.stop()
+        check("and it paired nothing", app.op("app", "remote-state")["devices"] == 1)
+
+        stranger = Device("--port", str(port), "--device", paired["device"], "--wrong-key")
+        kept_out = stranger.until("kept-out", 10)
+        # Turned down by the listener itself: giving up on a port nothing answers would prove nothing.
+        check("a device without the key is kept out", kept_out is not None and "timed out" not in kept_out["error"], str(stranger.seen))
+        stranger.stop()
+        check("and the paired device is still connected, alone", app.op("app", "remote-state")["connected"] == 1)
+
+        app.op("app", "remote-remove", device=paired["device"])
+        check("removing a device ends its connection", device.until("ended", 10) is not None, str(device.seen[-3:]))
+        state = app.op("app", "remote-state")
+        check("and forgets it", state["devices"] == 0 and state["connected"] == 0, str(state))
+        late = Device("--port", str(port), "--device", paired["device"], "--wrong-key")
+        check("and nothing listens where it used to connect", late.until("kept-out", 10) is not None and state["listening"] == 0,
+              f"{late.seen} {state}")
+        late.stop()
+    finally:
+        device.stop()
 
 
 def scenario_scroll(app):
@@ -915,7 +1012,7 @@ def scenario_noclaude(project):
 
 
 def main():
-    wanted = sys.argv[1:] or ["guard", "settings", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "subflow", "timed", "deep", "noclaude"]
+    wanted = sys.argv[1:] or ["guard", "settings", "remote", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "subflow", "timed", "deep", "noclaude"]
     if not os.path.exists(APP):
         sys.exit("Build the app first: ./scripts/build.sh")
     sweep()
@@ -937,12 +1034,12 @@ def main():
                     check(f"{name} ran to the end", False, f"{type(e).__name__}: {e}"[:500])
                 if name == "deep":
                     continue
-                flow_id = (GUARD if name in ("scroll", "settings", "mirror") else FLOWS[name])["id"]
+                flow_id = (GUARD if name in ("scroll", "settings", "remote", "mirror") else FLOWS[name])["id"]
                 if name == "subflow":
                     app.op(INNER["id"], "close")
                 # Guard's sessions are shared by the scenarios that follow it on the same flow.
                 later = in_app[in_app.index(name) + 1:]
-                if not (name in ("guard", "settings") and ("settings" in later or "scroll" in later)):
+                if not (name in ("guard", "settings", "remote") and any(n in later for n in ("settings", "remote", "scroll"))):
                     app.op(flow_id, "close")
         finally:
             app.quit()

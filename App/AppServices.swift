@@ -330,6 +330,7 @@ final class AppServices {
         }
         if request.kind == "test" {
             guard TestHarness.isEnabled else { return ["error": "testing is off"] }
+            if let reply = await TestHarness.handleRemote(request.payload) { return reply }
             guard parts.count == 2, let controller = controllers[parts[0]]?.value else { return TestHarness.handleApp(request.payload) }
             return await TestHarness.handle(request.payload, controller: controller)
         }

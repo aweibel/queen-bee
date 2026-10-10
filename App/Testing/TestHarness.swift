@@ -29,6 +29,42 @@ enum TestHarness {
         ]
     }
 
+    /// Turns Remote on, pairs and unpairs, for a test copy only. Nil for anything else.
+    static func handleRemote(_ payload: JSONValue) async -> JSONValue? {
+        guard isEnabled else { return nil }
+        let host = RemoteHost.shared
+        /// A listener's port is known a moment after it starts.
+        func soon(_ read: () -> UInt16?) async -> UInt16? {
+            for _ in 0..<50 {
+                if let port = read() { return port }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return nil
+        }
+        switch payload["op"]?.stringValue {
+        case "remote-on":
+            host.setOn(true)
+            return ["on": .bool(host.isOn)]
+        case "remote-pair":
+            host.beginPairing()
+            guard let port = await soon({ host.pairingPort }), let code = host.pairing?.code.text else { return ["error": "pairing didn't start"] }
+            return ["code": .string(code), "port": .number(Double(port))]
+        case "remote-port":
+            let id = payload["device"]?.stringValue ?? ""
+            guard let port = await soon({ host.ports[id] }) else { return ["error": "not listening for that device"] }
+            return ["port": .number(Double(port))]
+        case "remote-state":
+            return ["devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
+                    "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
+                    "problem": host.problem.map(JSONValue.string) ?? .null]
+        case "remote-remove":
+            host.remove(payload["device"]?.stringValue ?? "")
+            return [:]
+        default:
+            return nil
+        }
+    }
+
     #if !DEBUG
     /// A release build has no back door: there is nothing here to drive.
     static func handle(_ payload: JSONValue, controller: FlowController) async -> JSONValue { ["error": "not a test build"] }
