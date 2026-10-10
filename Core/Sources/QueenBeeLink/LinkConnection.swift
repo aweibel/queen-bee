@@ -46,8 +46,10 @@ public final class LinkConnection: @unchecked Sendable {
                     switch state {
                     case .ready: once.run { continuation.resume() }
                     case .failed(let error): once.run { continuation.resume(throwing: LinkError("\(error)")) }
-                    // Waiting isn't the end: on a device the first connection waits here while it asks to use the
-                    // local network, and a network that is down may come back. The timeout is what gives up.
+                    // The other end holds a different key. Waiting would not change that, so say so at once.
+                    case .waiting(.tls(let status)): once.run { continuation.resume(throwing: LinkError("\(NWError.tls(status))")) }
+                    // Any other wait isn't the end: on a device the first connection waits here while it asks to use
+                    // the local network, and a network that is down may come back. The timeout is what gives up.
                     case .waiting(let error): waiting.reason = "\(error)"
                     case .cancelled: once.run { continuation.resume(throwing: LinkError("closed")) }
                     default: break
