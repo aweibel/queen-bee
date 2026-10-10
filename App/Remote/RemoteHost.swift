@@ -17,6 +17,8 @@ final class RemoteHost {
     static let enabledKey = "remoteEnabled"
     /// How long a pairing code works.
     static let pairingWindow: TimeInterval = 120
+    /// How long to leave it before listening again for a device whose listener failed.
+    static let listenRetry: TimeInterval = 5
 
     let devices = RemoteDevices()
     private(set) var isOn = false
@@ -29,6 +31,8 @@ final class RemoteHost {
     @ObservationIgnored private var pairingListener: LinkListener?
     @ObservationIgnored private(set) var pairingPort: UInt16?
     @ObservationIgnored private var lastLibrary: RemoteLibrary?
+    /// Goes up each time Remote is turned on or off, so a watcher from an earlier turn knows to stop.
+    @ObservationIgnored private var watch = 0
 
     /// A test copy stays on this machine and is never advertised.
     private var localOnly: Bool { TestHarness.isEnabled }
@@ -43,9 +47,10 @@ final class RemoteHost {
         guard on != isOn else { return }
         isOn = on
         problem = nil
+        watch += 1
         if on {
             devices.devices.forEach(listen(for:))
-            watchLibrary()
+            watchLibrary(watch)
         } else {
             shutDown()
         }
@@ -59,6 +64,9 @@ final class RemoteHost {
         ports.removeAll()
         sessions.forEach { $0.close() }
         sessions.removeAll()
+        watch += 1
+        // The next device to connect after Remote comes back on must be sent the list, changed or not.
+        lastLibrary = nil
     }
 
     // MARK: Paired devices
@@ -75,15 +83,35 @@ final class RemoteHost {
             listeners[id] = listener
             Task {
                 do {
-                    ports[id] = try await listener.start { connection in
+                    let port = try await listener.start(onFailure: { error in
+                        Task { @MainActor in RemoteHost.shared.listenerEnded(listener, deviceID: id, error: error) }
+                    }) { connection in
                         Task { @MainActor in await RemoteHost.shared.serve(connection, deviceID: id) }
                     }
+                    // It may have been stopped or replaced while it was starting.
+                    if listeners[id] === listener { ports[id] = port }
                 } catch {
-                    problem = "Queen Bee couldn't start listening for your devices: \(error)"
+                    listenerEnded(listener, deviceID: id, error: error)
                 }
             }
         } catch {
             problem = "Queen Bee couldn't start listening for your devices: \(error)"
+        }
+    }
+
+    /// A listener that never started, or died later: it is forgotten, and tried again shortly, because a
+    /// device with no listener can't connect until Remote is turned off and on.
+    private func listenerEnded(_ listener: LinkListener, deviceID id: String, error: Error) {
+        // Stopped on purpose or already replaced: the device was unpaired or paired again, or Remote was turned off.
+        guard listeners[id] === listener else { return }
+        listener.stop()
+        listeners[id] = nil
+        ports[id] = nil
+        problem = "Queen Bee stopped listening for your devices and will try again: \(error)"
+        Task {
+            try? await Task.sleep(for: .seconds(Self.listenRetry))
+            // `listen` itself checks that Remote is still on and nothing else is listening for the device.
+            if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
         }
     }
 
@@ -137,11 +165,12 @@ final class RemoteHost {
     }
 
     /// Sends the flow list to every device whenever a project, a flow's name or what a flow needs changes.
-    private func watchLibrary() {
-        guard isOn else { return }
+    private func watchLibrary(_ generation: Int) {
+        // Off and on again starts a new watcher. Without this check the old one would carry on beside it.
+        guard isOn, generation == watch else { return }
         var current = RemoteLibrary(projects: [])
         withObservationTracking { current = library() } onChange: {
-            Task { @MainActor in RemoteHost.shared.watchLibrary() }
+            Task { @MainActor in RemoteHost.shared.watchLibrary(generation) }
         }
         guard current != lastLibrary else { return }
         lastLibrary = current
@@ -210,7 +239,13 @@ final class RemoteHost {
             let name = String(request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
             stopListening(id)
             let key = devices.add(id: id, name: name.isEmpty ? "Device" : name)
-            try await connection.send(PairReply.granted(PairGrant(key: key, macID: devices.macID, macName: macName)))
+            do {
+                try await connection.send(PairReply.granted(PairGrant(key: key, macID: devices.macID, macName: macName)))
+            } catch {
+                // The device never got its key, so it could never connect. Listing it would only mislead.
+                remove(id)
+                return
+            }
             if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
         } catch {}
     }
