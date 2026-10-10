@@ -28,12 +28,21 @@ enum KeyVault {
         return SecItemCopyMatching(wanted as CFDictionary, &found) == errSecSuccess ? found as? Data : nil
     }
 
-    static func write(_ data: Data, _ account: String) {
-        if TestHarness.isEnabled { memory[account] = data; return }
-        SecItemDelete(query(account) as CFDictionary)
+    /// Fails every write, so a test can see what pairing does when a key can't be kept. Only a test copy sets it.
+    static var failsWrites = false
+
+    /// False if the key couldn't be kept. A key already kept under that name is left as it was then.
+    static func write(_ data: Data, _ account: String) -> Bool {
+        if TestHarness.isEnabled {
+            if failsWrites { return false }
+            memory[account] = data
+            return true
+        }
         let item = query(account).merging([kSecValueData as String: data,
                                            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]) { $1 }
-        SecItemAdd(item as CFDictionary, nil)
+        let added = SecItemAdd(item as CFDictionary, nil)
+        guard added == errSecDuplicateItem else { return added == errSecSuccess }
+        return SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecSuccess
     }
 
     static func delete(_ account: String) {
@@ -72,14 +81,24 @@ final class RemoteDevices {
 
     func key(for id: String) -> Data? { KeyVault.read(Self.account(id)) }
 
-    /// Pairs a device, or pairs it again with a new key, and returns that key.
-    func add(id: String, name: String) -> Data {
+    /// Pairs a device, or pairs it again with a new key, and returns that key. Nil if the key couldn't be
+    /// kept: nothing has changed then, because a device listed without its key could never connect.
+    func add(id: String, name: String) -> Data? {
         let key = LinkSecurity.randomKey()
-        KeyVault.write(key, Self.account(id))
+        guard KeyVault.write(key, Self.account(id)) else { return nil }
         devices.removeAll { $0.id == id }
         devices.append(PairedDevice(id: id, name: name, added: Date(), canControl: false))
         save()
         return key
+    }
+
+    /// Puts a device back as it was before it was paired again. False if its old key couldn't be kept.
+    func restore(_ device: PairedDevice, key: Data) -> Bool {
+        guard KeyVault.write(key, Self.account(device.id)) else { return false }
+        devices.removeAll { $0.id == device.id }
+        devices.append(device)
+        save()
+        return true
     }
 
     func remove(_ id: String) {

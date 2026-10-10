@@ -346,6 +346,10 @@ class Device:
                 return None
         return None
 
+    def saw(self, kind, timeout=10):
+        """A message of that type, whether it has been read past already or is still to come."""
+        return next((m for m in self.seen if m["type"] == kind), None) or self.until(kind, timeout)
+
     def stop(self):
         self.proc.kill()
 
@@ -354,15 +358,19 @@ def scenario_remote(app):
     print("remote: a paired device gets the flow, its changes and its terminals, and nobody else gets anything", flush=True)
     fid = GUARD["id"]
     app.open_flow(GUARD)
+    if app.op("app", "remote-state")["on"] is False:
+        check("nothing is put on offer while Remote is off", "error" in app.op("app", "remote-pair"))
     check("Remote turns on", app.op("app", "remote-on").get("on") is True)
     offer = app.op("app", "remote-pair")
     check("pairing puts a one-time code on offer", str(offer.get("code", "")).startswith("queenbee-pair:1:"), str(offer.keys()))
 
-    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "60")
+    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "150")
     try:
         paired = device.until("paired")
         check("the device pairs", paired is not None, str(device.seen))
         check("the code is put away once it has been used", app.op("app", "remote-state")["pairing"] is False)
+        # The stand-in gives its id in capitals, as an iPad does, and says hello with it that way.
+        check("the Mac keeps the device's id in lower case and tells it so", paired["device"] == paired["device"].lower(), str(paired))
         port = int(app.op("app", "remote-port", device=paired["device"])["port"])
         device.tell(str(port))
 
@@ -373,8 +381,15 @@ def scenario_remote(app):
         opened = device.until("opened")
         check("it is sent the flow it opened", opened is not None and opened["name"] == "Guard" and opened["cards"] == 3, str(opened))
         check("with each session's state", opened is not None and "orchestrator" in opened["sessions"], str(opened))
-        first = device.until(lambda m: m["type"] == "terminal" and m["reset"] and m["bytes"] > 0)
-        check("and each terminal's screen as it is now", first is not None, str(device.seen[-4:]))
+        wanted = set(opened["sessions"]) if opened else set()
+        screens = set()
+        while wanted - screens:
+            screen = device.until(lambda m: m["type"] == "terminal" and m["reset"] and m["bytes"] > 0)
+            if screen is None:
+                break
+            screens.add(screen["key"])
+        check("and every terminal's screen as it is now", len(wanted) >= 2 and wanted <= screens,
+              f"wanted {sorted(wanted)}, got {sorted(screens)}")
 
         app.op(fid, "edit", card="Alice", effort="high")
         changed = device.until(lambda m: m["type"] == "flow" and "high" in m["efforts"])
@@ -382,25 +397,70 @@ def scenario_remote(app):
         app.op(fid, "edit", card="Alice", effort="")
         check("and so does changing it back", device.until(lambda m: m["type"] == "flow" and "high" not in m["efforts"]) is not None)
 
+        # Pan has not been on screen on the Mac, so it has no sessions yet. It has no agents, so opening it
+        # there starts only its orchestrator.
+        other = PAN["id"]
+        device.tell(f"open {other}")
+        unopened = device.until(lambda m: m["type"] == "opened" and m["name"] == "Pan")
+        check("it can open a flow the Mac hasn't opened, whose sessions haven't started",
+              unopened is not None and all(v == "notStarted" for v in unopened["sessions"].values()), str(unopened))
+        app.op(other, "select")
+        started = device.until(lambda m: m["type"] == "run" and m["flow"] == other
+                               and m["sessions"].get("orchestrator", "notStarted") != "notStarted", 60)
+        check("and is told when the Mac opens that flow and its sessions start", started is not None, str(device.seen[-4:]))
+        check("and is sent the new session's screen",
+              device.until(lambda m: m["type"] == "terminal" and m["key"] == "orchestrator" and m["reset"], 30) is not None)
+        app.op(fid, "select")
+        app.op(other, "close")
+        device.tell(f"open {fid}")
+        check("and can go back to the first flow", device.until(lambda m: m["type"] == "opened" and m["name"] == "Guard") is not None)
+
         again = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid)
         check("a used code pairs nothing", again.until(lambda m: m["type"] in ("pair-failed", "pair-refused"), 10) is not None, str(again.seen))
         again.stop()
         check("and it paired nothing", app.op("app", "remote-state")["devices"] == 1)
+
+        app.op("app", "remote-vault", fails=True)
+        second = app.op("app", "remote-pair")
+        unlucky = Device("--code", second["code"], "--pair-port", str(int(second["port"])), "--flow", fid)
+        refused = unlucky.until("pair-refused", 10)
+        unlucky.stop()
+        app.op("app", "remote-vault", fails=False)
+        check("a device whose key can't be kept is told so", refused is not None and "couldn't save" in refused["reason"], str(unlucky.seen))
+        state = app.op("app", "remote-state")
+        check("and isn't listed, and the Mac says why", state["devices"] == 1 and "Keychain" in (state["problem"] or ""), str(state))
 
         stranger = Device("--port", str(port), "--device", paired["device"], "--wrong-key")
         kept_out = stranger.until("kept-out", 10)
         # Turned down by the listener itself: giving up on a port nothing answers would prove nothing.
         check("a device without the key is kept out", kept_out is not None and "timed out" not in kept_out["error"], str(stranger.seen))
         stranger.stop()
+        device.tell("stranger")
+        told = device.until("stranger-refused", 10)
+        check("a device that has the key and gives another id is told it isn't paired",
+              told is not None and "no longer paired" in told["reason"], str(device.seen[-3:]))
         check("and the paired device is still connected, alone", app.op("app", "remote-state")["connected"] == 1)
 
+        device.tell("reconnect")
+        check("a device that connects again takes over from its old connection",
+              device.until("reconnected", 10) is not None and device.until("welcome", 10) is not None, str(device.seen[-4:]))
+        check("and is connected once, not twice", app.op("app", "remote-state")["connected"] == 1)
+
+        device.tell("silent")
+        check("a connection can be open without having said hello", device.until("silent-open", 10) is not None, str(device.seen[-3:]))
         app.op("app", "remote-remove", device=paired["device"])
         check("removing a device ends its connection", device.until("ended", 10) is not None, str(device.seen[-3:]))
+        check("and the one that never said hello", device.saw("silent-ended", 5) is not None, str(device.seen[-3:]))
         state = app.op("app", "remote-state")
         check("and forgets it", state["devices"] == 0 and state["connected"] == 0, str(state))
         late = Device("--port", str(port), "--device", paired["device"], "--wrong-key")
-        check("and nothing listens where it used to connect", late.until("kept-out", 10) is not None and state["listening"] == 0,
-              f"{late.seen} {state}")
+        gone = late.until("kept-out", 10)
+        # A key being turned down would mean something still listens. Only the connection itself failing
+        # shows that nothing does, and that is seen from here, not taken from what the app says.
+        check("and nothing listens where it used to connect",
+              gone is not None and "refused" in gone["error"].lower() and kept_out is not None and gone["error"] != kept_out["error"],
+              f"{late.seen} against {kept_out}")
+        check("and the app agrees", state["listening"] == 0, str(state))
         late.stop()
     finally:
         device.stop()

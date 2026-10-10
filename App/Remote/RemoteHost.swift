@@ -20,14 +20,26 @@ final class RemoteHost {
     /// How long to leave it before listening again for a device whose listener failed.
     static let listenRetry: TimeInterval = 5
 
+    /// How long a new connection has to say who it is.
+    static let openingLimit: TimeInterval = 10
+    /// A device only ever sends a few words, so nothing bigger is taken from one.
+    static let largestFromDevice = 64 * 1024
+
     let devices = RemoteDevices()
     private(set) var isOn = false
     private(set) var sessions: [RemoteSession] = []
     private(set) var pairing: PairingOffer?
-    private(set) var problem: String?
+    /// What to tell the person about Remote not working. Pairing going wrong is the newer news, so it comes first.
+    var problem: String? { pairingProblem ?? listeningProblem }
+    private var listeningProblem: String?
+    private var pairingProblem: String?
 
     @ObservationIgnored private var listeners: [String: LinkListener] = [:]
     @ObservationIgnored private(set) var ports: [String: UInt16] = [:]
+    /// The devices whose listener failed and hasn't come back yet.
+    @ObservationIgnored private var failing: Set<String> = []
+    /// Connections that haven't yet said who they are, with the device each should be. Nil is one that came to pair.
+    @ObservationIgnored private var unannounced: [(deviceID: String?, connection: LinkConnection)] = []
     @ObservationIgnored private var pairingListener: LinkListener?
     @ObservationIgnored private(set) var pairingPort: UInt16?
     @ObservationIgnored private var lastLibrary: RemoteLibrary?
@@ -46,7 +58,8 @@ final class RemoteHost {
     func setOn(_ on: Bool) {
         guard on != isOn else { return }
         isOn = on
-        problem = nil
+        listeningProblem = nil
+        pairingProblem = nil
         watch += 1
         if on {
             devices.devices.forEach(listen(for:))
@@ -62,6 +75,10 @@ final class RemoteHost {
         listeners.values.forEach { $0.stop() }
         listeners.removeAll()
         ports.removeAll()
+        failing.removeAll()
+        // A connection that hasn't said hello yet has no session to close, so it is closed here.
+        unannounced.forEach { $0.connection.close() }
+        unannounced.removeAll()
         sessions.forEach { $0.close() }
         sessions.removeAll()
         watch += 1
@@ -79,23 +96,25 @@ final class RemoteHost {
             let service = localOnly ? nil : NWListener.Service(
                 name: "\(macName) \(id.prefix(4))", type: Remote.service,
                 txtRecord: NWTXTRecord(["mac": devices.macID, "device": id, "name": macName]))
-            let listener = try LinkListener(key: key, service: service, localOnly: localOnly)
+            let listener = try LinkListener(key: key, service: service, localOnly: localOnly, largestInbound: Self.largestFromDevice)
             listeners[id] = listener
             Task {
                 do {
                     let port = try await listener.start(onFailure: { error in
                         Task { @MainActor in RemoteHost.shared.listenerEnded(listener, deviceID: id, error: error) }
                     }) { connection in
-                        Task { @MainActor in await RemoteHost.shared.serve(connection, deviceID: id) }
+                        Task { @MainActor in await RemoteHost.shared.serve(connection, deviceID: id, from: listener) }
                     }
                     // It may have been stopped or replaced while it was starting.
-                    if listeners[id] === listener { ports[id] = port }
+                    guard listeners[id] === listener else { return }
+                    ports[id] = port
+                    listening(id)
                 } catch {
                     listenerEnded(listener, deviceID: id, error: error)
                 }
             }
         } catch {
-            problem = "Queen Bee couldn't start listening for your devices: \(error)"
+            listeningFailed(id, error: error)
         }
     }
 
@@ -107,7 +126,13 @@ final class RemoteHost {
         listener.stop()
         listeners[id] = nil
         ports[id] = nil
-        problem = "Queen Bee stopped listening for your devices and will try again: \(error)"
+        listeningFailed(id, error: error)
+    }
+
+    /// Says so, and tries again shortly. Also where a listener that couldn't even be made ends up.
+    private func listeningFailed(_ id: String, error: Error) {
+        failing.insert(id)
+        listeningProblem = "Queen Bee couldn't listen for your devices and will try again: \(error)"
         Task {
             try? await Task.sleep(for: .seconds(Self.listenRetry))
             // `listen` itself checks that Remote is still on and nothing else is listening for the device.
@@ -115,10 +140,23 @@ final class RemoteHost {
         }
     }
 
+    /// A device is being listened for, or no longer needs to be. The problem goes once that is true of every device.
+    private func listening(_ id: String) {
+        failing.remove(id)
+        if failing.isEmpty { listeningProblem = nil }
+    }
+
     private func stopListening(_ id: String) {
         listeners[id]?.stop()
         listeners[id] = nil
         ports[id] = nil
+        listening(id)
+        for waiting in unannounced where waiting.deviceID == id { waiting.connection.close() }
+        unannounced.removeAll { $0.deviceID == id }
+        closeSessions(of: id)
+    }
+
+    private func closeSessions(of id: String) {
         for session in sessions where session.device.id == id { session.close() }
         sessions.removeAll { $0.device.id == id }
     }
@@ -129,20 +167,45 @@ final class RemoteHost {
         devices.remove(id)
     }
 
-    private func serve(_ connection: LinkConnection, deviceID: String) async {
+    /// Starts a connection and returns the first thing it sends. One that says nothing in time is closed, so
+    /// a connection can't be opened and left open without ever saying who it is.
+    private func opening<T: Decodable & Sendable>(_ type: T.Type, on connection: LinkConnection, deviceID: String?) async throws -> T {
+        unannounced.append((deviceID, connection))
+        let limit = Task {
+            try await Task.sleep(for: .seconds(Self.openingLimit))
+            connection.close()
+        }
+        defer {
+            limit.cancel()
+            unannounced.removeAll { $0.connection === connection }
+        }
+        try await connection.start()
+        return try await connection.receive(type)
+    }
+
+    private func serve(_ connection: LinkConnection, deviceID: String, from listener: LinkListener) async {
         do {
-            try await connection.start()
-            guard case .hello(let hello) = try await connection.receive(DeviceMessage.self) else { connection.close(); return }
+            guard case .hello(let hello) = try await opening(DeviceMessage.self, on: connection, deviceID: deviceID) else {
+                connection.close()
+                return
+            }
             guard hello.version == Remote.version else {
                 let stale = hello.version < Remote.version ? "this device" : "your Mac"
                 try await connection.send(HostMessage.refused("Update Queen Bee on \(stale), so both are on the same version."))
                 connection.close()
                 return
             }
-            guard isOn, hello.deviceID == deviceID, let device = devices.devices.first(where: { $0.id == deviceID }) else {
+            // Ids are kept in lower case, and a device may send its own in either.
+            guard isOn, hello.deviceID.lowercased() == deviceID, let device = devices.devices.first(where: { $0.id == deviceID }) else {
+                // Told, so the device can say so instead of trying again for ever as if the link had dropped.
+                try await connection.send(HostMessage.refused("This device is no longer paired with this Mac. Pair it again from Settings on the Mac."))
                 connection.close()
                 return
             }
+            // The listener it came in by was replaced while it was arriving. It can simply connect again.
+            guard listeners[deviceID] === listener else { connection.close(); return }
+            // A device that connects again has given up on its old connection, even if the Mac hasn't noticed yet.
+            closeSessions(of: deviceID)
             let session = RemoteSession(connection: connection, device: device)
             sessions.append(session)
             session.send(.welcome(RemoteWelcome(version: Remote.version, macName: macName, canControl: device.canControl)))
@@ -174,19 +237,26 @@ final class RemoteHost {
         }
         guard current != lastLibrary else { return }
         lastLibrary = current
-        sessions.forEach { $0.send(.library(current)) }
+        for session in sessions {
+            session.send(.library(current))
+            session.dropFlowIfGone()
+        }
     }
 
     // MARK: Pairing
 
     /// Puts a new one-time code on offer and listens for the device that scans it.
     func beginPairing() {
+        // Nothing listens while Remote is off, the pairing listener included.
+        guard isOn else { return }
         cancelPairing()
+        pairingProblem = nil
         let offer = PairingOffer(code: PairingCode(), expires: Date().addingTimeInterval(Self.pairingWindow))
         pairing = offer
         do {
             let service = localOnly ? nil : NWListener.Service(name: macName, type: Remote.pairingService)
-            let listener = try LinkListener(key: offer.code.secret, service: service, localOnly: localOnly)
+            let listener = try LinkListener(key: offer.code.secret, service: service, localOnly: localOnly,
+                                            largestInbound: Self.largestFromDevice)
             pairingListener = listener
             Task {
                 do {
@@ -195,12 +265,14 @@ final class RemoteHost {
                     }
                     if pairing == offer { pairingPort = port }
                 } catch {
-                    problem = "Queen Bee couldn't start pairing: \(error)"
-                    if pairing == offer { cancelPairing() }
+                    // A listener stopped because the code was used, put away or replaced hasn't failed.
+                    guard pairing == offer else { return }
+                    pairingProblem = "Queen Bee couldn't start pairing: \(error)"
+                    cancelPairing()
                 }
             }
         } catch {
-            problem = "Queen Bee couldn't start pairing: \(error)"
+            pairingProblem = "Queen Bee couldn't start pairing: \(error)"
             cancelPairing()
             return
         }
@@ -215,13 +287,14 @@ final class RemoteHost {
         pairingListener = nil
         pairingPort = nil
         pairing = nil
+        for waiting in unannounced where waiting.deviceID == nil { waiting.connection.close() }
+        unannounced.removeAll { $0.deviceID == nil }
     }
 
     private func pair(_ connection: LinkConnection, offer: PairingOffer) async {
         defer { connection.close() }
         do {
-            try await connection.start()
-            let request = try await connection.receive(PairRequest.self)
+            let request = try await opening(PairRequest.self, on: connection, deviceID: nil)
             // The code works once: the first device to get this far takes it.
             guard pairing == offer, offer.expires > Date() else { return }
             guard request.version == Remote.version else {
@@ -237,15 +310,25 @@ final class RemoteHost {
             cancelPairing()
             let id = request.deviceID.lowercased()
             let name = String(request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-            stopListening(id)
-            let key = devices.add(id: id, name: name.isEmpty ? "Device" : name)
+            // A device being paired again keeps working with its old key until it has been given the new one.
+            let before = devices.devices.first { $0.id == id }
+            let oldKey = devices.key(for: id)
+            guard let key = devices.add(id: id, name: name.isEmpty ? "Device" : name) else {
+                pairingProblem = "Queen Bee couldn't save the device's key in your Keychain, so it wasn't paired."
+                try await connection.send(PairReply.refused("Queen Bee couldn't save this device's key on the Mac."))
+                return
+            }
             do {
-                try await connection.send(PairReply.granted(PairGrant(key: key, macID: devices.macID, macName: macName)))
+                try await connection.send(PairReply.granted(PairGrant(key: key, deviceID: id, macID: devices.macID, macName: macName)))
             } catch {
-                // The device never got its key, so it could never connect. Listing it would only mislead.
+                // The device never got its new key. One that was paired before goes back to its old key, and its
+                // listener was never touched. A new one could never connect, and listing it would only mislead.
+                if let before, let oldKey, devices.restore(before, key: oldKey) { return }
                 remove(id)
                 return
             }
+            // Whatever it had open used the old key, so it ends, and the listener starts again with the new one.
+            stopListening(id)
             if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
         } catch {}
     }

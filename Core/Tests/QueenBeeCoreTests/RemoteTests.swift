@@ -38,7 +38,7 @@ import Testing
         #expect(try roundTrip(DeviceMessage.open(flowID: nil)) == .open(flowID: nil))
         let request = PairRequest(version: 1, deviceID: "d", deviceName: "iPad")
         #expect(try roundTrip(request) == request)
-        let reply = PairReply.granted(PairGrant(key: Data([1, 2, 3]), macID: "m", macName: "Mac"))
+        let reply = PairReply.granted(PairGrant(key: Data([1, 2, 3]), deviceID: "d", macID: "m", macName: "Mac"))
         #expect(try roundTrip(reply) == reply)
         #expect(try roundTrip(PairReply.refused("old")) == .refused("old"))
     }

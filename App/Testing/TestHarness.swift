@@ -47,6 +47,7 @@ enum TestHarness {
             return ["on": .bool(host.isOn)]
         case "remote-pair":
             host.beginPairing()
+            guard host.pairing != nil else { return ["error": "pairing didn't start"] }
             guard let port = await soon({ host.pairingPort }), let code = host.pairing?.code.text else { return ["error": "pairing didn't start"] }
             return ["code": .string(code), "port": .number(Double(port))]
         case "remote-port":
@@ -54,9 +55,13 @@ enum TestHarness {
             guard let port = await soon({ host.ports[id] }) else { return ["error": "not listening for that device"] }
             return ["port": .number(Double(port))]
         case "remote-state":
-            return ["devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
+            return ["on": .bool(host.isOn), "devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
                     "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
                     "problem": host.problem.map(JSONValue.string) ?? .null]
+        case "remote-vault":
+            // Makes keeping a key fail, the way a locked or broken Keychain would.
+            KeyVault.failsWrites = payload["fails"]?.boolValue ?? false
+            return [:]
         case "remote-remove":
             host.remove(payload["device"]?.stringValue ?? "")
             return [:]
@@ -78,6 +83,8 @@ enum TestHarness {
             return state(of: controller)
         case "select":
             AppServices.shared.selectedFlowID = controller.flow.id
+            // Choosing the flow already chosen changes nothing, so one that was closed while on screen is opened here.
+            controller.open()
             return [:]
         case "close":
             controller.shutDown()

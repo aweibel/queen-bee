@@ -5,6 +5,11 @@
 //   qb-remote-check --port <n> --device <id> --wrong-key
 //
 // After pairing it prints the device id, then waits for the device's port on standard input.
+// After that each line on standard input is something more for it to do:
+//   open <flow id>   look at another flow
+//   reconnect        connect again, as a device does when it thinks the link has dropped
+//   silent           open a second connection and say nothing on it
+//   stranger         open a second connection and say hello as some other device
 // It never prints a key.
 import Foundation
 import Network
@@ -50,33 +55,71 @@ guard let code = option("--code").flatMap(PairingCode.init(text:)), let pairPort
     exit(2)
 }
 let seconds = option("--seconds").flatMap(Double.init) ?? 20
-let deviceID = UUID().uuidString.lowercased()
+// In capitals, as an iPad or iPhone gives its id. The Mac keeps ids in lower case and must still know this one.
+let deviceID = UUID().uuidString.uppercased()
 
 let grant: PairGrant
 do {
     let pairing = LinkConnection(to: local(pairPort), key: code.secret)
     try await pairing.start(timeout: 5)
     try await pairing.send(PairRequest(version: Remote.version, deviceID: deviceID, deviceName: "Test device"))
-    guard case .granted(let granted) = try await pairing.receive(PairReply.self) else {
-        say(["type": "pair-refused"])
+    switch try await pairing.receive(PairReply.self) {
+    case .granted(let granted): grant = granted
+    case .refused(let reason):
+        say(["type": "pair-refused", "reason": reason])
         exit(0)
     }
-    grant = granted
     pairing.close()
 } catch {
     say(["type": "pair-failed", "error": "\(error)"])
     exit(0)
 }
-say(["type": "paired", "device": deviceID, "mac": grant.macName.isEmpty ? "" : "named"])
+// The id the Mac says it kept, which is the one the script asks the app about.
+say(["type": "paired", "device": grant.deviceID, "mac": grant.macName.isEmpty ? "" : "named"])
 
 guard let port = readLine().flatMap({ UInt16($0.trimmingCharacters(in: .whitespaces)) }), port != 0 else {
     say(["type": "no-port"])
     exit(2)
 }
-let connection = LinkConnection(to: local(port), key: grant.key)
+
+/// What the reader of standard input and the reader of the connection both need.
+final class Shared: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flow: String
+    private var current: LinkConnection
+    private var next: LinkConnection?
+
+    init(flow: String, link: LinkConnection) { self.flow = flow; current = link }
+
+    /// The connection in use.
+    var link: LinkConnection {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
+
+    var flowID: String {
+        get { lock.withLock { flow } }
+        set { lock.withLock { flow = newValue } }
+    }
+
+    /// The connection to carry on with once the one in use ends.
+    func replace(with connection: LinkConnection) { lock.withLock { next = connection } }
+    func takeReplacement() -> LinkConnection? {
+        lock.withLock {
+            defer { next = nil }
+            return next
+        }
+    }
+}
+
+@Sendable func hello(as id: String) -> DeviceMessage { .hello(RemoteHello(version: Remote.version, deviceID: id, deviceName: "Test device")) }
+
+let key = grant.key
+var connection = LinkConnection(to: local(port), key: key)
+let shared = Shared(flow: flowID, link: connection)
 do {
     try await connection.start(timeout: 5)
-    try await connection.send(DeviceMessage.hello(RemoteHello(version: Remote.version, deviceID: deviceID, deviceName: "Test device")))
+    try await connection.send(hello(as: deviceID))
 } catch {
     say(["type": "connect-failed", "error": "\(error)"])
     exit(0)
@@ -88,9 +131,66 @@ Task {
     exit(0)
 }
 
+/// A second connection with the device's own key. It reports the first thing it is told, or that it was closed.
+@Sendable func second(_ name: String, port: UInt16, key: Data, saying first: DeviceMessage?) async {
+    let extra = LinkConnection(to: local(port), key: key)
+    do {
+        try await extra.start(timeout: 5)
+        if let first { try await extra.send(first) }
+        say(["type": "\(name)-open"])
+    } catch {
+        say(["type": "\(name)-failed", "error": "\(error)"])
+        return
+    }
+    do {
+        if case .refused(let reason) = try await extra.receive(HostMessage.self) {
+            say(["type": "\(name)-refused", "reason": reason])
+        } else {
+            say(["type": "\(name)-let-in"])
+        }
+    } catch {
+        say(["type": "\(name)-ended"])
+    }
+}
+
+Thread.detachNewThread { [deviceID] in
+    while let line = readLine() {
+        let words = line.split(separator: " ").map(String.init)
+        switch words.first {
+        case "open" where words.count == 2:
+            shared.flowID = words[1]
+            Task { try? await shared.link.send(DeviceMessage.open(flowID: words[1])) }
+        case "reconnect":
+            Task {
+                let next = LinkConnection(to: local(port), key: key)
+                do {
+                    try await next.start(timeout: 5)
+                    shared.replace(with: next)
+                    try await next.send(hello(as: deviceID))
+                } catch {
+                    say(["type": "reconnect-failed", "error": "\(error)"])
+                }
+            }
+        case "silent":
+            Task { await second("silent", port: port, key: key, saying: nil) }
+        case "stranger":
+            Task { await second("stranger", port: port, key: key, saying: hello(as: UUID().uuidString)) }
+        default:
+            say(["type": "unknown", "line": line])
+        }
+    }
+}
+
 while true {
     let message: HostMessage
     do { message = try await connection.receive(HostMessage.self) } catch {
+        // The Mac closes the old connection when the device connects again, and the new one takes over here.
+        if let next = shared.takeReplacement() {
+            connection = next
+            shared.link = next
+            say(["type": "reconnected"])
+            continue
+        }
         say(["type": "ended"])
         exit(0)
     }
@@ -101,14 +201,14 @@ while true {
         say(["type": "refused", "reason": reason])
     case .library(let library):
         say(["type": "library", "flows": library.projects.flatMap(\.flows).map(\.name)])
-        try? await connection.send(DeviceMessage.open(flowID: flowID))
+        try? await connection.send(DeviceMessage.open(flowID: shared.flowID))
     case .opened(let snapshot):
         say(["type": "opened", "name": snapshot.flow.name, "cards": snapshot.flow.cards.count,
              "sessions": snapshot.run.sessions.mapValues(\.rawValue)])
     case .flow(_, let revision, let flow):
         say(["type": "flow", "revision": revision, "efforts": flow.cards.map { $0.effort ?? "" }])
-    case .run(_, let state):
-        say(["type": "run", "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue)])
+    case .run(let id, let state):
+        say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue)])
     case .log(_, let lines, let reset):
         say(["type": "log", "lines": lines.count, "reset": reset])
     case .messages(_, let link, let all):

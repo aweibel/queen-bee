@@ -149,10 +149,14 @@ public struct PairRequest: Codable, Equatable, Sendable {
 public struct PairGrant: Codable, Equatable, Sendable {
     /// The device's own key, for every later connection.
     public var key: Data
+    /// The device's id as the Mac keeps it. The device uses this from now on, whatever case it sent.
+    public var deviceID: String
     public var macID: String
     public var macName: String
 
-    public init(key: Data, macID: String, macName: String) { self.key = key; self.macID = macID; self.macName = macName }
+    public init(key: Data, deviceID: String, macID: String, macName: String) {
+        self.key = key; self.deviceID = deviceID; self.macID = macID; self.macName = macName
+    }
 }
 
 public enum PairReply: Codable, Equatable, Sendable {
