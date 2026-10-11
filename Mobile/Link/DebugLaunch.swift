@@ -22,11 +22,18 @@ import UIKit
 ///   -qbZoom <n>                         and set the canvas's zoom, where 1 is the Mac's own size
 ///   -qbZoomCard <card name>             or zoom so that card fills the canvas; with -qbZoom too, the zoom
 ///                                       is then set from there
-///   -qbShow orchestrator                once connected, turn the panel beside the canvas to the orchestrator
+///   -qbShow details|log|output|runs|cost|orchestrator
+///                                       turn the panel beside the canvas to that page
+///   -qbViewRun <n>                      once that flow has runs and none is going, put the nth on show, where
+///                                       0 is the oldest the Mac has kept
 ///   -qbExpand <card name>|orchestrator  once that session has a terminal, open it full screen
 ///   -qbScrollBack <n>                   and scroll it back n lines, as a finger would
 ///   -qbCanned <n>                       no Mac at all: play the first n steps of a made-up flow and its
 ///                                       terminals, as if a Mac had sent them. See `DebugCanned`.
+///   -qbGoToWaiting <n>                  once the flow is on the canvas, go to the nth card that is waiting on
+///                                       the person, as a tap on its line in the banner does
+///   -qbCannedRun <n>                    no Mac at all: play the first n stages of a made-up run, for the
+///                                       panels. See `DebugCannedRun`.
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -81,6 +88,90 @@ enum DebugLaunch {
             hasOpenedNamedFlow = true
             client.open(flow.id)
         }
+    }
+
+    /// Turns the panel beside the canvas to the page a test named.
+    static func showNamedPage(_ client: RemoteClient) {
+        if let page = show.flatMap(PanelPage.init(rawValue:)) { client.panel.show(page) }
+    }
+
+    private static var hasViewedRun = false
+
+    /// Puts an earlier run on show, once, as soon as the Mac has sent the flow's runs and none is going.
+    static func viewNamedRun(_ client: RemoteClient) {
+        guard !hasViewedRun, defaults.object(forKey: "qbViewRun") != nil else { return }
+        let index = defaults.integer(forKey: "qbViewRun")
+        let run: RunRecord? = withObservationTracking {
+            guard let snapshot = client.mirror.snapshot, !snapshot.run.isRunning, snapshot.runs.indices.contains(index) else { return nil }
+            return snapshot.runs[index]
+        } onChange: {
+            Task { @MainActor in viewNamedRun(client) }
+        }
+        guard let run else { return }
+        hasViewedRun = true
+        client.show(run: run.id)
+    }
+
+    private static var hasGoneToWaiting = false
+
+    /// Goes to a card that is waiting on the person, once, when the flow has been put on the canvas.
+    static func goToNamedWaiting(_ client: RemoteClient) {
+        guard !hasGoneToWaiting, defaults.object(forKey: "qbGoToWaiting") != nil else { return }
+        let index = defaults.integer(forKey: "qbGoToWaiting")
+        let card: WaitingCard? = withObservationTracking {
+            guard client.canvas.shownRevision > 0, let snapshot = client.mirror.snapshot else { return nil }
+            let waiting = WaitingCard.all(in: snapshot)
+            return waiting.indices.contains(index) ? waiting[index] : nil
+        } onChange: {
+            Task { @MainActor in goToNamedWaiting(client) }
+        }
+        guard let card else { return }
+        hasGoneToWaiting = true
+        Task {
+            // A moment, so the flow has been fitted to the screen before the canvas is asked to move.
+            try? await Task.sleep(for: .milliseconds(800))
+            client.go(to: card)
+        }
+    }
+
+    /// What each page of the panel shows and what floats over the canvas, worked out the way the views work it out.
+    static func panelState(_ client: RemoteClient) -> [String: Any] {
+        var state: [String: Any] = ["page": client.panel.page.rawValue, "tab": client.panel.page.tab.rawValue]
+        guard let snapshot = client.mirror.snapshot else { return state }
+        let viewed = client.canvas.viewedRun
+        let run = RunOnShow(snapshot, viewed: viewed)
+        if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: client.openFlow?.project.flows ?? []) {
+            state["details"] = [
+                "title": details.title,
+                "kind": details.kind,
+                "state": details.state?.rawValue ?? NSNull(),
+                "items": details.items.map { ["style": $0.style.rawValue, "label": $0.label, "value": $0.value] },
+                "answerLine": details.answerLine,
+                "messages": details.messages.map { $0.map { ["from": $0.from, "text": $0.text] } } ?? NSNull(),
+                "footer": Details.changes,
+            ]
+        }
+        state["log"] = run.log.map(\.text)
+        let names = Dictionary(snapshot.flow.cards.map { ($0.id, $0.name) }) { first, _ in first }
+        state["results"] = Dictionary(run.results.map { (names[$0.key] ?? $0.key, $0.value) }) { first, _ in first }
+        state["runs"] = RunRow.all(in: snapshot, viewed: viewed).map {
+            ["id": $0.id, "started": $0.started, "outcome": $0.outcome.rawValue, "length": $0.length, "command": $0.command,
+             "cost": $0.cost ?? NSNull(), "onShow": $0.isOnShow] as [String: Any]
+        }
+        state["viewedRun"] = viewed?.id ?? NSNull()
+        state["lastViewedRun"] = client.canvas.debugLastViewed ?? NSNull()
+        let cost = CostSheet(snapshot, run: run)
+        func lines(_ all: [CostSheet.Line]) -> [[String]] { all.map { [$0.name, $0.usage.price, $0.usage.tokenCount] } }
+        state["cost"] = [
+            "total": cost.total.price,
+            "sessions": lines(cost.sessions),
+            "runTitle": cost.runTitle,
+            "runTotal": cost.runTotal?.price ?? NSNull(),
+            "runLines": cost.runLines.map(lines) ?? NSNull(),
+            "runPending": cost.runPending ?? NSNull(),
+        ]
+        state["needsYou"] = WaitingCard.all(in: snapshot).map { ["name": $0.name, "reason": $0.reason] }
+        return state
     }
 
     private static var hasExpanded = false
@@ -183,6 +274,8 @@ enum DebugLaunch {
             fields["terminals"] = client.terminals.debugState
             fields["expanded"] = client.terminals.expandedKey ?? NSNull()
             fields["cannedStep"] = DebugCanned.step
+            fields["cannedStage"] = DebugCannedRun.stage
+            fields["panel"] = panelState(client)
         } onChange: {
             Task { @MainActor in report(client) }
         }

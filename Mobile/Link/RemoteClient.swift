@@ -97,6 +97,10 @@ final class RemoteClient {
             Task { await DebugCanned.play(self) }
             return
         }
+        if DebugCannedRun.isWanted {
+            Task { await DebugCannedRun.play(self) }
+            return
+        }
         if debugStart() { return }
         #endif
         guard mac != nil else {
