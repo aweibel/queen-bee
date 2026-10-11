@@ -11,7 +11,8 @@ struct DetailsPage: View {
         ScrollView {
             let siblings = client.openFlow?.project.flows ?? []
             if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings) {
-                DetailsView(details: details)
+                DetailsView(details: details, card: client.canvas.selection.cardID.flatMap(snapshot.flow.card),
+                            flow: snapshot.flow, run: run, abilities: client.abilities)
                     // A fresh view for each thing selected, so one card's opened-up text isn't left open on the next.
                     .id(client.canvas.selection)
             } else {
@@ -42,20 +43,42 @@ struct DetailsPage: View {
 }
 
 /// One card, link or group: a header that names it, then what it is set to, as the Mac's settings panel has
-/// it. Nothing here can be changed, and the last line says where it can.
+/// it. Nothing it is set to can be changed here, and the last line says where it can. What a run is waiting
+/// on can be answered here, and a run started at the card, when this device may control the Mac.
 private struct DetailsView: View {
     let details: Details
+    /// The card, when it is a card that is selected.
+    let card: Card?
+    let flow: Flow
+    let run: RunOnShow
+    let abilities: Abilities
+
+    /// The message held at this card, when it is one this device may answer.
+    private var hold: PendingHold? {
+        guard let card, abilities.cards[card.id] != nil else { return nil }
+        return run.holds.first { $0.cardID == card.id && ($0.kind == .approval || $0.needsAllow) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ForEach(Array(details.items.enumerated()), id: \.offset) { _, item in
                 Hairline()
-                ItemView(item: item, answerLine: details.answerLine)
+                ItemView(item: item, answerLine: details.answerLine ? abilities.answerLine ?? WaitingCard.answer : nil,
+                         hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [])
             }
             if let messages = details.messages {
                 Hairline()
                 MessageList(title: details.messagesTitle, messages: messages)
+            }
+            if let card, abilities.canAct {
+                let start = card.kind == .agent ? abilities.details[card.id] ?? [] : []
+                if !start.isEmpty || abilities.runFrom.contains(card.id) {
+                    Hairline()
+                    CardActions(card: card, buttons: start, canRunFrom: abilities.runFrom.contains(card.id),
+                                // The Mac's `lastMessage(into:)`: what "Run from here" starts with.
+                                lastMessage: flow.links(into: card.id).compactMap { run.messages[$0.id]?.last }.max { $0.date < $1.date }?.text ?? "")
+                }
             }
             Hairline()
             Text(Details.changes)
@@ -108,7 +131,11 @@ extension SessionState {
 /// One line of the details, drawn for what kind of line it is.
 private struct ItemView: View {
     let item: DetailItem
-    let answerLine: Bool
+    /// Said under what is waiting, when it can't be answered here.
+    let answerLine: String?
+    /// The held message this card is waiting with, and the buttons that answer it, when it can be answered here.
+    var hold: PendingHold?
+    var buttons: [PressButton] = []
 
     var body: some View {
         switch item.style {
@@ -167,7 +194,11 @@ private struct ItemView: View {
                         .background(Theme.surface.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.live.ui))
                 }
-                if answerLine { Text(WaitingCard.answer).dsSans(Theme.Touch.caption + 1) }
+                if let hold, !buttons.isEmpty {
+                    HoldAnswer(hold: hold, buttons: buttons)
+                } else if let answerLine {
+                    Text(answerLine).dsSans(Theme.Touch.caption + 1).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .foregroundStyle(Theme.liveInk.ui)
             .frame(maxWidth: .infinity, alignment: .leading)

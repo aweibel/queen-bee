@@ -7,7 +7,7 @@ import UIKit
 /// cards in the same places, the same links. A scroll view holds one large surface; cards are its subviews.
 ///
 /// Nothing on it can be moved or changed from here. A finger pans, two fingers zoom, a tap selects, and a
-/// double tap on bare paper shows the whole flow.
+/// double tap on bare paper shows the whole flow. A tap on a button drawn on a card presses it.
 final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     /// As far out and as far in as a pinch goes. The Mac's limits.
     static let minZoom: CGFloat = 0.2
@@ -35,6 +35,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         var siblings: [RemoteFlowSummary]
         var selection: CanvasModel.Selection
         var viewed: RunRecord?
+        /// The buttons each card offers. They come and go with "Can control", the connection and each command's answer.
+        var buttons: [String: [PressButton]]
     }
 
     /// Room at the canvas's edges that something floats over, on top of the bars the system puts there.
@@ -119,13 +121,15 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         }
         let selection = model.selection, viewed = Self.stillOnShow(model.viewedRun, in: snapshot)
         if viewed != model.viewedRun { model.view(viewed) }
+        let abilities = Abilities(canControl: client.mirror.canControl, isConnected: client.state == .connected, snapshot: snapshot,
+                                  viewed: viewed, waiting: Array(client.mirror.waiting.values))
         let now = Inputs(flow: snapshot.flow, run: snapshot.run, lastRun: snapshot.runs.last,
-                         siblings: client.openFlow?.project.flows ?? [], selection: selection, viewed: viewed)
+                         siblings: client.openFlow?.project.flows ?? [], selection: selection, viewed: viewed, buttons: abilities.cards)
         // Most of what the Mac sends is terminal output and log lines, which change nothing here.
         guard now != inputs else { return }
         let isNew = inputs == nil
         inputs = now
-        apply(CanvasContent(snapshot, siblings: now.siblings, selection: selection, viewed: viewed))
+        apply(CanvasContent(snapshot, siblings: now.siblings, selection: selection, viewed: viewed, buttons: now.buttons))
         if isNew {
             awaitsPlacing = true
             setNeedsLayout()
@@ -183,6 +187,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 view = card.kind == .agent ? AgentCardView(card: card) : LogicCardView(card: card)
                 let id = card.id
                 view.onActivate = { [weak self] in self?.model.select(.card(id)) }
+                view.onPress = { [weak self] in self?.model.onPress?($0) }
                 (view as? AgentCardView)?.onExpand = { [weak self] in self?.model.expandTerminal?(id) }
                 view.zoom = zoom
                 document.addSubview(view)
@@ -272,6 +277,21 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             if distance < nearest?.distance ?? .greatestFiniteMagnitude { nearest = (id, distance) }
         }
         return nearest?.id
+    }
+
+    /// The button on a card that a tap at a canvas point is on, if any. Cards take no touches, so the canvas
+    /// asks each for where its buttons are, a finger's width on screen whatever the zoom, and takes the nearest.
+    private func pressTarget(at point: CGPoint) -> Press? {
+        let zoom = scrollView.zoomScale
+        var nearest: (press: Press, distance: CGFloat)?
+        for (id, view) in cardViews where !content.folded.contains(id) {
+            for target in view.pressTargets(zoom: zoom) where target.reach.contains(point) {
+                let drawn = target.drawn
+                let distance = hypot(max(drawn.minX - point.x, 0, point.x - drawn.maxX), max(drawn.minY - point.y, 0, point.y - drawn.maxY))
+                if distance < nearest?.distance ?? .greatestFiniteMagnitude { nearest = (target.press, distance) }
+            }
+        }
+        return nearest?.press
     }
 
     // MARK: Where the canvas is looking
@@ -535,6 +555,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         let point = tap.location(in: document)
         if let key = expandTarget(at: point) {
             model.expandTerminal?(key)
+        } else if let press = pressTarget(at: point) {
+            model.onPress?(press)
         } else {
             model.select(item(at: point))
         }
@@ -547,7 +569,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     /// A double tap is for bare paper. On a card or a link it would only hold up the tap that selects it.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: document)
-        return item(at: point) == .none && expandTarget(at: point) == nil
+        return item(at: point) == .none && expandTarget(at: point) == nil && pressTarget(at: point) == nil
     }
 
     /// What a tap at a canvas point is on. Something the finger is squarely on wins: a card, then a group's
@@ -601,6 +623,11 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             entry["badges"] = view.badgeTexts
             entry["text"] = (view as? LogicCardView)?.summaryText ?? NSNull()
             entry["hasTerminalPlace"] = terminalContainer(for: card.id) != nil
+            // The buttons drawn on the card, with the middle of each on screen, for a test to tap.
+            entry["buttons"] = view.buttonsShown.map { button -> [String: Any] in
+                let frame = document.convert(button.drawn, to: nil)
+                return ["title": button.title, "enabled": button.isEnabled, "x": frame.midX, "y": frame.midY, "width": frame.width, "height": frame.height]
+            }
             if let agent = view as? AgentCardView {
                 entry["hasTerminal"] = agent.terminal != nil
                 // Where the card's terminal goes, on screen, to set against where the terminal is drawn.

@@ -88,6 +88,10 @@ struct PanelButtonStyle: ButtonStyle {
         case filled
         /// An action that can't be taken back, like forgetting the Mac.
         case danger
+        /// An answer something live is waiting for, like approving a held message.
+        case live
+        /// Run and Stop, filled as the Mac's are: cobalt to go, the live colour to stop.
+        case run, stop
     }
 
     var kind: Kind = .outline
@@ -126,8 +130,9 @@ private struct PanelButton: View {
         switch kind {
         case .outline: return Theme.ink
         case .quiet: return Theme.inkSecondary
-        case .filled: return Theme.surface
+        case .filled, .run, .stop: return Theme.surface
         case .danger: return Theme.failInk
+        case .live: return Theme.liveInk
         }
     }
 
@@ -137,6 +142,9 @@ private struct PanelButton: View {
         case .outline, .quiet: return configuration.isPressed ? Theme.barHover : .clear
         case .filled: return Theme.ink
         case .danger: return configuration.isPressed ? Theme.failTint : .clear
+        case .live: return configuration.isPressed ? Theme.live.withAlphaComponent(0.25) : Theme.liveTint
+        case .run: return Theme.select
+        case .stop: return Theme.live
         }
     }
 
@@ -146,6 +154,8 @@ private struct PanelButton: View {
         case .outline, .filled: return Theme.ink
         case .quiet: return .clear
         case .danger: return Theme.failInk
+        case .live, .stop: return Theme.live
+        case .run: return Theme.select
         }
     }
 }

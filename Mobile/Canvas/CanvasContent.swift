@@ -21,6 +21,8 @@ nonisolated struct CardContext: Equatable {
     /// A run is under way. Marks left by a run that has ended say where it went, not what is live.
     var isRunning = false
     var mark = RunMark()
+    /// The buttons drawn on the card, when this device may answer for it. See `Abilities`.
+    var buttons: [PressButton] = []
 }
 
 /// How one link is drawn.
@@ -66,7 +68,9 @@ nonisolated struct CanvasContent: Equatable {
     /// Mac's snapshot where the Mac reads its own controller.
     /// - Parameter siblings: the other flows in the same project, for the name of the flow a Flow card runs.
     /// - Parameter viewed: an earlier run to show in place of the latest.
-    init(_ snapshot: RemoteFlowSnapshot, siblings: [RemoteFlowSummary], selection: CanvasModel.Selection, viewed: RunRecord?) {
+    /// - Parameter buttons: the buttons each card offers, by card id.
+    init(_ snapshot: RemoteFlowSnapshot, siblings: [RemoteFlowSummary], selection: CanvasModel.Selection, viewed: RunRecord?,
+         buttons: [String: [PressButton]] = [:]) {
         let flow = snapshot.flow, run = snapshot.run
         // An earlier run is over: it has marks, counts and results, and nothing in it is live or waiting.
         let marks = viewed?.marks ?? run.marks
@@ -117,6 +121,7 @@ nonisolated struct CanvasContent: Equatable {
                 if viewed == nil, run.awaitingAnswer.contains(card.id) { context.waiting = "awaiting answer" }
                 if let used = spent?[card.id], !used.isZero { context.cost = used.price }
             }
+            context.buttons = buttons[card.id] ?? []
             contexts[card.id] = context
         }
 

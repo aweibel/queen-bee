@@ -22,8 +22,9 @@ struct CanvasBanners: View {
     }
 }
 
-/// The cards waiting on the person, in canvas order. Tapping one goes to it. The answer itself is given on
-/// the Mac, and the last line says so.
+/// The cards waiting on the person, in canvas order. Tapping one goes to it. When this device may answer,
+/// each has its card's buttons under it, at full size however small the card is on screen. What can't be
+/// answered from here is said in the last line.
 private struct NeedsYouBanner: View {
     @Environment(RemoteClient.self) private var client
     let waiting: [WaitingCard]
@@ -31,6 +32,7 @@ private struct NeedsYouBanner: View {
     private static let most = 4
 
     var body: some View {
+        let abilities = client.abilities
         VStack(alignment: .leading, spacing: 0) {
             Label(waiting.count == 1 ? "1 needs you" : "\(waiting.count) need you", systemImage: "hand.raised")
                 .dsMono(Theme.Touch.body, .medium)
@@ -65,13 +67,24 @@ private struct NeedsYouBanner: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(card.name). \(card.reason).")
                 .accessibilityHint("Goes to this card on the canvas.")
+                if let buttons = abilities.cards[card.id] {
+                    PressButtons(buttons: buttons, about: card.name)
+                        .padding(.horizontal, Theme.Space.m)
+                        .padding(.bottom, Theme.Space.s)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
-            Hairline()
-            Text(waiting.count > Self.most ? "And \(waiting.count - Self.most) more. \(WaitingCard.answer)" : WaitingCard.answer)
-                .dsSans(Theme.Touch.caption + 1)
-                .foregroundStyle(Theme.inkSecondary.ui)
-                .padding(.horizontal, Theme.Space.m)
-                .padding(.vertical, Theme.Space.s)
+            let more = waiting.count > Self.most ? "And \(waiting.count - Self.most) more." : nil
+            let last = [more, abilities.answerLine].compactMap { $0 }.joined(separator: " ")
+            if !last.isEmpty {
+                Hairline()
+                Text(last)
+                    .dsSans(Theme.Touch.caption + 1)
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Space.m)
+                    .padding(.vertical, Theme.Space.s)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
         .floatingPanel()

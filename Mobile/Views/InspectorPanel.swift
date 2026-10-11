@@ -2,7 +2,8 @@ import QueenBeeCore
 import SwiftUI
 
 /// The panel beside the canvas, for what the open flow, its cards and its runs have to say. On an iPhone it
-/// comes up as a sheet. Everything in it is for reading: what it shows is changed on the Mac.
+/// comes up as a sheet. What a flow is set to is read here and changed on the Mac. What a run is waiting on
+/// can be answered here, when the Mac lets this device control it.
 struct InspectorPanel: View {
     @Environment(RemoteClient.self) private var client
     @Environment(\.horizontalSizeClass) private var sizeClass

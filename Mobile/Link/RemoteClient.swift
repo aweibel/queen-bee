@@ -41,6 +41,8 @@ final class RemoteClient {
     let canvas = CanvasModel()
     /// Which page of the panel beside the canvas is on show.
     let panel = PanelModel()
+    /// What the person is being asked before a control does its work, and the last thing the Mac turned down.
+    let controls = ControlsModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)
@@ -52,9 +54,13 @@ final class RemoteClient {
     /// Goes up whenever connecting is stopped or started afresh, so a try from before knows it is no longer wanted.
     @ObservationIgnored private var turn = 0
     @ObservationIgnored private var longNotFound: Task<Void, Never>?
+    /// Who is waiting to hear what became of each command, by the command's id.
+    @ObservationIgnored private var answers: [Int: CheckedContinuation<String?, Never>] = [:]
     #if DEBUG
     /// Where a test said the Mac's listener for this device will be, to be kept once pairing has worked.
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
+    /// Stands in for the link when a test has no Mac: it is handed each command in place of one.
+    @ObservationIgnored var debugOutbox: ((_ id: Int, _ command: RemoteCommand) -> Void)?
     #endif
 
     /// One connection and the things waiting to be sent on it, which leave in the order they were asked for.
@@ -86,6 +92,7 @@ final class RemoteClient {
         canvas.terminalSource = { [terminals] key in terminals.view(for: key) }
         canvas.expandTerminal = { [terminals] key in terminals.expand(key) }
         terminals.onChange = { [canvas] in canvas.terminalsChanged() }
+        canvas.onPress = { [weak self] in self?.press($0) }
     }
 
     // MARK: Starting and stopping
@@ -154,6 +161,7 @@ final class RemoteClient {
         run = nil
         link?.close()
         link = nil
+        failWaiting()
     }
 
     // MARK: Staying connected
@@ -235,7 +243,10 @@ final class RemoteClient {
         self.link = link
         defer {
             link.close()
-            if self.link === link { self.link = nil }
+            if self.link === link {
+                self.link = nil
+                failWaiting()
+            }
         }
         var gotIn = false
         do {
@@ -279,9 +290,44 @@ final class RemoteClient {
     private func take(_ message: HostMessage) {
         if case .terminal = message {
             mirror.terminalEvent(in: message).map(terminals.receive)
-        } else {
-            mirror.apply(message).forEach(terminals.receive)
+            return
         }
+        // A welcome starts a new connection, and the mirror forgets what the old one was sent.
+        if case .welcome = message { failWaiting() }
+        mirror.apply(message).forEach(terminals.receive)
+        if case .answer(let id, let refusal) = message { answers.removeValue(forKey: id)?.resume(returning: refusal) }
+    }
+
+    // MARK: Commands
+
+    /// What a command is answered with when there is no Mac to hear it.
+    static let notConnected = "Not connected to your Mac right now."
+
+    /// Asks the Mac to do something, and waits for what it says. Nil means it was done. Otherwise the text is
+    /// why not: the Mac's own words, or that the Mac can't be reached. Nothing is kept to send later: a
+    /// command that could not go now is given up, so a run never starts late by surprise.
+    func send(_ command: RemoteCommand) async -> String? {
+        if let problem = command.problem { return problem }
+        guard state == .connected else { return Self.notConnected }
+        #if DEBUG
+        let outbox = debugOutbox
+        #else
+        let outbox: ((Int, RemoteCommand) -> Void)? = nil
+        #endif
+        guard link != nil || outbox != nil else { return Self.notConnected }
+        let id = mirror.willSend(command)
+        return await withCheckedContinuation { waiting in
+            answers[id] = waiting
+            if let link { link.send(.command(id: id, command: command)) } else { outbox?(id, command) }
+        }
+    }
+
+    /// The link has gone, so nothing that was sent on it will be answered.
+    private func failWaiting() {
+        mirror.dropWaiting()
+        let waiting = answers
+        answers = [:]
+        for id in waiting.keys.sorted() { waiting[id]?.resume(returning: Self.notConnected) }
     }
 
     /// Says whether the Mac can't be found, and starts or stops the wait before saying it has been a long time.
@@ -361,6 +407,7 @@ final class RemoteClient {
         directAfterPairing = nil
         #endif
         mac = DeviceIdentity.pairedMac
+        failWaiting()
         mirror = RemoteMirror()
         terminals.reset()
         noteMac(notFound: false)
@@ -377,6 +424,7 @@ final class RemoteClient {
         #endif
         mac = nil
         mirror = RemoteMirror()
+        controls.clear()
         terminals.reset()
         canvas.viewports = [:]
         noteMac(notFound: false)
@@ -395,6 +443,7 @@ final class RemoteClient {
     /// As if the connection had dropped and the Mac had then been looked for and not found.
     func debugLoseMac() {
         state = .lookingForMac
+        failWaiting()
         noteMac(notFound: true)
     }
 

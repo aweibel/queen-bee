@@ -46,6 +46,8 @@ final class CanvasModel {
     @ObservationIgnored var terminalSource: ((_ key: String) -> UIView?)?
     /// Opens a session's terminal full screen. The canvas calls it when the mark on an agent's card is tapped.
     @ObservationIgnored var expandTerminal: ((_ key: String) -> Void)?
+    /// Does what a button drawn on a card is for. The canvas calls it when a tap lands on one.
+    @ObservationIgnored var onPress: ((Press) -> Void)?
     #if DEBUG
     /// Goes up whenever what the canvas shows has changed, so the state a test reads is written again.
     private(set) var shownRevision = 0

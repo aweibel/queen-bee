@@ -77,10 +77,57 @@ final class BadgeLabel: UIView {
     }
 }
 
+/// A button drawn on a card, at the card's own scale: "Approve", "Start agent". It takes no touches, as
+/// nothing on a card does. The canvas works out that a tap landed on it, and gives it a finger's width.
+final class CardButtonView: UIView {
+    static let height: CGFloat = 22
+    private let label = UILabel()
+    private(set) var button: PressButton
+
+    init(_ button: PressButton) {
+        self.button = button
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        layer.cornerRadius = Theme.Radius.card
+        layer.borderWidth = Theme.Stroke.card
+        label.font = Theme.mono(Theme.Size.body, .medium)
+        label.textAlignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        addSubview(label)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: CardButtonView, _) in view.restyle() }
+        set(button)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    func set(_ new: PressButton) {
+        button = new
+        label.text = new.title
+        restyle()
+    }
+
+    /// As wide as its name and a little room either side.
+    var wanted: CGFloat { ceil(label.intrinsicContentSize.width) + 16 }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds.insetBy(dx: 4, dy: 0)
+    }
+
+    /// The Mac's panel buttons: an ink outline, or the live colours for the answer a card is waiting for.
+    private func restyle() {
+        backgroundColor = button.isMain ? Theme.liveTint : Theme.surface
+        label.textColor = button.isMain ? Theme.liveInk : Theme.ink
+        layer.borderColor = (button.isMain ? Theme.live : Theme.ink).cg(in: self)
+        // Faint while its command is on its way to the Mac.
+        alpha = button.isEnabled ? 1 : 0.45
+    }
+}
+
 /// A card on the canvas, drawn as the Mac's `CardView` draws it: a title bar, dots for its links, the corner
 /// the Mac resizes it by. Its frame is the card's rectangle widened by `gutter` on each side, so the dots that
 /// straddle the card's edges stay inside the view. Nothing here is moved or changed from the device, so
-/// the view takes no touches: the canvas works out what a tap landed on.
+/// the view takes no touches: the canvas works out what a tap landed on, the card's buttons included.
 class CardView: UIView {
     static let gutter: CGFloat = CanvasGeometry.portRadius + 3
     /// Below this zoom a card shows its overview.
@@ -106,6 +153,10 @@ class CardView: UIView {
     var zoom: CGFloat = 1 { didSet { if zoom != oldValue { applyZoom(from: oldValue) } } }
     private var inputDot: PortDotView?
     private var outputDots: [PortDotView] = []
+    /// The buttons the card offers when this device may answer for it. A subclass says where they go.
+    private(set) var buttonViews: [CardButtonView] = []
+    /// Does what one of the card's buttons is for. The canvas calls it for a finger, and VoiceOver for its actions.
+    var onPress: ((Press) -> Void)?
     /// What the view last showed, so an update that changes nothing for this card costs nothing.
     private var shown: (card: Card, context: CardContext)?
     private var laidOut = CGSize.zero
@@ -182,6 +233,7 @@ class CardView: UIView {
         if bounds.size != target.size { bounds.size = target.size }
         if center != middle { center = middle }
         if portsChanged { rebuildPorts() }
+        syncButtons()
         applyCard()
 
         inputDot?.isLinked = context.linkedInputs
@@ -269,6 +321,81 @@ class CardView: UIView {
 
     /// Selects the card, when VoiceOver's double tap lands on it. A finger's tap is the canvas's to work out.
     var onActivate: (() -> Void)?
+
+    // MARK: Buttons
+
+    private func syncButtons() {
+        let wanted = context.buttons
+        if buttonViews.map(\.button) != wanted {
+            if buttonViews.count == wanted.count {
+                for (view, button) in zip(buttonViews, wanted) { view.set(button) }
+            } else {
+                buttonViews.forEach { $0.removeFromSuperview() }
+                buttonViews = wanted.map { button in
+                    let view = CardButtonView(button)
+                    // Drawn as finely as the rest of the card is being drawn at this zoom.
+                    view.contentScaleFactor = nameLabel.contentScaleFactor
+                    view.subviews.forEach { $0.contentScaleFactor = nameLabel.contentScaleFactor }
+                    content.addSubview(view)
+                    return view
+                }
+            }
+        }
+        refreshActions()
+    }
+
+    /// What VoiceOver can do on the card besides selecting it: each of its buttons, and what a subclass adds.
+    func refreshActions() {
+        let presses = context.buttons.filter(\.isEnabled).map { button in
+            UIAccessibilityCustomAction(name: button.title) { [weak self] _ in
+                self?.onPress?(button.press)
+                return self?.onPress != nil
+            }
+        }
+        let all = extraActions + presses
+        accessibilityCustomActions = all.isEmpty ? nil : all
+    }
+
+    /// Actions of a subclass's own, said before the buttons'.
+    var extraActions: [UIAccessibilityCustomAction] { [] }
+
+    /// Lays the buttons out in one row inside `row`, from its left edge, or in its middle. A row too
+    /// narrow for them shares what there is.
+    func layoutButtons(in row: CGRect, centred: Bool = false) {
+        guard !buttonViews.isEmpty else { return }
+        let gap: CGFloat = 6
+        var widths = buttonViews.map(\.wanted)
+        let room = max(0, row.width - gap * CGFloat(widths.count - 1))
+        if widths.reduce(0, +) > room { widths = widths.map { _ in room / CGFloat(widths.count) } }
+        let total = widths.reduce(0, +) + gap * CGFloat(widths.count - 1)
+        var x = centred ? row.midX - total / 2 : row.minX
+        for (view, width) in zip(buttonViews, widths) {
+            view.frame = CGRect(x: x, y: row.midY - CardButtonView.height / 2, width: width, height: CardButtonView.height)
+            x += width + gap
+        }
+    }
+
+    /// Each button with where it is drawn, in the canvas's own points.
+    var buttonsShown: [(title: String, isEnabled: Bool, drawn: CGRect)] {
+        guard !isHidden, zoom >= Self.overviewBelow else { return [] }
+        return buttonViews.map { view in
+            (view.button.title, view.button.isEnabled,
+             view.frame.offsetBy(dx: card.x, dy: card.y + CanvasGeometry.titleHeight))
+        }
+    }
+
+    /// Where a tap presses each button, in the canvas's own points: where it is drawn, and the reach
+    /// around it that makes it a finger's width on screen whatever the zoom. Nothing when the card is too
+    /// far out to read, where the banner and the details have the same buttons at full size.
+    func pressTargets(zoom: CGFloat) -> [(press: Press, drawn: CGRect, reach: CGRect)] {
+        guard !isHidden, zoom >= Self.overviewBelow else { return [] }
+        let least = Theme.Touch.target / max(zoom, 0.01)
+        return buttonViews.filter(\.button.isEnabled).map { view in
+            let drawn = view.frame.offsetBy(dx: card.x, dy: card.y + CanvasGeometry.titleHeight)
+            let reach = drawn.insetBy(dx: min(0, (drawn.width - least) / 2), dy: min(0, (drawn.height - least) / 2))
+            return (view.button.press, drawn, reach)
+        }
+    }
 
     override func accessibilityActivate() -> Bool {
         onActivate?()
@@ -509,12 +636,19 @@ final class LogicCardView: CardView {
         let w = content.bounds.width
         let foot = CGFloat(portRows.count) * CanvasGeometry.portRowHeight
         let warningHeight: CGFloat = warningLabel.isHidden ? 0 : 15
-        let summaryHeight = max(0, content.bounds.height - foot - warningHeight - 12)
+        // Buttons sit in a row under the summary, which gives up the room for them. On a card of the
+        // usual height that leaves the summary one line, so it starts a little higher to fit it whole.
+        let buttonRow: CGFloat = buttonViews.isEmpty ? 0 : CardButtonView.height + 2
+        let summaryTop: CGFloat = buttonViews.isEmpty ? 6 : 4
+        let summaryHeight = max(0, content.bounds.height - foot - warningHeight - 12 - buttonRow)
+        let buttonsTop = content.bounds.height - foot - warningHeight - buttonRow
+        layoutButtons(in: CGRect(x: 10, y: buttonsTop, width: max(0, w - 20), height: CardButtonView.height))
         // A label here centres its text in its frame, where the Mac's starts at the top. So the frame is
         // only as tall as the text, up to the room the Mac gives it.
         let needed = summaryLabel.sizeThatFits(CGSize(width: max(0, w - 20), height: .greatestFiniteMagnitude)).height
-        summaryLabel.frame = CGRect(x: 10, y: 6, width: max(0, w - 20), height: min(ceil(needed), summaryHeight))
-        warningLabel.frame = CGRect(x: 10, y: 6 + summaryHeight, width: max(0, w - 20), height: 15)
+        let room = buttonViews.isEmpty ? summaryHeight : max(0, buttonsTop - summaryTop - 2)
+        summaryLabel.frame = CGRect(x: 10, y: summaryTop, width: max(0, w - 20), height: min(ceil(needed), room))
+        warningLabel.frame = CGRect(x: 10, y: buttonViews.isEmpty ? 6 + summaryHeight : buttonsTop + buttonRow, width: max(0, w - 20), height: 15)
         for (i, row) in portRows.enumerated() {
             row.frame = CGRect(x: 1, y: content.bounds.height - foot + CGFloat(i) * CanvasGeometry.portRowHeight,
                                width: w - 2, height: CanvasGeometry.portRowHeight)
@@ -523,8 +657,9 @@ final class LogicCardView: CardView {
 }
 
 /// An agent's card: its session's state beside the name, and the place its terminal goes under the title.
-/// The Mac's `AgentCardView`. The Mac's Start button and its "restart to apply" badge aren't here: a
-/// session is started on the Mac, and only the Mac knows which settings a session is behind on.
+/// The Mac's `AgentCardView`. Its Start button is here when this device may control the Mac, and a line
+/// saying where to start it when it may not. The "restart to apply" badge isn't: only the Mac knows which
+/// settings a session is behind on.
 final class AgentCardView: CardView {
     private let stateBadge = BadgeLabel()
     /// What the session cost in the run on show.
@@ -546,7 +681,7 @@ final class AgentCardView: CardView {
         let state = context.sessionState
         var parts = [stateText.prefix(1).uppercased() + stateText.dropFirst()]
         if state == .needsYou { parts.append("Waiting for you in its terminal") }
-        if state == .notStarted || state == .exited { parts.append(hintLabel.text ?? "") }
+        if !hintLabel.isHidden { parts.append(hintLabel.text ?? "") }
         if let cost = context.cost { parts.append("Cost \(cost)") }
         return parts.filter { !$0.isEmpty }
     }
@@ -599,11 +734,15 @@ final class AgentCardView: CardView {
         terminal = view
         if let view { terminalHolder.addSubview(view) }
         expandIcon.isHidden = view == nil
-        accessibilityCustomActions = view == nil ? nil : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
+        refreshActions()
+        setNeedsLayout()
+    }
+
+    override var extraActions: [UIAccessibilityCustomAction] {
+        terminal == nil ? [] : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
             self?.onExpand?()
             return self?.onExpand != nil
         }]
-        setNeedsLayout()
     }
 
     override func update(card new: Card, context: CardContext) {
@@ -621,7 +760,8 @@ final class AgentCardView: CardView {
         stateText = asked ?? (isWaiting ? "waiting" : state.label.lowercased())
         stateBadge.set(stateText, tone: asked == nil ? tone : .live)
         costBadge.set(context.cost ?? "", tone: .plain)
-        hintLabel.isHidden = state != .notStarted && state != .exited
+        // With a button to start it from here, there is nothing to send the person to the Mac for.
+        hintLabel.isHidden = (state != .notStarted && state != .exited) || !context.buttons.isEmpty
         hintLabel.text = state == .exited ? "Restart it on your Mac" : "Start it on your Mac"
         super.update(card: new, context: context)
     }
@@ -633,5 +773,8 @@ final class AgentCardView: CardView {
         let size = Self.expandSize
         expandIcon.frame = CGRect(x: titleBar.bounds.width - 8 - size, y: (CanvasGeometry.titleHeight - size) / 2, width: size, height: size)
         hintLabel.frame = content.bounds.insetBy(dx: 10, dy: 0)
+        layoutButtons(in: content.bounds.insetBy(dx: 10, dy: 0), centred: true)
+        // A terminal put in the card later mustn't cover them.
+        buttonViews.forEach(content.bringSubviewToFront)
     }
 }

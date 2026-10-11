@@ -6,17 +6,18 @@ struct CanvasArea: View {
     @Environment(RemoteClient.self) private var client
     /// Brings the list of flows back when it is hidden, if it can be. Nil when the list is on show or one tap back.
     var showFlows: (() -> Void)?
+    let showSettings: () -> Void
 
-    /// The connection strip floats over the canvas's foot: its own height and the gap on either side of it.
-    private static let foot = Theme.Touch.target + Theme.Space.m * 2
-    /// How much of the canvas's top the banners cover, gap and all. Nothing when there are none.
+    /// How much of the canvas's top the banners cover, and how much of its foot the run bar and the
+    /// connection strip do, gap and all. The canvas keeps the flow clear of both when it fits it.
     @State private var top: CGFloat = 0
+    @State private var foot: CGFloat = Theme.Touch.target + Theme.Space.m * 2
 
     var body: some View {
         Group {
             if let open = client.openFlow {
                 // The canvas draws its own paper, so the dots scroll and zoom with the cards as on the Mac.
-                CanvasRepresentable(client: client, top: top, foot: max(Self.foot, client.panel.cover))
+                CanvasRepresentable(client: client, top: top, foot: max(foot, client.panel.cover))
                     .ignoresSafeArea()
                     .overlay {
                         // Asked for and not sent yet.
@@ -41,6 +42,12 @@ struct CanvasArea: View {
                 .padding(Theme.Space.m)
         }
         .dimmedWhileAway(client.state == .connected)
+        // Over the dimming, not under it: the connection strip is what says why the rest is dim.
+        .overlay(alignment: .bottom) {
+            CanvasFoot(showSettings: showSettings)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { foot = $0 + Theme.Space.m * 2 }
+                .padding(Theme.Space.m)
+        }
     }
 
     @ViewBuilder private var flowsButton: some View {

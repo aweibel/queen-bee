@@ -26,6 +26,7 @@ struct ShellView: View {
         }
         .sheet(isPresented: $showsSettings) { SettingsSheet() }
         .fullScreenCover(item: expanded) { TerminalViewer(key: $0.id) }
+        .asksBeforeActing()
         #if DEBUG
         .task { if DebugLaunch.show == "settings" { showsSettings = true } }
         #endif
@@ -92,10 +93,7 @@ private struct SplitShell: View {
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 340)
         } detail: {
             NavigationStack {
-                CanvasArea(showFlows: columns == .detailOnly ? { columns = .all } : nil)
-                    .overlay(alignment: .bottomLeading) {
-                        ConnectionBar(showSettings: showSettings).padding(Theme.Space.m)
-                    }
+                CanvasArea(showFlows: columns == .detailOnly ? { columns = .all } : nil, showSettings: showSettings)
                     .navigationTitle(client.openFlow?.flow.name ?? "Queen Bee")
                     .navigationSubtitle(client.openFlow?.project.name ?? "")
                     .navigationBarTitleDisplayMode(.inline)
@@ -150,10 +148,7 @@ private struct StackShell: View {
                 .navigationTitle("Flows")
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: String.self) { _ in
-                    CanvasArea()
-                        .overlay(alignment: .bottomLeading) {
-                            ConnectionBar(showSettings: showSettings).padding(Theme.Space.m)
-                        }
+                    CanvasArea(showSettings: showSettings)
                         .navigationTitle(client.openFlow?.flow.name ?? "")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
