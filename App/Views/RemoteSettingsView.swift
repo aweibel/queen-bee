@@ -16,12 +16,24 @@ struct RemoteSettingsSection: View {
                     LabeledContent {
                         HStack(spacing: Theme.Space.s) {
                             if host.sessions.contains(where: { $0.device.id == device.id }) { Badge(text: "connected", tone: .live) }
+                            Toggle("Can control", isOn: Binding(get: { device.canControl },
+                                                                set: { host.setCanControl($0, for: device.id) }))
+                                .toggleStyle(.switch)
+                                .controlSize(.mini)
+                                .help(device.canControl ? "\(device.name) can start and stop runs, answer approvals and type into sessions on this Mac."
+                                      : "\(device.name) can only watch.")
                             Button("Remove") { host.remove(device.id) }
                                 .help("\(device.name) will no longer be able to connect to this Mac.")
                         }
                     } label: {
                         Text(device.name).lineLimit(1).truncationMode(.tail)
                     }
+                }
+                if !host.devices.devices.isEmpty {
+                    Text("A device with “Can control” on can start and stop runs, answer approvals and type into sessions on this Mac. It is off for every device until you turn it on.")
+                        .font(.dsSans(Theme.Size.caption))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Button("Pair a device…") {
                     host.beginPairing()
