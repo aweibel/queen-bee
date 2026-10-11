@@ -37,6 +37,8 @@ final class RemoteClient {
     let terminals = TerminalRegistry()
     /// What this device is looking at on the open flow's canvas, and what it has selected there.
     let canvas = CanvasModel()
+    /// Which page of the panel beside the canvas is on show.
+    let panel = PanelModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)

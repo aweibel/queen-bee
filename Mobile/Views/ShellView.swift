@@ -109,7 +109,7 @@ private struct SplitShell: View {
         // Outside the columns, so the panel keeps its place and its full height when the list of flows slides
         // over the canvas on an iPad held upright.
         .inspector(isPresented: $showsDetails) {
-            InspectorPanel().edgeRule(.leading).inspectorColumnWidth(min: 260, ideal: 320, max: 440)
+            InspectorPanel().edgeRule(.leading).inspectorColumnWidth(min: 280, ideal: 340, max: 440)
         }
         #if DEBUG
         // Upright, an iPad starts with the list of flows tucked away, and a test can't tap to bring it out.

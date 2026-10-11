@@ -16,12 +16,7 @@ struct SessionCaption: Equatable {
     /// The same word and tint the session's card shows.
     var badge: (text: String, tone: Badge.Tone)? {
         guard let state else { return nil }
-        let tone: Badge.Tone = switch state {
-        case .working, .needsYou: .live
-        case .failed, .exited: .fail
-        case .idle, .notStarted, .starting: .plain
-        }
-        return (state.label.lowercased(), tone)
+        return (state.label.lowercased(), state.tone)
     }
 }
 

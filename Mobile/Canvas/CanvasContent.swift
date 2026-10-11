@@ -146,7 +146,7 @@ nonisolated struct CanvasContent: Equatable {
 
     /// The flow a Flow card runs: found by id, or by name when the orchestrator set it. The Mac's
     /// `Nesting.resolve`, over the list of flows the device has.
-    private static func innerFlow(of card: Card, in siblings: [RemoteFlowSummary], excluding own: String) -> RemoteFlowSummary? {
+    static func innerFlow(of card: Card, in siblings: [RemoteFlowSummary], excluding own: String) -> RemoteFlowSummary? {
         let ref = (card.flowRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ref.isEmpty else { return nil }
         let others = siblings.filter { $0.id != own }

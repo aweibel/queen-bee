@@ -6,7 +6,7 @@ import UIKit
 /// device's own. The Mac is never told, and its own selection and zoom are never shown here.
 @Observable
 final class CanvasModel {
-    nonisolated enum Selection: Equatable, Sendable {
+    nonisolated enum Selection: Hashable, Sendable {
         case none
         case card(String)
         case link(String)
@@ -22,8 +22,12 @@ final class CanvasModel {
     /// The canvas's zoom, where 1 is the Mac's own size.
     fileprivate(set) var zoom: CGFloat = 1
     /// An earlier run to show on the canvas in place of the latest: its marks, its counts and its results.
-    /// Nil for the latest. Only this device's canvas changes.
-    var viewedRun: RunRecord?
+    /// Nil for the latest. Only this device's canvas and panels change: the Mac is never told.
+    private(set) var viewedRun: RunRecord?
+    #if DEBUG
+    /// The last earlier run that was put on show, for a test to see that one was, after it has gone again.
+    private(set) var debugLastViewed: String?
+    #endif
 
     /// Where a flow was left: its zoom, the canvas point in the middle of the clear part of the screen, and
     /// whether it was still as fitted, in which case it is fitted again for whatever room there is now.
@@ -56,6 +60,14 @@ final class CanvasModel {
 
     func select(_ new: Selection) {
         if selection != new { selection = new }
+    }
+
+    /// Puts an earlier run on show, or the latest with nil.
+    func view(_ run: RunRecord?) {
+        if viewedRun != run { viewedRun = run }
+        #if DEBUG
+        if let run { debugLastViewed = run.id }
+        #endif
     }
 
     func noteZoom(_ new: CGFloat) {

@@ -9,12 +9,14 @@ struct CanvasArea: View {
 
     /// The connection strip floats over the canvas's foot: its own height and the gap on either side of it.
     private static let foot = Theme.Touch.target + Theme.Space.m * 2
+    /// How much of the canvas's top the banners cover, gap and all. Nothing when there are none.
+    @State private var top: CGFloat = 0
 
     var body: some View {
         Group {
             if let open = client.openFlow {
                 // The canvas draws its own paper, so the dots scroll and zoom with the cards as on the Mac.
-                CanvasRepresentable(client: client, foot: Self.foot)
+                CanvasRepresentable(client: client, top: top, foot: Self.foot)
                     .ignoresSafeArea()
                     .overlay {
                         // Asked for and not sent yet.
@@ -32,6 +34,12 @@ struct CanvasArea: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            // Measured, so that fitting the flow to the screen leaves it clear of them.
+            CanvasBanners()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { top = $0 > 0 ? $0 + Theme.Space.m * 2 : 0 }
+                .padding(Theme.Space.m)
+        }
         .dimmedWhileAway(client.state == .connected)
     }
 

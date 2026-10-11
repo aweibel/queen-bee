@@ -116,7 +116,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             saveViewport()
             clear()
         }
-        let selection = model.selection, viewed = model.viewedRun
+        let selection = model.selection, viewed = Self.stillOnShow(model.viewedRun, in: snapshot)
+        if viewed != model.viewedRun { model.view(viewed) }
         let now = Inputs(flow: snapshot.flow, run: snapshot.run, lastRun: snapshot.runs.last,
                          siblings: client.openFlow?.project.flows ?? [], selection: selection, viewed: viewed)
         // Most of what the Mac sends is terminal output and log lines, which change nothing here.
@@ -140,6 +141,13 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         #endif
     }
 
+    /// The earlier run being looked at, as the Mac has it now. Nil once it is no longer the thing to show: the
+    /// Mac has dropped it from its history, or a new run has begun, which goes on show as it does on the Mac.
+    private static func stillOnShow(_ viewed: RunRecord?, in snapshot: RemoteFlowSnapshot) -> RunRecord? {
+        guard let viewed, !snapshot.run.isRunning else { return nil }
+        return snapshot.runs.first { $0.id == viewed.id }
+    }
+
     /// Takes everything off the canvas, for another flow to be put on it.
     private func clear() {
         journey?.stop()
@@ -155,7 +163,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         awaitsPlacing = false
         isFitted = false
         model.select(.none)
-        model.viewedRun = nil
+        model.view(nil)
         #if DEBUG
         model.didChangeWhatIsShown()
         #endif
@@ -648,7 +656,8 @@ private final class Journey {
 /// and say how much of its foot is covered.
 struct CanvasRepresentable: UIViewRepresentable {
     let client: RemoteClient
-    /// Room at the foot of the canvas that something floats over.
+    /// Room at the top and the foot of the canvas that something floats over.
+    var top: CGFloat = 0
     var foot: CGFloat = 0
 
     func makeUIView(context: Context) -> CanvasView {
@@ -658,7 +667,7 @@ struct CanvasRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ view: CanvasView, context: Context) {
-        view.clearance = UIEdgeInsets(top: 0, left: 0, bottom: foot, right: 0)
+        view.clearance = UIEdgeInsets(top: top, left: 0, bottom: foot, right: 0)
     }
 
     static func dismantleUIView(_ view: CanvasView, coordinator: ()) {
