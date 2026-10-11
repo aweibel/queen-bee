@@ -12,6 +12,8 @@ Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, api
 `mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
 `mobile` is run only when named: it runs the iPad app in the iOS Simulator against the test copy. Build it
 first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by QB_E2E_SHOTS, or a new one.
+`terminals` is run only when named: it checks the iPad app's terminals against output made up inside the app,
+so it needs the Simulator and no Mac app or Claude Code session.
 """
 import atexit
 import glob
@@ -563,6 +565,31 @@ class Mobile:
         simctl("io", self.udid, "screenshot", path)
         return path
 
+    def appearance(self, mode):
+        """Turns the whole Simulator light or dark. The app follows without being launched again."""
+        simctl("ui", self.udid, "appearance", mode)
+
+
+def count_to(app, fid, name, first, last):
+    """Has an agent print a long reply: a number a line, with no tools. Returns how long it took."""
+    before = app.state(fid)["sessions"][name]["lastReply"]
+    started = time.time()
+    app.op(fid, "type", card=name, text=f"Print the numbers {first} to {last}, one per line, as plain text. Do not use any tools and add nothing else.")
+    app.wait(fid, lambda s: s["sessions"][name]["lastReply"] not in (None, before) and s["sessions"][name]["state"] == "idle",
+             180, f"{name} to count to {last}")
+    return time.time() - started
+
+
+def inside(inner, outer, slack=1.0):
+    """Whether one rectangle on screen lies within another, give or take a point."""
+    return (inner["x"] >= outer["x"] - slack and inner["y"] >= outer["y"] - slack
+            and inner["x"] + inner["width"] <= outer["x"] + outer["width"] + slack
+            and inner["y"] + inner["height"] <= outer["y"] + outer["height"] + slack)
+
+
+def shown_card(state, name):
+    return next((c for c in (state.get("canvas") or {}).get("cards", []) if c["name"] == name), {})
+
 
 def scenario_mobile(app):
     print("mobile: the iPad app pairs with the Mac, connects, comes back by itself, and learns when it is removed", flush=True)
@@ -574,6 +601,8 @@ def scenario_mobile(app):
         print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
         return
     app.open_flow(GUARD)
+    # Printed before the app has ever connected, so the app can only have it from the Mac's kept output.
+    count_to(app, GUARD["id"], "Alice", 1, 120)
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
 
@@ -639,6 +668,80 @@ def scenario_mobile(app):
         check("each agent's card says what its session is doing", all("idle" in c["badges"] for c in s.get("canvas", {}).get("cards", [])),
               str([c["badges"] for c in s.get("canvas", {}).get("cards", [])]))
         check("and has a place for its terminal", all(c["hasTerminalPlace"] for c in s.get("canvas", {}).get("cards", [])))
+
+        alice = next(c["id"] for c in GUARD["cards"] if c["name"] == "Alice")
+
+        def same_terminal(what, also=lambda real, shown: True):
+            """Checks the app's terminal for Alice against the Mac's own, once both have stopped changing."""
+            deadline = time.time() + 20
+            while True:
+                real = app.op(GUARD["id"], "terminal", card="Alice")
+                state = mobile.state()
+                shown = (state.get("terminals") or {}).get(alice) or {}
+                ok = (real.get("screen") == shown.get("screen") and (real.get("cols"), real.get("rows")) == (shown.get("cols"), shown.get("rows"))
+                      and real.get("cursor") == shown.get("cursor") and also(real, shown))
+                if ok or time.time() > deadline:
+                    break
+                time.sleep(0.5)
+            rows = [i for i, (a, b) in enumerate(zip(real.get("screen", []), shown.get("screen", []))) if a != b]
+            detail = f"Mac {real.get('cols')}x{real.get('rows')} cursor {real.get('cursor')}, app {shown.get('cols')}x{shown.get('rows')} cursor {shown.get('cursor')}"
+            if rows:
+                detail += f", {len(rows)} rows differ, first is row {rows[0]}: {real['screen'][rows[0]]!r} against {shown['screen'][rows[0]]!r}"
+            check(what, ok, detail)
+            return real, shown, state
+
+        def said(screen, number):
+            return any(row.strip() == str(number) for row in screen)
+
+        real, shown, s = same_terminal("the app shows Alice's terminal as the Mac does, at the Mac's columns and rows",
+                                       also=lambda real, shown: said(shown.get("screen", []), 120))
+        check("with what she printed before the app connected", said(shown.get("screen", []), 120), str(shown.get("screen", [])[-6:]))
+        check("and the output before that to scroll back through", shown.get("scrollback", 0) > 0 and shown.get("scrollback") == real.get("scrollback"),
+              f"Mac {real.get('scrollback')} lines, app {shown.get('scrollback')}")
+        place = shown_card(s, "Alice").get("terminalPlace") or {}
+        check("the terminal is in her card, inside the place for it",
+              shown_card(s, "Alice").get("hasTerminal") is True and shown.get("shown") is True and bool(place) and inside(shown.get("onScreen", {}), place),
+              f"{shown.get('onScreen')} in {place}")
+        print(f"        Alice's terminal is {shown.get('cols')}x{shown.get('rows')}, drawn at {shown.get('scale', 0):.3f} of the Mac's size; "
+              f"a character here is {shown.get('cell')}", flush=True)
+        heard = app.op("app", "remote-state").get("received")
+        count_to(app, GUARD["id"], "Alice", 121, 240)
+        real, shown, s = same_terminal("it still shows the same after a long reply printed while the app watched",
+                                       also=lambda real, shown: said(shown.get("screen", []), 240))
+        check("with the end of that reply on it", said(shown.get("screen", []), 240), str(shown.get("screen", [])[-6:]))
+        check("and the same earlier output as the Mac", shown.get("scrollback", 0) > 0 and shown.get("scrollback") == real.get("scrollback"),
+              f"Mac {real.get('scrollback')} lines, app {shown.get('scrollback')}")
+        every = (s.get("terminals") or {}).values()
+        check("the questions the programs asked their terminals were answered to nobody", sum(t["droppedReplies"] for t in every) > 0
+              and not any(t["isFirstResponder"] for t in every), str({k: t["droppedReplies"] for k, t in (s.get("terminals") or {}).items()}))
+        check("and the app sent the Mac nothing for any of it", app.op("app", "remote-state").get("received") == heard,
+              f"{heard} messages before, {app.op('app', 'remote-state').get('received')} after")
+        check("the session that runs the flow has a terminal too", "orchestrator" in (s.get("terminals") or {}), str(list((s.get("terminals") or {}).keys())))
+
+        # Launched again, the app is sent every screen afresh: the terminals start from nothing and end up the same.
+        mobile.launch("-qbOpen", "Guard", "-qbZoomCard", "Alice")
+        mobile.wait(lambda s: shown_card(s, "Alice").get("hasTerminal"), 40, "the app to connect again and show the terminal")
+        same_terminal("launched again, the terminal is rebuilt from what the Mac sends and shows the same")
+        mobile.shot("mobile-4c-terminal-in-card")
+        mobile.appearance("dark")
+        mobile.shot("mobile-4d-terminal-in-card-dark")
+        mobile.launch("-qbOpen", "Guard", "-qbZoomCard", "Alice", "-qbZoom", "1.4")
+        mobile.wait(lambda s: shown_card(s, "Alice").get("hasTerminal") and (s.get("canvas") or {}).get("zoom", 0) > 1.3, 40, "the app to show the terminal zoomed in")
+        mobile.shot("mobile-4e-terminal-zoomed-in-dark")
+        mobile.appearance("light")
+        mobile.shot("mobile-4f-terminal-zoomed-in")
+        mobile.launch("-qbOpen", "Guard", "-qbExpand", "Alice")
+        s = mobile.wait(lambda s: s.get("expanded") == alice and ((s.get("terminals") or {}).get(alice) or {}).get("shown"), 40, "the terminal to open full screen")
+        check("a terminal opens full screen", s.get("expanded") == alice, str(s.get("expanded")))
+        real, shown, s = same_terminal("and shows the same there")
+        check("at a size that can be read", shown.get("onScreen", {}).get("width", 0) >= shown.get("natural", {}).get("width", 1) - 1,
+              f"{shown.get('onScreen')} for {shown.get('natural')}")
+        mobile.shot("mobile-4g-terminal-full-screen")
+        mobile.launch("-qbOpen", "Guard", "-qbShow", "orchestrator")
+        s = mobile.wait(lambda s: ((s.get("terminals") or {}).get("orchestrator") or {}).get("shown") and drawn(s), 40, "the orchestrator's terminal to show")
+        check("the terminal of the session that runs the flow is in the panel beside the canvas",
+              ((s.get("terminals") or {}).get("orchestrator") or {}).get("shown") is True, str((s.get("terminals") or {}).get("orchestrator", {}).get("shown")))
+        mobile.shot("mobile-4h-orchestrator-terminal")
         app.op(GUARD["id"], "drag", card="Carol", dx=48, dy=72)
         moved_at = time.time()
         there = dict(in_file, Carol=(in_file["Carol"][0] + 48, in_file["Carol"][1] + 72) + in_file["Carol"][2:])
@@ -652,8 +755,7 @@ def scenario_mobile(app):
         # A run with no agents in it, so the one session it needs is the flow's own.
         gid = GATES["id"]
 
-        def shown(state, name):
-            return next((c for c in (state.get("canvas") or {}).get("cards", []) if c["name"] == name), {})
+        shown = shown_card
 
         app.op(gid, "select")
         mobile.launch("-qbOpen", "Gates")
@@ -708,6 +810,116 @@ def scenario_mobile(app):
         check("and the Mac has forgotten it", state["devices"] == 0 and state["connected"] == 0, str(state))
         mobile.shot("mobile-6-pair-again")
     finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_terminals():
+    print("terminals: the iPad app's terminals, fed output made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    agent = "agent001"
+    # What `DebugCanned` in the app prints, in the order it prints it.
+    first = ["● Agent ready in ~/example", "A made-up session, for checking the terminal."] + [str(n) for n in range(1, 121)]
+    more = ["✓ still going"] + [str(n) for n in range(121, 151)] + ["> "]
+    fresh = ["after the fresh start"] + [str(n) for n in range(1, 41)] + [""]
+
+    def play(steps, *args, also=lambda s: True):
+        mobile.launch("-qbCanned", str(steps), *args)
+        return mobile.wait(lambda s: s.get("cannedStep") == steps and agent in (s.get("terminals") or {})
+                           and (steps < 2 or shown_card(s, "Agent").get("hasTerminal") is not None) and also(s), 30, f"step {steps} of the made-up stream")
+
+    def terminal(state, key=agent):
+        return (state.get("terminals") or {}).get(key) or {}
+
+    def rows(lines, t, back=0):
+        """The rows a terminal of that height shows of these lines, when scrolled back that many."""
+        end = len(lines) - back
+        return [line.rstrip() for line in lines[end - t.get("rows", 0):end]]
+
+    def screen(t):
+        return [row.rstrip() for row in t.get("screen", [])]
+
+    try:
+        s = play(1)
+        t = terminal(s)
+        check("a terminal's first screen is taken in before its flow has arrived", t.get("resets") == 1 and screen(t) == rows(first + [""], t)
+              and s.get("openFlowCards") is None, f"{screen(t)[-3:]} {s.get('openFlowCards')}")
+        check("output for a flow that isn't the open one is left out", t.get("chunks") == 1, str(t.get("chunks")))
+
+        s = play(3, also=lambda s: shown_card(s, "Agent").get("terminalPlace"))
+        t, card = terminal(s), shown_card(s, "Agent")
+        cell, place, zoom = t.get("cell", {"width": 1, "height": 1}), card.get("terminalPlace") or {}, s.get("canvas", {}).get("zoom", 1)
+        fits = (int((480 - 12) / cell["width"]), int((300 - 28 - 8) / cell["height"]))
+        check("the terminal has exactly the columns and rows it was sent", (t.get("cols"), t.get("rows")) == fits, f"{t.get('cols')}x{t.get('rows')}, sent {fits}")
+        check("output that follows on, cut inside a colour and inside a character, comes out whole",
+              screen(t) == rows(first + more, t) and t.get("chunks") == 6, f"{screen(t)[-4:]} after {t.get('chunks')} chunks")
+        check("everything before it can be scrolled back to", t.get("scrollback") == len(first + more) - t.get("rows", 0), str(t.get("scrollback")))
+        check("each question in the stream was answered to nobody", t.get("droppedReplies", 0) >= 4 and t.get("isFirstResponder") is False,
+              f"{t.get('droppedReplies')} replies, {t.get('droppedBytes')} bytes")
+        on = t.get("onScreen", {})
+        check("in its card the terminal is the Mac's own size, from the top left of the place for it",
+              t.get("scale") == 1 and bool(place) and inside(on, place) and abs(on["x"] - place["x"]) < 1 and abs(on["y"] - place["y"]) < 1
+              and abs(on["width"] - t["natural"]["width"] * zoom) < 1, f"{on} in {place} at zoom {zoom}")
+        check("the orchestrator's terminal is kept though it has no card", (terminal(s, "orchestrator").get("cols"), terminal(s, "orchestrator").get("rows")) == (58, 40),
+              str(terminal(s, "orchestrator").get("cols")))
+        mobile.shot("terminals-1-card")
+
+        s = play(3, "-qbZoom", "0.6", also=lambda s: abs((s.get("canvas") or {}).get("zoom", 1) - 0.6) < 0.01)
+        t, place, zoom = terminal(s), shown_card(s, "Agent").get("terminalPlace") or {}, s.get("canvas", {}).get("zoom", 1)
+        on = t.get("onScreen", {})
+        check("zoomed out, the terminal shrinks with its card", abs(zoom - 0.6) < 0.01 and bool(place) and inside(on, place)
+              and abs(on["width"] - t["natural"]["width"] * 0.6) < 1, f"{on} in {place} at zoom {zoom}")
+        mobile.shot("terminals-2-card-zoomed-out")
+
+        s = play(3, "-qbZoom", "2", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 1.9)
+        t, place, zoom = terminal(s), shown_card(s, "Agent").get("terminalPlace") or {}, s.get("canvas", {}).get("zoom", 1)
+        on = t.get("onScreen", {})
+        check("zoomed in, it grows with its card", zoom > 1.2 and bool(place) and inside(on, place) and abs(on["width"] - t["natural"]["width"] * zoom) < 1.5,
+              f"{on} in {place} at zoom {zoom}")
+        mobile.shot("terminals-3-card-zoomed-in")
+        mobile.appearance("dark")
+        mobile.shot("terminals-4-card-zoomed-in-dark")
+        mobile.appearance("light")
+
+        was = (terminal(s).get("cols", 0), terminal(s).get("rows", 0))
+        s = play(5, also=lambda s: terminal(s).get("resets") == 2)
+        t, place = terminal(s), shown_card(s, "Agent").get("terminalPlace") or {}
+        check("a fresh start gives the terminal its new size", (t.get("cols"), t.get("rows")) == (was[0] - 12, was[1] - 4) and t.get("resets") == 2,
+              f"{t.get('cols')}x{t.get('rows')} from {was}")
+        check("and leaves nothing of the old screen, its other screen, its scroll region or its modes",
+              screen(t) == rows(fresh, t) and t.get("cursor") == [0, t.get("rows", 0) - 1], f"{screen(t)[:3]} … {screen(t)[-3:]} cursor {t.get('cursor')}")
+        check("nor any of the old output to scroll back to", t.get("scrollback") == len(fresh) - t.get("rows", 0), str(t.get("scrollback")))
+        on = t.get("onScreen", {})
+        check("smaller than its place, the terminal is stretched to fill it", t.get("scale", 0) > 1 and bool(place) and inside(on, place)
+              and min(place["width"] - on["width"], place["height"] - on["height"]) < 1, f"{on} in {place}, scale {t.get('scale')}")
+        mobile.shot("terminals-5-fresh-start")
+
+        s = play(3, "-qbExpand", "Agent", "-qbScrollBack", "40",
+                 also=lambda s: s.get("expanded") == agent and screen(terminal(s)) == rows(first + more, terminal(s), back=40))
+        t = terminal(s)
+        check("the terminal opens full screen", s.get("expanded") == agent and t.get("shown") is True, str(s.get("expanded")))
+        check("where it scrolls back through earlier output", screen(t) == rows(first + more, t, back=40), f"{screen(t)[:2]} … {screen(t)[-2:]}")
+        check("at least as large as on the Mac, and within the screen", t.get("onScreen", {}).get("width", 0) >= t.get("natural", {}).get("width", 1) - 1
+              and t.get("onScreen", {}).get("x", -1) >= 0, str(t.get("onScreen")))
+        check("and still takes no typing", t.get("isFirstResponder") is False)
+        check("its card goes without it meanwhile", shown_card(s, "Agent").get("hasTerminal") is False, str(shown_card(s, "Agent").get("hasTerminal")))
+        mobile.shot("terminals-6-full-screen-scrolled-back")
+
+        s = play(3, "-qbShow", "orchestrator", also=lambda s: terminal(s, "orchestrator").get("shown"))
+        t = terminal(s, "orchestrator")
+        check("the orchestrator's terminal is shown in the panel beside the canvas", t.get("shown") is True and t.get("scale", 0) > 0
+              and t.get("onScreen", {}).get("width", 0) > 100, f"{t.get('onScreen')} scale {t.get('scale')}")
+        mobile.shot("terminals-7-orchestrator")
+    finally:
+        mobile.appearance("light")
         mobile.quit()
 
 
@@ -775,12 +987,8 @@ def scenario_mirror(app):
 
     def count_to(first, last):
         """Has Alice print a long reply. Returns how long it took and how much of one processor the app used."""
-        before = app.state(fid)["sessions"]["Alice"]["lastReply"]
-        t0, c0 = time.time(), cpu_seconds(app.pid)
-        app.op(fid, "type", card="Alice", text=f"Print the numbers {first} to {last}, one per line, as plain text. Do not use any tools and add nothing else.")
-        app.wait(fid, lambda s: s["sessions"]["Alice"]["lastReply"] not in (None, before) and s["sessions"]["Alice"]["state"] == "idle",
-                 180, f"Alice to count to {last}")
-        seconds = time.time() - t0
+        c0 = cpu_seconds(app.pid)
+        seconds = globals()["count_to"](app, fid, "Alice", first, last)
         return seconds, 100 * (cpu_seconds(app.pid) - c0) / seconds
 
     def same(what, also=lambda c: True):
@@ -1328,7 +1536,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w != "noclaude"]
+    in_app = [w for w in wanted if w not in ("noclaude", "terminals")]
     if in_app:
         app = App(project)
         try:
@@ -1348,6 +1556,11 @@ def main():
                     app.op(flow_id, "close")
         finally:
             app.quit()
+    if "terminals" in wanted:
+        try:
+            scenario_terminals()
+        except Exception as e:
+            check("terminals ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)

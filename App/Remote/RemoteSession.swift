@@ -22,6 +22,9 @@ final class RemoteSession {
     private var controller: FlowController?
     /// The name of the flow the device has open, for a test to check.
     var openFlowName: String? { controller?.flow.name }
+    /// How many messages the device has sent since it was let in, for a test to check that a device
+    /// watching terminals sends nothing because of them.
+    private(set) var received = 0
     private var last: RemoteFlowSnapshot?
     private var revision = 0
     private var flushTask: Task<Void, Never>?
@@ -89,6 +92,7 @@ final class RemoteSession {
     /// Reads what the device sends until the connection ends.
     func run() async {
         while let message = try? await connection.receive(DeviceMessage.self) {
+            received += 1
             switch message {
             // Asking again for the flow already open would send the whole of it and every screen again.
             case .open(let flowID) where flowID == controller?.flow.id: break

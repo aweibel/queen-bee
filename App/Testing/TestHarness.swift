@@ -63,6 +63,7 @@ enum TestHarness {
             return ["on": .bool(host.isOn), "devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
                     "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
                     "open": .array(host.sessions.compactMap(\.openFlowName).map(JSONValue.string)),
+                    "received": .number(Double(host.sessions.reduce(0) { $0 + $1.received })),
                     "problem": host.problem.map(JSONValue.string) ?? .null]
         case "remote-vault":
             // Makes keeping a key fail, the way a locked or broken Keychain would.
@@ -240,6 +241,10 @@ enum TestHarness {
             guard let cardID, let width = payload["width"]?.doubleValue, let height = payload["height"]?.doubleValue else { return ["error": "resize needs card, width and height"] }
             controller.resizeCard(cardID, width: width, height: height)
             return [:]
+        case "terminal":
+            // What a session's own terminal shows, to set against what a device shows for it.
+            guard let cardID else { return ["error": "terminal needs card"] }
+            return MirrorWindow.describe(controller.session(forCard: cardID).view)
         case "mirror":
             // A second terminal that sees only what a paired device would be sent.
             guard let cardID else { return ["error": "mirror needs card"] }
@@ -411,7 +416,7 @@ enum MirrorWindow {
         return .object(result)
     }
 
-    private static func describe(_ view: TerminalView) -> JSONValue {
+    static func describe(_ view: TerminalView) -> JSONValue {
         let state = view.terminalStateSnapshot()
         let all = String(decoding: view.getBufferAsData(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).dropLast()
         return [
