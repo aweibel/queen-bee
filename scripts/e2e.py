@@ -14,6 +14,7 @@ Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, api
 first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by QB_E2E_SHOTS, or a new one.
 `terminals` is run only when named: it checks the iPad app's terminals against output made up inside the app,
 so it needs the Simulator and no Mac app or Claude Code session.
+`panels` is run only when named: it checks the iPad app's panels against a run made up inside the app, the same way.
 """
 import atexit
 import glob
@@ -759,24 +760,66 @@ def scenario_mobile(app):
 
         app.op(gid, "select")
         mobile.launch("-qbOpen", "Gates")
-        mobile.wait(lambda s: (s.get("canvas") or {}).get("flow") == gid and len(frames(s)) == len(GATES["cards"]), 40, "the canvas to draw another flow")
+        s = mobile.wait(lambda s: (s.get("canvas") or {}).get("flow") == gid and len(frames(s)) == len(GATES["cards"]), 40, "the canvas to draw another flow")
+
+        def panel(state):
+            return state.get("panel") or {}
+
+        def needing(state):
+            return [c["name"] for c in panel(state).get("needsYou", [])]
+
+        kept = len(panel(s).get("runs", []))
+        check("with nothing waiting, the app lists no card as needing you", needing(s) == [], str(needing(s)))
         app.op(gid, "run")
         held(app, gid)
         waiting = "Waiting for you to let its command run"
-        s = mobile.wait(lambda s: shown(s, "Shout").get("text") == waiting, 10, "the canvas to show the run waiting")
+        s = mobile.wait(lambda s: shown(s, "Shout").get("text") == waiting and needing(s), 10, "the canvas to show the run waiting")
         check("a card holding a message says what it is waiting for", shown(s, "Shout").get("text") == waiting, str(shown(s, "Shout")))
+        check("the banner over the canvas names the script that is waiting to be allowed",
+              panel(s).get("needsYou") == [{"name": "Shout", "reason": waiting}], str(panel(s).get("needsYou")))
         check("the link the run came along shows its count, and the card it left its tick",
               s.get("canvas", {}).get("passes") == {"l0": 1} and shown(s, "Start").get("badges") == ["✓"], str(s.get("canvas", {}).get("passes")))
         mobile.shot("mobile-4a-run-waiting")
         app.op(gid, "hold", answer="allow")
         held(app, gid, "Check it")
+        s = mobile.wait(lambda s: needing(s) == ["Check it"], 10, "the banner to name the approval")
+        check("then the approval that is holding the message", panel(s).get("needsYou") == [{"name": "Check it", "reason": "Waiting for you to approve"}],
+              str(panel(s).get("needsYou")))
         app.op(gid, "hold", answer="approve")
-        app.wait(gid, lambda s: not s["isRunning"], 20, "the run to end")
-        s = mobile.wait(lambda s: shown(s, "Done").get("badges") == ["✓"], 10, "the canvas to show where the run went")
+        real = app.wait(gid, lambda s: not s["isRunning"], 20, "the run to end")
+        s = mobile.wait(lambda s: shown(s, "Done").get("badges") == ["✓"] and len(panel(s).get("runs", [])) == kept + 1
+                        and panel(s).get("log") == real["log"], 10, "the canvas to show where the run went")
+        check("when the run ends nothing is waiting any more", needing(s) == [], str(needing(s)))
+        check("the list of runs has one more, and it finished", len(panel(s).get("runs", [])) == kept + 1 and panel(s)["runs"][0]["outcome"] == "finished"
+              and panel(s)["runs"][0]["id"] == real["runs"][-1]["id"], f"{kept} before, now {panel(s).get('runs')}")
+        check("the log has the Mac's lines, every one", panel(s).get("log") == real["log"] and len(real["log"]) > 3,
+              f"Mac {len(real['log'])} lines, app {len(panel(s).get('log', []))}")
+        check("and the End card's answer is under its name", panel(s).get("results") == {"Done": "HELLO FROM THE START CARD"}, str(panel(s).get("results")))
         check("when the run ends the canvas shows where it went and what came out",
               shown(s, "Done").get("badges") == ["✓"] and shown(s, "Done").get("text") == "HELLO FROM THE START CARD"
               and shown(s, "Binned").get("badges") == [] and s["canvas"].get("passes") == {"l0": 1, "l1": 1, "l2": 1} and s["canvas"].get("live") == [],
               f"{shown(s, 'Done')} {s.get('canvas', {}).get('passes')}")
+
+        # A second run that ends another way, so there is an earlier one to look back at.
+        app.op(gid, "run")
+        held(app, gid, "Check it")
+        app.op(gid, "hold", answer="reject", text="Too loud")
+        real = app.wait(gid, lambda s: not s["isRunning"], 20, "the second run to end")
+        earlier = real["runs"][-2]["id"]
+        mobile.launch("-qbOpen", "Gates", "-qbShow", "runs", "-qbViewRun", str(len(real["runs"]) - 2))
+        s = mobile.wait(lambda s: panel(s).get("viewedRun") == earlier and shown(s, "Done").get("badges") == ["✓"], 40, "the app to show the earlier run")
+        check("an earlier run can be put on show on the device", panel(s).get("viewedRun") == earlier
+              and [r["onShow"] for r in panel(s).get("runs", [])][:2] == [False, True], str(panel(s).get("runs")))
+        check("the canvas and the panels show that run's marks, counts and answer",
+              shown(s, "Done").get("text") == "HELLO FROM THE START CARD" and shown(s, "Binned").get("badges") == []
+              and s["canvas"].get("passes") == {"l0": 1, "l1": 1, "l2": 1} and panel(s).get("results") == {"Done": "HELLO FROM THE START CARD"},
+              f"{shown(s, 'Done')} {shown(s, 'Binned')} {s['canvas'].get('passes')} {panel(s).get('results')}")
+        check("and only that run's part of the log", 0 < len(panel(s).get("log", [])) < len(real["log"]) and panel(s)["log"] == real["log"][:len(panel(s)["log"])],
+              str(panel(s).get("log")))
+        now = app.state(gid)
+        check("the Mac goes on showing its latest run, and is told nothing", now["viewedRun"] is None and list(now["results"]) == ["Binned"],
+              f"{now['viewedRun']} {now['results']}")
+        mobile.shot("mobile-4i-earlier-run")
         app.op(gid, "close")
 
         mobile.quit()
@@ -918,6 +961,169 @@ def scenario_terminals():
         check("the orchestrator's terminal is shown in the panel beside the canvas", t.get("shown") is True and t.get("scale", 0) > 0
               and t.get("onScreen", {}).get("width", 0) > 100, f"{t.get('onScreen')} scale {t.get('scale')}")
         mobile.shot("terminals-7-orchestrator")
+    finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_panels():
+    print("panels: the iPad app's panels, fed a run made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    # What `DebugCannedRun` in the app plays, stage by stage.
+    command = "Write a welcome note for new members of the book club."
+    note = "Welcome to the book club.\n\nWe meet on the first Thursday"
+    changes, answer = "Changes are made on your Mac for now.", "Answer on your Mac for now."
+
+    def play(stage, *args, also=lambda s: True):
+        mobile.launch("-qbCannedRun", str(stage), *args)
+        return mobile.wait(lambda s: s.get("cannedStage") == stage and len((s.get("canvas") or {}).get("cards", [])) == 8 and also(s),
+                           30, f"stage {stage} of the made-up run")
+
+    def panel(state):
+        return state.get("panel") or {}
+
+    def details(state):
+        return panel(state).get("details") or {}
+
+    def items(state):
+        return {i["label"]: i["value"] for i in details(state).get("items", [])}
+
+    def styled(state, style):
+        return [(i["label"], i["value"]) for i in details(state).get("items", []) if i["style"] == style]
+
+    def room(state):
+        """How tall the part of the canvas nothing floats over is, on screen."""
+        canvas = state.get("canvas") or {}
+        return canvas.get("clear", {}).get("height", 0) * canvas.get("zoom", 0)
+
+    def both(name):
+        """The same screen in light and in dark."""
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    try:
+        s = play(1, "-qbSelect", "Writer", also=lambda s: details(s).get("title") == "Writer")
+        p = panel(s)
+        check("the banner lists the cards waiting on the person, in canvas order, with what each waits for",
+              p.get("needsYou") == [{"name": "Writer", "reason": "Waiting for you in its terminal"},
+                                    {"name": "Style guide", "reason": "Waiting for you to let its command run"}], str(p.get("needsYou")))
+        with_banner = room(s)
+        check("an agent's details list its settings in the Mac's words",
+              items(s).get("Instructions", "").startswith("You write short notes") and items(s).get("Model") == "Opus" and items(s).get("Effort") == "high"
+              and items(s).get("Permissions") == "Accept edits" and items(s).get("Folder") == "notes" and items(s).get("Cost") == "$0.50 in all"
+              and details(s).get("state") == "needsYou", str(items(s)))
+        check("with a line saying where changes are made, and where the answer is given",
+              details(s).get("footer") == changes and details(s).get("answerLine") is True
+              and styled(s, "waiting") == [("Waiting for you in its terminal.", "")], f"{details(s).get('footer')} {styled(s, 'waiting')}")
+        check("the log has every line the Mac sent", len(p.get("log", [])) == 19 and p["log"][-1] == "Style guide is waiting for you to let its command run",
+              str(p.get("log", [])[-2:]))
+        check("earlier runs are listed newest first, with how each ended, how long it took and what it cost",
+              [(r["id"], r["outcome"], r["length"], r["cost"]) for r in p.get("runs", [])]
+              == [("run00002", "failed", "21 sec", "$0.08"), ("run00001", "finished", "1 min 35 sec", "$0.42")], str(p.get("runs")))
+        check("while a run is going none of them is on show, and the run has no figure yet",
+              not any(r["onShow"] for r in p.get("runs", [])) and p.get("cost", {}).get("runTotal") is None
+              and "after it ends" in (p.get("cost", {}).get("runPending") or ""), str(p.get("cost")))
+        check("the flow's running total adds up its sessions, dearest first", p.get("cost", {}).get("total") == "$0.71"
+              and p["cost"]["sessions"] == [["Writer", "$0.50", "88k tokens"], ["Orchestrator", "$0.21", "36k tokens"]], str(p.get("cost")))
+        both("panels-01-needs-you-agent")
+
+        s = play(1, "-qbGoToWaiting", "1", also=lambda s: (s.get("canvas") or {}).get("selected") == {"card": "style001"})
+        canvas, card = s.get("canvas") or {}, shown_card(s, "Style guide")
+        clear = canvas.get("clear") or {"x": 0, "y": 0, "width": 0, "height": 0}
+        # The canvas is still moving when the selection is first written, so wait for it to arrive.
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            s = mobile.state()
+            canvas, card = s.get("canvas") or {}, shown_card(s, "Style guide")
+            clear = canvas.get("clear") or clear
+            off = (abs(card.get("x", 0) + card.get("width", 0) / 2 - clear["x"] - clear["width"] / 2),
+                   abs(card.get("y", 0) + card.get("height", 0) / 2 - clear["y"] - clear["height"] / 2))
+            if max(off) < 2:
+                break
+            time.sleep(0.3)
+        check("going to a waiting card selects it and puts it in the middle of the clear part of the canvas",
+              canvas.get("selected") == {"card": "style001"} and max(off) < 2, f"{canvas.get('selected')} off by {off}")
+        check("and turns the panel to its details: the command, and that it is waiting to be allowed",
+              panel(s).get("page") == "details" and items(s).get("Command") == "cat docs/style.md"
+              and [value for _, value in styled(s, "waiting")] == ["cat docs/style.md"] and details(s).get("answerLine") is True, str(details(s)))
+        both("panels-02-script-waiting")
+
+        s = play(2, "-qbSelect", "Sign off", also=lambda s: details(s).get("title") == "Sign off")
+        p = panel(s)
+        check("when the run moves on, so does the banner", [c["name"] for c in p.get("needsYou", [])] == ["Sign off"], str(p.get("needsYou")))
+        check("lines that arrive later are added to the log", len(p.get("log", [])) == 24 and p["log"][-1] == "Sign off is waiting for you", str(p.get("log", [])[-2:]))
+        waiting = styled(s, "waiting")
+        check("an approval's details show the message it is holding and who sent it",
+              items(s).get("What to check before approving") == "Is this note right to send?" and len(waiting) == 1
+              and waiting[0][0] == "From Short enough? Waiting for you." and waiting[0][1].startswith(note), str(waiting)[:200])
+        both("panels-03-approval-waiting")
+
+        s = play(3, "-qbShow", "runs")
+        p = panel(s)
+        check("the panel can be turned to a page by name", (p.get("page"), p.get("tab")) == ("runs", "history"), f"{p.get('page')} {p.get('tab')}")
+        check("when nothing is waiting the banner goes, and the canvas has its room back", p.get("needsYou") == [] and room(s) > with_banner + 100,
+              f"{room(s):.0f} points clear, {with_banner:.0f} with the banner")
+        check("the run that ended is listed first, and is the one on show",
+              [(r["id"], r["outcome"], r["cost"], r["onShow"]) for r in p.get("runs", [])][:1] == [("run00003", "finished", "$0.37", True)]
+              and [r["id"] for r in p.get("runs", [])] == ["run00003", "run00002", "run00001"] and p.get("viewedRun") is None, str(p.get("runs")))
+        check("the End card's answer is under its name", list(p.get("results", {})) == ["Sent"] and p["results"]["Sent"].startswith(note), str(p.get("results"))[:120])
+        check("the run's cost is listed card by card with its total",
+              p.get("cost", {}).get("runTotal") == "$0.37" and p["cost"]["runLines"] == [["Writer", "$0.37", "57k tokens"]]
+              and p["cost"]["runTitle"] == "Latest run" and p["cost"]["total"] == "$1.08", str(p.get("cost")))
+        both("panels-04-runs")
+        for page in ("log", "output", "cost"):
+            s = play(3, "-qbShow", page, also=lambda s: panel(s).get("page") == page)
+            both(f"panels-0{5 + ('log', 'output', 'cost').index(page)}-{page}")
+        check("the log has every line of every run so far", len(panel(s).get("log", [])) == 26, str(len(panel(s).get("log", []))))
+
+        s = play(3, "-qbSelect", "link:2", also=lambda s: details(s).get("kind") == "Link")
+        check("a link's details name its ends and show what it carried, with who sent it",
+              details(s).get("title") == "Writer → Both ready" and items(s).get("Limit per run") == "3" and len(details(s).get("messages") or []) == 1
+              and details(s)["messages"][0]["from"] == "Writer" and details(s)["messages"][0]["text"].startswith(note), str(details(s))[:300])
+        both("panels-08-link-messages")
+        s = play(3, "-qbSelect", "Start", also=lambda s: details(s).get("title") == "Start")
+        check("a Start card's details say what it starts with and when it runs",
+              items(s).get("What the run starts with") == command and items(s).get("Runs") == "On chosen days" and items(s).get("On") == "Mon, Wed"
+              and items(s).get("At") == "09:00", str(items(s)))
+        both("panels-09-start-schedule")
+
+        s = play(3, "-qbViewRun", "1", "-qbShow", "log", also=lambda s: panel(s).get("viewedRun") == "run00002")
+        p, canvas = panel(s), s.get("canvas") or {}
+        check("an earlier run can be put on show", p.get("viewedRun") == "run00002" and [r["onShow"] for r in p.get("runs", [])] == [False, True, False],
+              str(p.get("runs")))
+        check("the log, the answers and the cost are that run's", len(p.get("log", [])) == 5 and p["log"][-1].startswith("Run stopped because Style guide failed")
+              and p.get("results") == {} and p.get("cost", {}).get("runTotal") == "$0.08" and p["cost"]["runTitle"].startswith("Run from "),
+              f"{p.get('log')} {p.get('results')} {p.get('cost')}")
+        check("and so are the canvas's counts", canvas.get("passes") == {"l0": 1, "l1": 1}, str(canvas.get("passes")))
+        both("panels-10-earlier-run-failed")
+
+        s = play(3, "-qbViewRun", "0", "-qbSelect", "link:2", also=lambda s: panel(s).get("viewedRun") == "run00001" and details(s).get("kind") == "Link")
+        p, canvas = panel(s), s.get("canvas") or {}
+        check("a link shows what it carried in the run on show", [m["text"][:25] for m in details(s).get("messages") or []] == ["Welcome to the book club."]
+              and "lighthouse" not in details(s)["messages"][0]["text"], str(details(s).get("messages")))
+        check("an End card shows its answer in that run, on the canvas and in the panel",
+              p.get("results", {}).get("Sent", "").endswith("Tea is on us.") and shown_card(s, "Sent").get("text", "").endswith("Tea is on us.")
+              and len(canvas.get("passes", {})) == 7, f"{p.get('results')} {shown_card(s, 'Sent')}")
+
+        s = play(3, "-qbViewRun", "2", also=lambda s: panel(s).get("lastViewedRun") is None)
+        check("picking the latest run is going back to the latest", panel(s).get("viewedRun") is None and panel(s)["runs"][0]["onShow"] is True,
+              str(panel(s).get("viewedRun")))
+
+        s = play(4, "-qbViewRun", "0", also=lambda s: panel(s).get("lastViewedRun") == "run00001" and panel(s).get("viewedRun") is None)
+        p = panel(s)
+        check("when a new run begins on the Mac, the device goes back to showing the latest",
+              p.get("lastViewedRun") == "run00001" and p.get("viewedRun") is None and not any(r["onShow"] for r in p.get("runs", []))
+              and len(p.get("log", [])) == 29 and (s.get("canvas") or {}).get("passes") == {"l0": 1, "l1": 1}, f"{p.get('viewedRun')} {len(p.get('log', []))}")
     finally:
         mobile.appearance("light")
         mobile.quit()
@@ -1536,7 +1742,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "terminals")]
+    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels")]
     if in_app:
         app = App(project)
         try:
@@ -1561,6 +1767,11 @@ def main():
             scenario_terminals()
         except Exception as e:
             check("terminals ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "panels" in wanted:
+        try:
+            scenario_panels()
+        except Exception as e:
+            check("panels ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)
