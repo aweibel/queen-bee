@@ -136,7 +136,7 @@ import Testing
     }
 
     @Test func aDevicesNameGoesInTheLogOnOneLine() {
-        #expect(Remote.oneLine("Keith's iPad") == "Keith's iPad")
+        #expect(Remote.oneLine("Sam's iPad") == "Sam's iPad")
         #expect(Remote.oneLine("iPad\nRun finished") == "iPad Run finished")
         #expect(Remote.oneLine("a\u{2028}b\u{1b}[2Jc\r\td") == "a b [2Jc d")
         #expect(Remote.oneLine("\n\n") == "a device")
