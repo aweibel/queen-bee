@@ -15,12 +15,15 @@ first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by 
 `terminals` is run only when named: it checks the iPad app's terminals against output made up inside the app,
 so it needs the Simulator and no Mac app or Claude Code session.
 `panels` is run only when named: it checks the iPad app's panels against a run made up inside the app, the same way.
+`controls` is run only when named: it checks the iPad app's run bar and buttons against a Mac made up inside the app,
+the same way.
 """
 import atexit
 import glob
 import json
 import math
 import os
+import plistlib
 import queue
 import shutil
 import socket
@@ -35,7 +38,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "build/Build/Products/Debug/QueenBee.app")
 CHECK = os.path.join(ROOT, "build/Build/Products/Debug/qb-remote-check")
 MOBILE_APP = os.path.join(ROOT, "build/Build/Products/Debug-iphonesimulator/QueenBeeMobile.app")
-MOBILE_ID = "dev.queenbee.mobile"
 # Unix socket paths are capped at 104 bytes, so the test copy's support folder has to be short.
 # Each run has its own, named for its process, so two runs at once leave each other alone.
 SUPPORT_PREFIX = os.path.expanduser("~/Library/Application Support/QBTest-")
@@ -692,16 +694,20 @@ class Mobile:
 
     def __init__(self, udid):
         self.udid = udid
+        # Read from the app as it was built: the project's own id, or the one Local.xcconfig gives it on a
+        # machine set up to install the app on a real device.
+        with open(os.path.join(MOBILE_APP, "Info.plist"), "rb") as f:
+            self.id = plistlib.load(f)["CFBundleIdentifier"]
         self.shots = os.environ.get("QB_E2E_SHOTS") or tempfile.mkdtemp(prefix="qb-shots-")
         os.makedirs(self.shots, exist_ok=True)
         # A copy left by an earlier run would still be paired with a Mac that is gone.
-        simctl("uninstall", udid, MOBILE_ID)
+        simctl("uninstall", udid, self.id)
         installed = simctl("install", udid, MOBILE_APP)
         if installed.returncode != 0:
             raise RuntimeError("the iPad app couldn't be installed: " + installed.stderr.strip()[:300])
 
     def _state_file(self):
-        folder = simctl("get_app_container", self.udid, MOBILE_ID, "data").stdout.strip()
+        folder = simctl("get_app_container", self.udid, self.id, "data").stdout.strip()
         return os.path.join(folder, "Library/Caches/qb-state.json")
 
     def launch(self, *args):
@@ -711,12 +717,12 @@ class Mobile:
             os.remove(self._state_file())
         except OSError:
             pass
-        started = simctl("launch", self.udid, MOBILE_ID, *args)
+        started = simctl("launch", self.udid, self.id, *args)
         if started.returncode != 0:
             raise RuntimeError("the iPad app couldn't be launched: " + started.stderr.strip()[:300])
 
     def quit(self):
-        simctl("terminate", self.udid, MOBILE_ID)
+        simctl("terminate", self.udid, self.id)
 
     def state(self):
         try:
@@ -946,24 +952,109 @@ def scenario_mobile(app):
         def needing(state):
             return [c["name"] for c in panel(state).get("needsYou", [])]
 
-        kept = len(panel(s).get("runs", []))
         check("with nothing waiting, the app lists no card as needing you", needing(s) == [], str(needing(s)))
-        app.op(gid, "run")
-        held(app, gid)
+
+        # From here the device drives the Mac: the same presses its buttons make, refused until the Mac allows them.
+        def controls(state):
+            return state.get("controls") or {}
+
+        def did(state):
+            return [(d["step"], d["refusal"]) for d in controls(state).get("done", [])]
+
+        def press(steps, *args, also=lambda s: True):
+            """Launches the app to press those buttons in turn, and waits for the Mac's answer to each."""
+            mobile.launch("-qbOpen", "Gates", "-qbDo", steps, *args)
+            return mobile.wait(lambda s: len(did(s)) >= len(steps.split(";")) and also(s), 60, f"the Mac to answer {steps}")
+
+        def mac():
+            """Everything a press could change on the Mac."""
+            now = app.state(gid)
+            return {k: now[k] for k in ("isRunning", "log", "runs", "holds", "results", "marks")}
+
+        def refused(state, steps):
+            return [step for step, _ in did(state)] == steps.split(";") and all("can only watch" in (r or "") for _, r in did(state))
+
+        def allow(on):
+            app.op("app", "remote-control", device=entry["id"], on=on)
+
+        with open(os.path.join(app.support, "remote-devices.json")) as saved:
+            entry = next(d for d in json.load(saved)["devices"] if d["id"].lower() == device.lower())
+        name = entry["name"]
         waiting = "Waiting for you to let its command run"
-        s = mobile.wait(lambda s: shown(s, "Shout").get("text") == waiting and needing(s), 10, "the canvas to show the run waiting")
+        script, approval = ["Don't run", "Allow and run"], ["Reject", "Approve"]
+
+        before = mac()
+        s = press("run;stop;startAgents")
+        c = controls(s)
+        check("a device the Mac hasn't allowed has no controls, and one line saying how to get them",
+              c.get("canAct") is False and c.get("bar") == [] and c.get("cards") == {} and "Can control" in (c.get("hint") or ""), str(c))
+        check("pressed anyway, the Mac refuses each one", refused(s, "run;stop;startAgents"), str(did(s)))
+        time.sleep(2)
+        check("and nothing happens on the Mac", mac() == before, str([k for k in before if mac()[k] != before[k]]))
+        mobile.shot("mobile-7a-watch-only")
+        allow(True)
+        s = mobile.wait(lambda s: controls(s).get("canAct"), 15, "the app to hear it may control the Mac")
+        check("turned on on the Mac, the controls come at once", controls(s).get("canAct") is True and controls(s).get("bar", [])[-1:] == ["Run"]
+              and controls(s).get("hint") is None, str(controls(s)))
+        mobile.shot("mobile-7b-can-control")
+
+        # Fitted, this flow is too small on screen for a card's buttons, so the canvas is brought in to the script.
+        s = press("run", "-qbZoomCard", "Shout", also=lambda s: shown(s, "Shout").get("text") == waiting and needing(s) and shown(s, "Shout").get("buttons"))
+        held(app, gid)
+        real = app.state(gid)
+        check("Run on the device starts a run on the Mac", did(s) == [("run", None)] and real["isRunning"], f"{did(s)} {real['isRunning']}")
+        check("and the Mac's log says which device started it", f"Run started from {name}" in real["log"], str(real["log"][-4:]))
         check("a card holding a message says what it is waiting for", shown(s, "Shout").get("text") == waiting, str(shown(s, "Shout")))
         check("the banner over the canvas names the script that is waiting to be allowed",
               panel(s).get("needsYou") == [{"name": "Shout", "reason": waiting}], str(panel(s).get("needsYou")))
+        check("and the script's card, the banner and the run bar offer the Mac's own answers",
+              controls(s).get("cards") == {"Shout": script} and controls(s).get("banner") == {"Shout": script} and controls(s).get("bar") == ["Stop"]
+              and [b["title"] for b in shown(s, "Shout").get("buttons", [])] == script, f"{controls(s)} {shown(s, 'Shout').get('buttons')}")
         check("the link the run came along shows its count, and the card it left its tick",
               s.get("canvas", {}).get("passes") == {"l0": 1} and shown(s, "Start").get("badges") == ["✓"], str(s.get("canvas", {}).get("passes")))
         mobile.shot("mobile-4a-run-waiting")
-        app.op(gid, "hold", answer="allow")
-        held(app, gid, "Check it")
-        s = mobile.wait(lambda s: needing(s) == ["Check it"], 10, "the banner to name the approval")
+
+        allow(False)
+        before = mac()
+        s = press("allow:Shout;dontRun:Shout")
+        time.sleep(2)
+        check("with control turned off again, the script can't be allowed or skipped from the device", refused(s, "allow:Shout;dontRun:Shout") and mac() == before,
+              f"{did(s)} {[k for k in before if mac()[k] != before[k]]}")
+        allow(True)
+        s = press("allow:Shout", also=lambda s: needing(s) == ["Check it"])
+        h = held(app, gid, "Check it")
+        check("turned on, Allow on the device lets the command run on the Mac", did(s) == [("allow:Shout", None)] and h[0]["text"] == "HELLO FROM THE START CARD",
+              f"{did(s)} {h}")
         check("then the approval that is holding the message", panel(s).get("needsYou") == [{"name": "Check it", "reason": "Waiting for you to approve"}],
               str(panel(s).get("needsYou")))
-        app.op(gid, "hold", answer="approve")
+        check("with Reject and Approve on its card", controls(s).get("cards") == {"Check it": approval}, str(controls(s).get("cards")))
+        mobile.shot("mobile-7c-approval-waiting")
+        allow(False)
+        before = mac()
+        s = press("approve:Check it;reject:Check it:no")
+        time.sleep(2)
+        check("with control off, the message can't be approved or rejected from the device", refused(s, "approve:Check it;reject:Check it:no") and mac() == before,
+              f"{did(s)} {[k for k in before if mac()[k] != before[k]]}")
+        allow(True)
+        s = press("reject:Check it:Not yet", also=lambda s: needing(s) == [])
+        real = app.wait(gid, lambda s: not s["isRunning"], 20, "the rejected run to end")
+        check("Reject on the device sends the message down Rejected, with the note ahead of it",
+              did(s) == [("reject:Check it:Not yet", None)] and list(real["results"]) == ["Binned"] and real["results"]["Binned"].startswith("Not yet\n"),
+              f"{did(s)} {real['results']}")
+
+        s = press("run", also=lambda s: needing(s) == ["Check it"])
+        h = held(app, gid, "Check it")
+        check("a second run from the device goes straight to the approval: the command it allowed stays allowed",
+              did(s) == [("run", None)] and not h[0]["needsAllow"], f"{did(s)} {h}")
+        s = press("stop", also=lambda s: controls(s).get("bar", [])[-1:] == ["Run"])
+        real = app.wait(gid, lambda s: not s["isRunning"], 20, "the run to stop")
+        check("Stop on the device stops it", did(s) == [("stop", None)] and not real["holds"] and real["runs"][-1]["outcome"] == "stopped",
+              f"{did(s)} {real['runs'][-1]['outcome']}")
+        check("and the Mac's log says which device stopped it", f"Stopped from {name}" in real["log"], str(real["log"][-4:]))
+
+        kept = len(panel(s).get("runs", []))
+        s = press("run;approve:Check it", also=lambda s: needing(s) == [] and shown(s, "Done").get("badges") == ["✓"])
+        check("a third run is started and approved from the device", did(s) == [("run", None), ("approve:Check it", None)], str(did(s)))
         real = app.wait(gid, lambda s: not s["isRunning"], 20, "the run to end")
         s = mobile.wait(lambda s: shown(s, "Done").get("badges") == ["✓"] and len(panel(s).get("runs", [])) == kept + 1
                         and panel(s).get("log") == real["log"], 10, "the canvas to show where the run went")
@@ -992,8 +1083,9 @@ def scenario_mobile(app):
               shown(s, "Done").get("text") == "HELLO FROM THE START CARD" and shown(s, "Binned").get("badges") == []
               and s["canvas"].get("passes") == {"l0": 1, "l1": 1, "l2": 1} and panel(s).get("results") == {"Done": "HELLO FROM THE START CARD"},
               f"{shown(s, 'Done')} {shown(s, 'Binned')} {s['canvas'].get('passes')} {panel(s).get('results')}")
-        check("and only that run's part of the log", 0 < len(panel(s).get("log", [])) < len(real["log"]) and panel(s)["log"] == real["log"][:len(panel(s)["log"])],
-              str(panel(s).get("log")))
+        part = panel(s).get("log", [])
+        check("and only that run's part of the log", 0 < len(part) < len(real["log"])
+              and any(real["log"][i:i + len(part)] == part for i in range(len(real["log"]))) and part[0].startswith("Run started"), str(part))
         now = app.state(gid)
         check("the Mac goes on showing its latest run, and is told nothing", now["viewedRun"] is None and list(now["results"]) == ["Binned"],
               f"{now['viewedRun']} {now['results']}")
@@ -1331,6 +1423,174 @@ def scenario_panels():
         check("when a new run begins on the Mac, the device goes back to showing the latest",
               p.get("lastViewedRun") == "run00001" and p.get("viewedRun") is None and not any(r["onShow"] for r in p.get("runs", []))
               and len(p.get("log", [])) == 29 and (s.get("canvas") or {}).get("passes") == {"l0": 1, "l1": 1}, f"{p.get('viewedRun')} {len(p.get('log', []))}")
+    finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_controls():
+    print("controls: the iPad app's run bar and the buttons that answer a run, with a Mac made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    # What `DebugCannedRun` in the app plays, stage by stage, and how its made-up Mac answers.
+    watch_only, away = "can only watch", "Not connected to your Mac right now."
+    on = ("-qbControl", "1")
+
+    def controls(state):
+        return state.get("controls") or {}
+
+    def play(stage, *args, also=lambda s: True, steps=0):
+        """Plays the made-up run to a stage, and waits for that many of the steps it was told to do."""
+        mobile.launch("-qbCannedRun", str(stage), *args)
+        return mobile.wait(lambda s: s.get("cannedStage") == stage and len((s.get("canvas") or {}).get("cards", [])) == 8
+                           and len(controls(s).get("done", [])) >= steps and also(s), 30, f"stage {stage} of the made-up run")
+
+    def did(state):
+        return [(d["step"], d["refusal"]) for d in controls(state).get("done", [])]
+
+    def drawn(state, name):
+        """The buttons drawn on a card, as the canvas has them."""
+        return [(b["title"], b["enabled"]) for b in shown_card(state, name).get("buttons", [])]
+
+    def needing(state):
+        return [c["name"] for c in (state.get("panel") or {}).get("needsYou", [])]
+
+    def nothing(state):
+        """No control anywhere: no bar, and no button on a card, in the banner or in the details."""
+        c = controls(state)
+        return (c.get("canAct") is False and c.get("bar") == [] and c.get("cards") == {} and c.get("banner") == {} and c.get("details") == []
+                and not any(card.get("buttons") for card in (state.get("canvas") or {}).get("cards", [])))
+
+    def both(name):
+        """The same screen in light and in dark."""
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    try:
+        s = play(1, "-qbSelect", "Style guide")
+        c = controls(s)
+        check("a device that may only watch has no controls anywhere", nothing(s) and c.get("canControl") is False, str(c))
+        check("and one line where the run bar would be says how to turn control on",
+              "Can control" in (c.get("hint") or "") and "Settings" in c["hint"] and c.get("answerLine") == "Answer on your Mac for now.", str(c.get("hint")))
+        both("controls-01-watch-only")
+        s = play(1, "-qbDo", "run;stop;allow:Style guide;dontRun:Style guide", steps=4)
+        check("pressed anyway, everything is refused in the Mac's words", len(did(s)) == 4 and all(watch_only in (r or "") for _, r in did(s)), str(did(s)))
+        check("and nothing changes", needing(s) == ["Writer", "Style guide"] and nothing(s) and watch_only in (controls(s).get("refusal") or ""), str(needing(s)))
+        both("controls-02-refusal")
+
+        s = play(1, *on, "-qbZoomCard", "Style guide", "-qbSelect", "Style guide")
+        c = controls(s)
+        script = ["Don't run", "Allow and run"]
+        check("allowed to control, the run bar offers Stop while a run is going", c.get("canAct") is True and c.get("bar") == ["Stop"] and c.get("hint") is None, str(c))
+        check("a script waiting to be allowed has the Mac's two answers on its card, in the banner and in its details",
+              c.get("cards") == {"Style guide": script} and c.get("banner") == {"Style guide": script} and c.get("details") == script
+              and drawn(s, "Style guide") == [(t, True) for t in script], f"{c} {drawn(s, 'Style guide')}")
+        check("an agent waiting in its terminal is still answered on the Mac, and the banner says so",
+              "terminal" in (c.get("answerLine") or "") and drawn(s, "Writer") == [], str(c.get("answerLine")))
+        both("controls-03-script-waiting")
+        s = play(1, *on, "-qbPress", "allow:Style guide", also=lambda s: controls(s).get("asking"))
+        check("Allow shows the whole command and asks before anything is sent",
+              controls(s).get("asking") == "allow:Style guide:cat docs/style.md" and controls(s).get("waiting") == [] and needing(s) == ["Writer", "Style guide"],
+              str(controls(s).get("asking")))
+        both("controls-04-allow-asks")
+        s = play(1, *on, "-qbDo", "allow:Style guide", steps=1, also=lambda s: needing(s) == ["Writer"])
+        check("allowed, the command is let run and the card stops waiting",
+              did(s) == [("allow:Style guide", None)] and needing(s) == ["Writer"] and controls(s).get("cards") == {} and controls(s).get("refusal") is None, str(did(s)))
+        s = play(1, *on, "-qbDo", "dontRun:Style guide", steps=1, also=lambda s: needing(s) == ["Writer"])
+        check("and so does Don't run", did(s) == [("dontRun:Style guide", None)] and needing(s) == ["Writer"], str(did(s)))
+        s = play(1, *on, "-qbDo", "run", steps=1)
+        check("what the Mac refuses is shown in its own words", did(s) == [("run", "A run is already going. Stop it before starting another.")]
+              and controls(s).get("refusal") == did(s)[0][1], str(did(s)))
+        mobile.shot("controls-05-refusal-run-going")
+        s = play(1, *on, "-qbDo", "run;stop", steps=2, also=lambda s: controls(s).get("bar") == ["Run"])
+        check("and goes away when the next thing works", did(s)[1:] == [("stop", None)] and controls(s).get("refusal") is None, str(controls(s)))
+        check("a stopped run leaves Run on offer", controls(s).get("bar") == ["Run"] and needing(s) == ["Writer"], str(controls(s).get("bar")))
+        s = play(1, *on, "-qbPress", "stop", also=lambda s: controls(s).get("asking"))
+        check("Stop asks first", controls(s).get("asking") == "stop" and controls(s).get("bar") == ["Stop"], str(controls(s).get("asking")))
+        mobile.shot("controls-06-stop-asks")
+
+        approval = ["Reject", "Approve"]
+        s = play(2, *on, "-qbZoomCard", "Sign off", "-qbSelect", "Sign off")
+        c = controls(s)
+        check("an approval holding a message has Reject and Approve on its card, in the banner and in its details",
+              c.get("cards") == {"Sign off": approval} and c.get("banner") == {"Sign off": approval} and c.get("details") == approval
+              and drawn(s, "Sign off") == [(t, True) for t in approval] and c.get("answerLine") is None, f"{c} {drawn(s, 'Sign off')}")
+        on_screen = shown_card(s, "Sign off").get("buttons", [])
+        check("the buttons are drawn inside their card", bool(on_screen) and all(b["width"] > 30 and b["height"] > 15 for b in on_screen), str(on_screen))
+        both("controls-07-approval-waiting")
+        s = play(2, *on, "-qbPress", "reject:Sign off", also=lambda s: controls(s).get("asking"))
+        check("Reject asks for a note before anything is sent", controls(s).get("asking") == "reject:Sign off" and needing(s) == ["Sign off"], str(controls(s).get("asking")))
+        both("controls-08-reject-note")
+        s = play(2, *on, "-qbDo", "reject:Sign off:Too long", steps=1, also=lambda s: needing(s) == [])
+        check("rejected with a note, the card stops waiting", did(s) == [("reject:Sign off:Too long", None)] and needing(s) == [], str(did(s)))
+        s = play(2, *on, "-qbDo", "approve:Sign off", steps=1, also=lambda s: needing(s) == [])
+        check("and so it does approved", did(s) == [("approve:Sign off", None)] and needing(s) == [] and controls(s).get("cards") == {}, str(did(s)))
+        s = play(2, *on, "-qbZoom", "0.3")
+        check("zoomed too far out to press, a card has no buttons, and the banner still does",
+              drawn(s, "Sign off") == [] and controls(s).get("banner") == {"Sign off": approval}, f"{drawn(s, 'Sign off')} {(s.get('canvas') or {}).get('zoom')}")
+
+        s = play(2, *on, "-qbSilent", "1", "-qbZoomCard", "Sign off", "-qbDo", "~approve:Sign off;pause;away",
+                 also=lambda s: controls(s).get("waiting") == ["approve"])
+        check("while a command waits for the Mac's answer, both of its card's buttons are off",
+              controls(s).get("waiting") == ["approve"] and controls(s).get("disabled") == ["Approve", "Reject"]
+              and drawn(s, "Sign off") == [(t, False) for t in approval] and controls(s).get("bar") == ["Stop"], f"{controls(s)} {drawn(s, 'Sign off')}")
+        s = mobile.wait(lambda s: did(s), 15, "the link to drop")
+        check("when the link drops, what was waiting is told so, and nothing is kept to send later",
+              did(s) == [("approve:Sign off", away)] and controls(s).get("waiting") == [] and controls(s).get("refusal") == away, str(controls(s)))
+        check("and with no Mac there are no controls, and no line about turning them on", nothing(s) and controls(s).get("hint") is None, str(controls(s)))
+
+        s = play(2, *on, "-qbDo", "control:off;approve:Sign off", steps=1)
+        check("when “Can control” is turned off on the Mac the controls go at once",
+              nothing(s) and "Can control" in (controls(s).get("hint") or "") and did(s)[0][1] and watch_only in did(s)[0][1] and needing(s) == ["Sign off"], str(controls(s)))
+        s = play(2, "-qbDo", "control:on;pause", "-qbZoomCard", "Sign off", also=lambda s: controls(s).get("canAct"))
+        check("and come when it is turned on", controls(s).get("cards") == {"Sign off": approval} and controls(s).get("hint") is None, str(controls(s)))
+
+        s = play(3, *on, "-qbSelect", "Both ready")
+        c = controls(s)
+        check("with no run going the bar offers Run, and a card's details offer to run from it",
+              c.get("bar") == ["Run"] and c.get("barNote") is None and c.get("cards") == {} and c.get("details") == ["Run from here…"], str(c))
+        both("controls-09-run-idle")
+        s = play(3, *on, "-qbDo", "run", steps=1, also=lambda s: controls(s).get("bar") == ["Stop"])
+        check("Run starts a run", did(s) == [("run", None)] and controls(s).get("bar") == ["Stop"], str(controls(s)))
+        s = play(3, *on, "-qbDo", "runFrom:Both ready:Start again from here", steps=1, also=lambda s: controls(s).get("bar") == ["Stop"])
+        check("and so does running from a card", did(s) == [("runFrom:Both ready:Start again from here", None)] and controls(s).get("bar") == ["Stop"], str(controls(s)))
+        s = play(3, *on, "-qbViewRun", "0", also=lambda s: (s.get("panel") or {}).get("viewedRun") == "run00001")
+        check("while an earlier run is on show there are no controls", nothing(s) and controls(s).get("hint") is None, str(controls(s)))
+
+        s = play(4, *on, "-qbZoomCard", "Writer")
+        check("a run started on the Mac turns the bar to Stop", controls(s).get("bar") == ["Stop"] and drawn(s, "Writer") == [], str(controls(s)))
+        both("controls-10-running")
+        s = play(4, *on, "-qbSelect", "Writer", "-qbPress", "start:Writer", also=lambda s: controls(s).get("asking"))
+        check("restarting an agent that is working asks first", controls(s).get("asking") == "restart:Writer" and controls(s).get("details") == ["Restart agent"],
+              str(controls(s)))
+        mobile.shot("controls-11-restart-asks")
+
+        s = play(5, *on, "-qbZoomCard", "Writer", "-qbSelect", "Writer")
+        c = controls(s)
+        check("an agent whose session has ended has Restart agent on its card",
+              c.get("cards") == {"Writer": ["Restart agent"]} and drawn(s, "Writer") == [("Restart agent", True)]
+              and c.get("details") == ["Run from here…", "Restart agent"] and c.get("bar") == ["Run"], f"{c} {drawn(s, 'Writer')}")
+        both("controls-12-restart-agent")
+        s = play(5, *on, "-qbSelect", "Writer", "-qbDo", "start:Writer", steps=1, also=lambda s: controls(s).get("cards") == {})
+        check("pressed, the session starts and the button goes from the card", did(s) == [("start:Writer", None)] and controls(s).get("cards") == {}
+              and controls(s).get("details") == ["Run from here…", "Restart agent"], str(controls(s)))
+
+        s = play(6, *on, "-qbZoomCard", "Writer")
+        c = controls(s)
+        check("a flow whose sessions haven't been started offers to start them, and each agent's card to start its own",
+              c.get("bar") == ["Start its agents", "Run"] and c.get("cards") == {"Writer": ["Start agent"]}, str(c))
+        both("controls-13-start-agents")
+        s = play(6, *on, "-qbDo", "startAgents", steps=1, also=lambda s: controls(s).get("bar") == ["Run"])
+        check("asked to, the Mac starts them", did(s) == [("startAgents", None)] and controls(s).get("bar") == ["Run"] and controls(s).get("cards") == {}, str(controls(s)))
     finally:
         mobile.appearance("light")
         mobile.quit()
@@ -1951,7 +2211,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels")]
+    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels", "controls")]
     if in_app:
         app = App(project)
         try:
@@ -1981,6 +2241,11 @@ def main():
             scenario_panels()
         except Exception as e:
             check("panels ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "controls" in wanted:
+        try:
+            scenario_controls()
+        except Exception as e:
+            check("controls ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)
