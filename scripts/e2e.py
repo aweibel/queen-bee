@@ -10,6 +10,8 @@ Claude Code sessions on Haiku, and checks what the app did.
 
 Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, subflow, timed, deep, noclaude.
 `mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
+`mobile` is run only when named: it runs the iPad app in the iOS Simulator against the test copy. Build it
+first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by QB_E2E_SHOTS, or a new one.
 """
 import atexit
 import glob
@@ -28,6 +30,8 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "build/Build/Products/Debug/QueenBee.app")
 CHECK = os.path.join(ROOT, "build/Build/Products/Debug/qb-remote-check")
+MOBILE_APP = os.path.join(ROOT, "build/Build/Products/Debug-iphonesimulator/QueenBeeMobile.app")
+MOBILE_ID = "dev.queenbee.mobile"
 # Unix socket paths are capped at 104 bytes, so the test copy's support folder has to be short.
 # Each run has its own, named for its process, so two runs at once leave each other alone.
 SUPPORT_PREFIX = os.path.expanduser("~/Library/Application Support/QBTest-")
@@ -464,6 +468,174 @@ def scenario_remote(app):
         late.stop()
     finally:
         device.stop()
+
+
+def simctl(*args, timeout=180):
+    return subprocess.run(["xcrun", "simctl", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def simulator():
+    """The id of a running Simulator the iPad app can run in, booting one if none is. None if this Mac has none.
+    QB_E2E_SIMULATOR names the one to use, as in "iPad Pro 11-inch (M5)"."""
+    try:
+        listing = json.loads(simctl("list", "devices", "available", "-j").stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    devices = []
+    for runtime, found in listing.get("devices", {}).items():
+        # The runtime's name ends "iOS-26-0". The app needs iOS 26 or later.
+        parts = runtime.rsplit(".", 1)[-1].split("-")
+        if parts[0] == "iOS" and parts[1].isdigit() and int(parts[1]) >= 26:
+            devices += found
+    named = os.environ.get("QB_E2E_SIMULATOR")
+    if named:
+        devices = [d for d in devices if d["name"] == named]
+    devices.sort(key=lambda d: (d["state"] != "Booted", "iPad" not in d["name"]))
+    if not devices:
+        return None
+    if devices[0]["state"] != "Booted":
+        simctl("boot", devices[0]["udid"])
+        simctl("bootstatus", devices[0]["udid"], "-b", timeout=300)
+    return devices[0]["udid"]
+
+
+def free_port():
+    """A port nothing is listening on. The app has to be told its ports before the listeners exist."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Mobile:
+    """The iPad app in a Simulator. It can't be asked anything, so it writes its state to a file that is read here."""
+
+    def __init__(self, udid):
+        self.udid = udid
+        self.shots = os.environ.get("QB_E2E_SHOTS") or tempfile.mkdtemp(prefix="qb-shots-")
+        os.makedirs(self.shots, exist_ok=True)
+        # A copy left by an earlier run would still be paired with a Mac that is gone.
+        simctl("uninstall", udid, MOBILE_ID)
+        installed = simctl("install", udid, MOBILE_APP)
+        if installed.returncode != 0:
+            raise RuntimeError("the iPad app couldn't be installed: " + installed.stderr.strip()[:300])
+
+    def _state_file(self):
+        folder = simctl("get_app_container", self.udid, MOBILE_ID, "data").stdout.strip()
+        return os.path.join(folder, "Library/Caches/qb-state.json")
+
+    def launch(self, *args):
+        """Starts the app afresh. What the last run wrote is thrown away first, so it can't be read as this run's."""
+        self.quit()
+        try:
+            os.remove(self._state_file())
+        except OSError:
+            pass
+        started = simctl("launch", self.udid, MOBILE_ID, *args)
+        if started.returncode != 0:
+            raise RuntimeError("the iPad app couldn't be launched: " + started.stderr.strip()[:300])
+
+    def quit(self):
+        simctl("terminate", self.udid, MOBILE_ID)
+
+    def state(self):
+        try:
+            with open(self._state_file()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def wait(self, cond, timeout, what):
+        """What the app says once `cond` is true of it, or what it last said if that never happens."""
+        deadline = time.time() + timeout
+        last = {}
+        while time.time() < deadline:
+            last = self.state()
+            if last and cond(last):
+                return last
+            time.sleep(0.5)
+        print(f"        (timed out after {timeout}s waiting for {what})", flush=True)
+        return last
+
+    def shot(self, name):
+        # A moment for the screen to settle: the state is written before the view has finished changing.
+        time.sleep(1.5)
+        path = os.path.join(self.shots, name + ".png")
+        simctl("io", self.udid, "screenshot", path)
+        return path
+
+
+def scenario_mobile(app):
+    print("mobile: the iPad app pairs with the Mac, connects, comes back by itself, and learns when it is removed", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    app.open_flow(GUARD)
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+
+    def remote(cond, timeout, what):
+        deadline = time.time() + timeout
+        while True:
+            state = app.op("app", "remote-state")
+            if cond(state) or time.time() > deadline:
+                return state
+            time.sleep(0.5)
+
+    try:
+        mobile.launch()
+        first = mobile.wait(lambda s: s["state"] == "unpaired", 30, "the app to start")
+        check("a new copy of the app starts with no Mac and no key", first.get("state") == "unpaired" and first.get("hasKey") is False, str(first))
+        mobile.shot("mobile-1-first-run")
+        mobile.launch("-qbShow", "macs")
+        mobile.wait(lambda s: s["state"] == "unpaired", 30, "the app to start")
+        mobile.shot("mobile-2-choose-mac")
+        mobile.launch("-qbShow", "code")
+        mobile.wait(lambda s: s["state"] == "unpaired", 30, "the app to start")
+        mobile.shot("mobile-3-paste-code")
+
+        check("Remote turns on", app.op("app", "remote-on").get("on") is True)
+        pair_port, device_port = free_port(), free_port()
+        offer = app.op("app", "remote-pair", pairPort=pair_port, devicePort=device_port)
+        check("the Mac offers to pair on the port it was asked to", int(offer.get("port", 0)) == pair_port, str(offer.keys()))
+        mobile.launch("-qbHost", "127.0.0.1", "-qbPairPort", str(pair_port), "-qbPairCode", offer["code"], "-qbDevicePort", str(device_port))
+        s = mobile.wait(lambda s: s["state"] == "connected" and s["flows"], 40, "the app to pair and connect")
+        check("the app pairs and connects", s.get("state") == "connected", str(s))
+        device = s.get("device", "")
+        state = remote(lambda r: r["connected"] == 1, 10, "the Mac to see the device")
+        check("the Mac lists one device, connected", state["devices"] == 1 and state["connected"] == 1 and state["pairing"] is False, str(state))
+        check("the Mac listens for it on the port it was asked to", int(app.op("app", "remote-port", device=device).get("port", 0)) == device_port)
+        check("the app is sent the flow list", "Guard" in s.get("flows", []), str(s))
+        check("the app kept the Mac's name and its own key", bool(s.get("mac")) and s.get("hasKey") is True, str(s))
+        mobile.shot("mobile-4-connected")
+
+        mobile.quit()
+        state = remote(lambda r: r["connected"] == 0, 20, "the Mac to notice the app has gone")
+        check("quitting the app ends its connection", state["connected"] == 0 and state["devices"] == 1, str(state))
+        mobile.launch()
+        s = mobile.wait(lambda s: s["state"] == "connected" and s["flows"], 40, "the app to connect again")
+        check("launched again with nothing said, the app connects by itself", s.get("state") == "connected" and s.get("device") == device, str(s))
+        check("with the key it kept", s.get("hasKey") is True and remote(lambda r: r["connected"] == 1, 10, "the Mac to see it")["connected"] == 1, str(s))
+
+        app.op("app", "remote-on", on=False)
+        s = mobile.wait(lambda s: s["state"] == "lookingForMac" and s["macNotFound"], 40, "the app to say the Mac can't be found")
+        check("when the Mac stops listening the app says it can't find it", s.get("state") == "lookingForMac" and s.get("macNotFound") is True, str(s))
+        mobile.shot("mobile-5-mac-not-found")
+        app.op("app", "remote-on")
+        s = mobile.wait(lambda s: s["state"] == "connected", 40, "the app to connect again")
+        check("and connects again when the Mac is back", s.get("state") == "connected" and s.get("macNotFound") is False, str(s))
+
+        app.op("app", "remote-remove", device=device)
+        s = mobile.wait(lambda s: s["state"] == "mustPairAgain", 30, "the app to say it must be paired again")
+        check("removed on the Mac, the app says it must be paired again", s.get("state") == "mustPairAgain" and "no longer paired" in (s.get("text") or ""), str(s))
+        state = app.op("app", "remote-state")
+        check("and the Mac has forgotten it", state["devices"] == 0 and state["connected"] == 0, str(state))
+        mobile.shot("mobile-6-pair-again")
+    finally:
+        mobile.quit()
 
 
 def scenario_scroll(app):
@@ -1094,12 +1266,12 @@ def main():
                     check(f"{name} ran to the end", False, f"{type(e).__name__}: {e}"[:500])
                 if name == "deep":
                     continue
-                flow_id = (GUARD if name in ("scroll", "settings", "remote", "mirror") else FLOWS[name])["id"]
+                flow_id = (GUARD if name in ("scroll", "settings", "remote", "mirror", "mobile") else FLOWS[name])["id"]
                 if name == "subflow":
                     app.op(INNER["id"], "close")
                 # Guard's sessions are shared by the scenarios that follow it on the same flow.
                 later = in_app[in_app.index(name) + 1:]
-                if not (name in ("guard", "settings", "remote") and any(n in later for n in ("settings", "remote", "scroll"))):
+                if not (name in ("guard", "settings", "remote") and any(n in later for n in ("settings", "remote", "scroll", "mobile"))):
                     app.op(flow_id, "close")
         finally:
             app.quit()
