@@ -46,10 +46,14 @@ final class LinkLayerView: UIView {
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: LinkLayerView, _) in
             view.strands.values.forEach { view.restyle($0) }
         }
-        // The dashes stop when the app leaves the screen, and nothing restarts them by itself.
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.strands.values.forEach { self?.march($0) } }
-        }
+        // The dashes stop when the app leaves the screen, and nothing restarts them by itself. Asked for by
+        // name, and not with a block: this way the asking ends with the view, and an iPhone makes a new canvas
+        // every time a flow is opened.
+        NotificationCenter.default.addObserver(self, selector: #selector(becameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func becameActive() {
+        strands.values.forEach(march)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

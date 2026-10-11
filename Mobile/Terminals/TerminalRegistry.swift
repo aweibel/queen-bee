@@ -162,6 +162,8 @@ final class TerminalRegistry {
                 "expanded": key == expandedKey,
                 "shown": host?.window != nil,
                 "scale": terminal.mount.scale,
+                // How many times the screen's own fineness it is drawn at.
+                "sharpness": terminal.mount.sharpness,
                 "natural": ["width": terminal.mount.natural.width, "height": terminal.mount.natural.height],
                 "cell": ["width": terminal.mount.cell.width, "height": terminal.mount.cell.height],
                 // Where the terminal's picture is on screen, to set against the card it is in.

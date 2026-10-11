@@ -252,11 +252,10 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     func attachTerminals() {
         for (id, view) in cardViews {
             guard let view = view as? AgentCardView else { continue }
-            let terminal = model.terminalSource?(id)
-            view.attach(terminal: terminal)
-            // It may have come from the full-screen view, drawn for that view's zoom.
-            (terminal as? TerminalMount)?.magnification = sharpness
+            view.attach(terminal: model.terminalSource?(id))
         }
+        // One may have come from the full-screen view, drawn for that view's zoom.
+        sharpenTerminals()
         #if DEBUG
         model.didChangeWhatIsShown()
         #endif
@@ -351,6 +350,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             zoomToFit(atMost: fitCap, animated: false)
         } else {
             place(zoom: scrollView.zoomScale, point: kept, at: middleOfRoom)
+            // A screen that has changed shape shows other cards.
+            sharpenTerminals()
         }
     }
 
@@ -377,6 +378,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             zoomToFit(atMost: 1, animated: false)
         }
         sharpen()
+        sharpenTerminals()
         #if DEBUG
         DebugLaunch.arrange(self, model: model, flow: inputs?.flow)
         model.didChangeWhatIsShown()
@@ -460,6 +462,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         // A fit may have gone below the usual floor. Once the zoom is back above it, the floor returns.
         if scrollView.minimumZoomScale < Self.minZoom, scrollView.zoomScale >= Self.minZoom { scrollView.minimumZoomScale = Self.minZoom }
         sharpen()
+        // Every time, and not only when the zoom has changed: a pan brings other cards into view.
+        sharpenTerminals()
         #if DEBUG
         model.didChangeWhatIsShown()
         #endif
@@ -475,16 +479,25 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         let scale = traitCollection.displayScale * wanted
         func draw(_ view: UIView) {
             // A terminal looks after its own fineness: it is also shown outside the canvas.
-            if let mount = view as? TerminalMount {
-                mount.magnification = wanted
-                return
-            }
+            if view is TerminalMount { return }
             if view.contentScaleFactor != scale { view.contentScaleFactor = scale }
             for case let shape as CAShapeLayer in view.layer.sublayers ?? [] { shape.contentsScale = scale }
             view.subviews.forEach(draw)
         }
         cardViews.values.forEach(draw)
         groupViews.values.forEach(draw)
+    }
+
+    /// Terminals are the costly thing to draw finely, so only the ones in view are, and no finer than twice
+    /// over. The rest stay at the screen's own fineness until the canvas stops with them in view.
+    private func sharpenTerminals() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let visible = visible
+        for card in content.cards {
+            guard let mount = (cardViews[card.id] as? AgentCardView)?.terminal as? TerminalMount else { continue }
+            let inView = !content.folded.contains(card.id) && CanvasGeometry.frame(of: card).intersects(visible)
+            mount.magnify(inView ? sharpness : 1, atMost: TerminalMount.finestAmongMany)
+        }
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { document }

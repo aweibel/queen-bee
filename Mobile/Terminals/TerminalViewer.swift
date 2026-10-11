@@ -173,7 +173,7 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
         zoomer.contentInset = UIEdgeInsets(top: Self.margin, left: side, bottom: Self.margin + safeAreaInsets.bottom, right: side)
         if shown.width <= bounds.width - Self.margin * 2 { zoomer.contentOffset.x = -side }
         if shown.height <= bounds.height - Self.margin * 2 { zoomer.contentOffset.y = -Self.margin }
-        mount?.magnification = zoomer.zoomScale
+        mount?.magnify(zoomer.zoomScale)
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { mount }
@@ -230,7 +230,7 @@ final class TerminalSlotView: UIView {
     func hold(_ new: TerminalMount?) {
         if let new, new.superview !== self {
             new.transform = .identity
-            new.magnification = 1
+            new.magnify(1)
             addSubview(new)
         } else if new == nil, let old = mount, old.superview === self {
             old.removeFromSuperview()

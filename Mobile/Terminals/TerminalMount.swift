@@ -20,7 +20,21 @@ final class TerminalMount: UIView {
     private(set) var scale: CGFloat = 1
     /// How much whatever holds the mount enlarges it: the canvas's zoom, or the full-screen view's. Shown
     /// larger than life, the text is drawn again that finely and not blown up from the screen's own fineness.
-    var magnification: CGFloat = 1 { didSet { if magnification != oldValue { applySharpness() } } }
+    private var magnification: CGFloat = 1
+    /// The most times the screen's own fineness the text is drawn at. Each step is that many times the memory.
+    private var finest: CGFloat = TerminalMount.finestAlone
+    /// For a terminal that has the screen to itself, and for one of many on the canvas. On a real screen a
+    /// terminal drawn three times as finely can take a hundred megabytes, and a flow has one for every agent.
+    static let finestAlone: CGFloat = 3
+    static let finestAmongMany: CGFloat = 2
+
+    /// Says how much the mount is enlarged where it now is, and how finely it may be drawn there.
+    func magnify(_ magnification: CGFloat, atMost finest: CGFloat = TerminalMount.finestAlone) {
+        guard magnification != self.magnification || finest != self.finest else { return }
+        self.magnification = magnification
+        self.finest = finest
+        applySharpness()
+    }
 
     init() {
         super.init(frame: .zero)
@@ -84,15 +98,20 @@ final class TerminalMount: UIView {
     }
 
     private func applySharpness() {
-        // Whole steps, and no finer than three: each step is that many times the memory.
-        let wanted = traitCollection.displayScale * min(3, max(1, (magnification * scale).rounded(.up)))
+        // Whole steps, and no finer than whatever holds the mount allows.
+        let wanted = traitCollection.displayScale * min(finest, max(1, (magnification * scale).rounded(.up)))
         guard terminal.contentScaleFactor != wanted else { return }
         terminal.contentScaleFactor = wanted
         terminal.setNeedsDisplay()
+        #if DEBUG
+        onChange?()
+        #endif
     }
 
     #if DEBUG
     /// Called when how the terminal is shown has changed, so the state a test reads is written again.
     var onChange: (() -> Void)?
+    /// How many times the screen's own fineness the terminal is drawn at now.
+    var sharpness: CGFloat { terminal.contentScaleFactor / max(traitCollection.displayScale, 1) }
     #endif
 }

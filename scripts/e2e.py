@@ -19,6 +19,7 @@ so it needs the Simulator and no Mac app or Claude Code session.
 import atexit
 import glob
 import json
+import math
 import os
 import queue
 import shutil
@@ -913,6 +914,7 @@ def scenario_terminals():
               and abs(on["width"] - t["natural"]["width"] * zoom) < 1, f"{on} in {place} at zoom {zoom}")
         check("the orchestrator's terminal is kept though it has no card", (terminal(s, "orchestrator").get("cols"), terminal(s, "orchestrator").get("rows")) == (58, 40),
               str(terminal(s, "orchestrator").get("cols")))
+        check("shown no larger than life, it is drawn at the screen's own fineness", t.get("sharpness") == 1, str(t.get("sharpness")))
         mobile.shot("terminals-1-card")
 
         s = play(3, "-qbZoom", "0.6", also=lambda s: abs((s.get("canvas") or {}).get("zoom", 1) - 0.6) < 0.01)
@@ -922,15 +924,31 @@ def scenario_terminals():
               and abs(on["width"] - t["natural"]["width"] * 0.6) < 1, f"{on} in {place} at zoom {zoom}")
         mobile.shot("terminals-2-card-zoomed-out")
 
-        s = play(3, "-qbZoom", "2", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 1.9)
+        s = play(3, "-qbZoom", "2", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 1.9 and terminal(s).get("sharpness") == 2)
         t, place, zoom = terminal(s), shown_card(s, "Agent").get("terminalPlace") or {}, s.get("canvas", {}).get("zoom", 1)
         on = t.get("onScreen", {})
         check("zoomed in, it grows with its card", zoom > 1.2 and bool(place) and inside(on, place) and abs(on["width"] - t["natural"]["width"] * zoom) < 1.5,
               f"{on} in {place} at zoom {zoom}")
+        check("and is drawn twice as finely, so its text stays sharp", t.get("sharpness") == 2, str(t.get("sharpness")))
         mobile.shot("terminals-3-card-zoomed-in")
         mobile.appearance("dark")
         mobile.shot("terminals-4-card-zoomed-in-dark")
         mobile.appearance("light")
+
+        def in_view(state, name):
+            """Whether any of a card is in the part of the canvas on screen."""
+            c, v = shown_card(state, name), (state.get("canvas") or {}).get("visible") or {}
+            return bool(c) and bool(v) and (c["x"] < v["x"] + v["width"] and c["x"] + c["width"] > v["x"]
+                                            and c["y"] < v["y"] + v["height"] and c["y"] + c["height"] > v["y"])
+
+        s = play(3, "-qbZoomCard", "Agent", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 2)
+        check("zoomed in as far as it goes, a card's terminal is still drawn no more than twice as finely",
+              s.get("canvas", {}).get("zoom", 1) > 2.9 and in_view(s, "Agent") and terminal(s).get("sharpness") == 2,
+              f"sharpness {terminal(s).get('sharpness')} at zoom {s.get('canvas', {}).get('zoom')}")
+        s = play(3, "-qbZoomCard", "Start", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 1)
+        check("and one whose card is out of view is left at the screen's own fineness",
+              s.get("canvas", {}).get("zoom", 1) > 2.9 and not in_view(s, "Agent") and terminal(s).get("sharpness") == 1,
+              f"sharpness {terminal(s).get('sharpness')}, in view {in_view(s, 'Agent')}, seeing {s.get('canvas', {}).get('visible')}")
 
         was = (terminal(s).get("cols", 0), terminal(s).get("rows", 0))
         s = play(5, also=lambda s: terminal(s).get("resets") == 2)
@@ -960,6 +978,8 @@ def scenario_terminals():
             check("on a screen narrower than the Mac's terminal, it fills the width with every column in view",
                   abs(on.get("width", 0) - (across - 24)) < 1 and on.get("x", -1) >= 0, f"{on} of {across:.0f} across, {natural:.0f} on the Mac")
         check("and still takes no typing", t.get("isFirstResponder") is False)
+        check("full screen it keeps its own fineness, up to three times the screen's",
+              t.get("sharpness") == min(3, math.ceil(on.get("width", 0) / natural - 0.01)), f"{t.get('sharpness')} for {on.get('width')} of {natural}")
         check("its card goes without it meanwhile", shown_card(s, "Agent").get("hasTerminal") is False, str(shown_card(s, "Agent").get("hasTerminal")))
         mobile.shot("terminals-6-full-screen-scrolled-back")
 

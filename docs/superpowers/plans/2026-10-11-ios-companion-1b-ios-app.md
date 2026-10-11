@@ -200,10 +200,10 @@ lighter ink is below 4.5 to 1 there. In a Debug build the file the tests read is
 
 | What | How | Result |
 |---|---|---|
-| Core, including `RemoteMirror` | `cd Core && swift test` | 242 tests pass |
+| Core, including `RemoteMirror` | `cd Core && swift test` | 245 tests pass |
 | Both apps build | `./scripts/build.sh`, `./scripts/build-mobile.sh`, each also with `Release` | all four succeed |
 | No test hooks in a release | `nm` and `strings` on both Release binaries for the test types and launch arguments, with the Debug builds as the control | none in Release; hundreds in Debug |
-| Terminals and panels, with no Mac | `./scripts/e2e.py terminals panels` on an iPad Pro 11-inch and on an iPhone 17 simulator | 47 checks pass on each |
+| Terminals and panels, with no Mac | `./scripts/e2e.py terminals panels` on an iPad Pro 11-inch and on an iPhone 17 simulator | 47 checks passed on each. Five more were added since, for how finely a terminal is drawn, and 52 pass on the iPad |
 | Against the Mac's test copy, with real sessions | `./scripts/e2e.py guard settings remote mirror mobile` on the iPad simulator | 106 of 110 at first. The four were the script's: `mirror` left a card narrower than the flow was written with, and `mobile` checked it against the file. `mirror` now puts the card back, and `mirror mobile` then passed 69 of 69 |
 | Every screen at phone width | Screenshots on the iPhone 17 simulator in light and dark, and again at a large text size, of a made-up run | looked at one by one |
 | iPad on its side | A copy of the built app with its `Info.plist` changed to allow only landscape, in the simulator | the three columns, the banner, a zoomed card, the panels and a full-screen terminal were looked at in light and dark |
