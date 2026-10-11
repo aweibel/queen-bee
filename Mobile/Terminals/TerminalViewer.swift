@@ -65,9 +65,12 @@ struct TerminalViewer: View {
             ComposerBar(key: key)
         }
         .background(Theme.terminal.ui)
+        // Ctrl pressed here and not yet used is let go when this terminal is left, by closing it or by another taking its place.
+        .onChange(of: key) { client.composer.releaseControl() }
         .onDisappear {
             client.composer.wantsKeyboard = false
             client.composer.mode = .message
+            client.composer.releaseControl()
         }
     }
 }

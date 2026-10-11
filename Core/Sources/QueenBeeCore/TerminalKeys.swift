@@ -82,6 +82,9 @@ public struct KeyTyper: Equatable, Sendable {
     /// The Ctrl button: on, or off again if it was pressed by mistake.
     public mutating func toggleControl() { isControlHeld.toggle() }
 
+    /// Lets Ctrl go without a key: the terminal it was pressed for has been closed, or another opened.
+    public mutating func releaseControl() { isControlHeld = false }
+
     /// Typed text. With Ctrl waiting, its first character is sent as Ctrl with that character, and Ctrl is let go.
     /// A character Ctrl does nothing to is sent as itself.
     public mutating func type(_ text: String) -> [UInt8] {

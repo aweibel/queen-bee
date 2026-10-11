@@ -27,6 +27,7 @@ public struct RemoteRefusal: Equatable, Sendable {
 /// - While `isWaiting(for:)` is true for a command, its button should be disabled.
 /// - The Mac's `.answer` stops the wait. A refusal is kept in `lastRefusal` until `clearRefusal()` or the
 ///   next refusal, for a short message in the Mac's words.
+/// - `giveUpWaiting(for:)` is for a command the Mac has taken too long over: it may yet be done.
 /// - `dropWaiting()` is for when the link drops: those commands will never be answered. A new welcome does
 ///   the same, because it starts a new connection.
 public struct RemoteMirror: Equatable, Sendable {
@@ -69,6 +70,12 @@ public struct RemoteMirror: Equatable, Sendable {
         defer { waiting.removeAll() }
         return waiting.keys.sorted()
     }
+
+    /// The Mac has been given long enough to answer one command and hasn't. It stops being waited for, so its
+    /// button can be pressed again. Whether it was done is not known: an answer that comes later is let pass,
+    /// and what it changed arrives with the updates as ever. Returns the command, or nil if it wasn't waiting.
+    @discardableResult
+    public mutating func giveUpWaiting(for id: Int) -> RemoteCommand? { waiting.removeValue(forKey: id) }
 
     public mutating func clearRefusal() { lastRefusal = nil }
 

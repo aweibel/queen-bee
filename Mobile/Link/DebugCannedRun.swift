@@ -69,13 +69,13 @@ enum DebugCannedRun {
                 $0.permissionMode = "acceptEdits"
                 $0.cwd = "notes"
             },
-            card(style, .script, "Style guide", 460, 400, 240, 140) { $0.command = "cat docs/style.md" },
+            card(style, .script, "Style guide", 460, 400, 240, 120) { $0.command = "cat docs/style.md" },
             card(both, .and, "Both ready", 900, 240),
             card(short, .ifElse, "Short enough?", 1200, 240, 240, 140) {
                 $0.check = .judge
                 $0.value = "The note is under 100 words and friendly"
             },
-            card(sign, .approval, "Sign off", 1500, 240, 240, 140) { $0.text = "Is this note right to send?" },
+            card(sign, .approval, "Sign off", 1500, 240, 240, 120) { $0.text = "Is this note right to send?" },
             card(sent, .end, "Sent", 1800, 160) { $0.saveTo = "output/welcome.md" },
             card(dropped, .end, "Dropped", 1800, 340) { $0.saveTo = "" },
         ], links: [

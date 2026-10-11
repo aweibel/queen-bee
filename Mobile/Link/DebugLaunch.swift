@@ -63,6 +63,8 @@ import UIKit
 ///                                       In <text>, \n is a new line and @<n> is n letters.
 ///                                         wait:<name>                wait until the test makes the file
 ///                                                                    Library/Caches/qb-wait-<name>
+///   -qbSilent 1                         with a made-up run: the made-up Mac answers no command
+///   -qbAnswerWait <n>                   give the Mac n seconds to answer a command, in place of 30
 ///   -qbStale 1                          with a made-up run: its sessions have ended and the made-up Mac
 ///                                       hasn't said so yet, so what is typed is refused
 
@@ -96,6 +98,8 @@ enum DebugLaunch {
     }
 
     static var show: String? { defaults.string(forKey: "qbShow") }
+    /// How many seconds the Mac is given to answer a command, when a test wants less than the real wait.
+    static var answerWait: Int? { defaults.object(forKey: "qbAnswerWait") == nil ? nil : max(1, defaults.integer(forKey: "qbAnswerWait")) }
 
     /// A full-screen message a test wants to look at, with the words the Mac would send.
     static var stoppedScreen: StoppedScreen.Reason? {

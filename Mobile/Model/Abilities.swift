@@ -306,6 +306,9 @@ final class ComposerModel {
 
     func toggleControl() { typer.toggleControl() }
 
+    /// Ctrl pressed for one terminal is never left waiting for a key typed in another.
+    func releaseControl() { typer.releaseControl() }
+
     /// The next message's worth of a session's keys, taken off the front. Nil when there are none left.
     fileprivate func next(_ id: String) -> Data? {
         guard let bytes = pending[id], let first = TerminalKeys.chunks(bytes).first else {
@@ -333,8 +336,17 @@ final class ComposerModel {
 /// What the controls are in the middle of: a question put to the person, and the last thing that was turned down.
 @Observable
 final class ControlsModel {
-    /// What is being asked before a press is sent. One at a time.
-    var asking: Ask?
+    /// What is being asked before a press is sent. One at a time. Set by `ask(_:in:)`, and put away by setting it to nil.
+    var asking: Ask? {
+        didSet { if asking == nil { askedIn = nil } }
+    }
+    /// The flow that was open when the question was asked, which is the only flow its answer is for.
+    private(set) var askedIn: String?
+
+    func ask(_ ask: Ask, in flowID: String) {
+        asking = ask
+        askedIn = flowID
+    }
     /// Shown near the run bar until it is dismissed or the next command is done.
     var refusal: ControlRefusal?
     #if DEBUG
@@ -360,44 +372,50 @@ extension RemoteClient {
     /// everything else is sent at once.
     func press(_ press: Press) {
         guard let snapshot = mirror.snapshot else { return }
+        // The flow on screen as the button is pressed. What is sent names this flow, whatever is open by then.
+        let flowID = snapshot.flow.id
         func name(_ cardID: String) -> String { snapshot.flow.card(cardID)?.name ?? "this card" }
         switch press {
         case .stop:
-            controls.asking = .stop
+            controls.ask(.stop, in: flowID)
         case .allow(let holdID):
             guard let hold = snapshot.run.holds.first(where: { $0.id == holdID }) else { return }
-            controls.asking = .allow(holdID: holdID, name: name(hold.cardID), command: hold.command)
+            controls.ask(.allow(holdID: holdID, name: name(hold.cardID), command: hold.command), in: flowID)
         case .reject(let holdID):
             guard let hold = snapshot.run.holds.first(where: { $0.id == holdID }) else { return }
-            controls.asking = .reject(holdID: holdID, name: name(hold.cardID), from: hold.from, text: hold.text)
+            controls.ask(.reject(holdID: holdID, name: name(hold.cardID), from: hold.from, text: hold.text), in: flowID)
         case .startAgent(let cardID):
             let state = snapshot.run.sessions[cardID] ?? .notStarted
             if state == .notStarted || state == .exited {
-                Task { await perform(press) }
+                Task { await perform(press, in: flowID) }
             } else {
-                controls.asking = .restart(cardID: cardID, name: name(cardID), isWorking: state == .working || state == .needsYou)
+                controls.ask(.restart(cardID: cardID, name: name(cardID), isWorking: state == .working || state == .needsYou), in: flowID)
             }
         case .run, .startAgents, .approve, .dontRun:
-            Task { await perform(press) }
+            Task { await perform(press, in: flowID) }
         }
     }
 
-    /// The person said yes to what was asked.
+    /// The person said yes to what was asked. The answer goes to the flow the question was asked about, and
+    /// nowhere if that flow is no longer the one open: "Stop the run?" is never a yes to another flow's run.
     func confirm(_ ask: Ask, note: String = "") {
+        let flowID = controls.askedIn
         controls.asking = nil
+        guard let flowID, flowID == mirror.openFlowID else { return }
         let press: Press = switch ask {
         case .stop: .stop
         case .restart(let cardID, _, _): .startAgent(cardID: cardID)
         case .allow(let holdID, _, _): .allow(holdID: holdID)
         case .reject(let holdID, _, _, _): .reject(holdID: holdID)
         }
-        Task { await perform(press, note: note) }
+        Task { await perform(press, note: note, in: flowID) }
     }
 
     /// Sends what a press asks for and waits for the Mac. Returns nil when it was done, or why it wasn't.
+    /// `flowID` is the flow the press was made in, or nil for the one open now.
     @discardableResult
-    func perform(_ press: Press, note: String = "") async -> String? {
-        guard let flowID = mirror.openFlowID else { return Self.notConnected }
+    func perform(_ press: Press, note: String = "", in flowID: String? = nil) async -> String? {
+        guard let flowID = flowID ?? mirror.openFlowID else { return Self.notConnected }
         return await perform(press.command(flowID: flowID, note: note))
     }
 
@@ -423,6 +441,7 @@ extension RemoteClient {
 
     /// Opens a session's terminal full screen, with the message box under it, or with the keys.
     func openTerminal(_ key: String, keys: Bool = false) {
+        composer.releaseControl()
         composer.mode = keys ? .keys : .message
         composer.wantsKeyboard = keys
         terminals.expand(key)

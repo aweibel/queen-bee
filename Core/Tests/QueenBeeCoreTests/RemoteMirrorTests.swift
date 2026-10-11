@@ -103,6 +103,18 @@ import Testing
         #expect(mirror.waiting.isEmpty)
     }
 
+    @Test func aCommandTheMacIsSlowOverStopsBeingWaitedFor() {
+        var mirror = RemoteMirror()
+        let run = mirror.willSend(.run(flowID: "f", command: nil)), stop = mirror.willSend(.stop(flowID: "f"))
+        #expect(mirror.giveUpWaiting(for: run) == .run(flowID: "f", command: nil))
+        #expect(mirror.waiting == [stop: .stop(flowID: "f")])
+        #expect(mirror.giveUpWaiting(for: run) == nil)
+        // Its answer, when it does come, is nothing to anyone: it is not taken for a refusal of something else.
+        _ = mirror.apply(.answer(id: run, refusal: "A run is already going."))
+        #expect(mirror.lastRefusal == nil)
+        #expect(mirror.waiting == [stop: .stop(flowID: "f")])
+    }
+
     @Test func keepsTheWelcomeAndTheLibrary() {
         var mirror = RemoteMirror()
         let welcome = RemoteWelcome(version: Remote.version, macName: "Studio", canControl: false)

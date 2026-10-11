@@ -84,6 +84,16 @@ import Testing
         #expect(!typer.isControlHeld)
     }
 
+    @Test func controlIsLetGoWhenItsTerminalIsLeft() {
+        var typer = KeyTyper()
+        typer.toggleControl()
+        typer.releaseControl()
+        #expect(!typer.isControlHeld)
+        #expect(typer.type("c") == [0x63])
+        typer.releaseControl()
+        #expect(!typer.isControlHeld)
+    }
+
     @Test func controlPressedTwiceIsOffAgain() {
         var typer = KeyTyper()
         typer.toggleControl()

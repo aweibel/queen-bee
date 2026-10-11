@@ -19,6 +19,10 @@ final class KeyCatcher: UIView, UIKeyInput {
     /// putting the keyboard away.
     var onFocus: ((Bool) -> Void)?
     private var isWanted = false
+    /// The last character taken with Ctrl held, and when: see `insertText`.
+    private var taken: (character: String, at: TimeInterval)?
+    /// How long after Ctrl with a letter was taken the same letter arriving as text is counted as that same press.
+    private static let sameWithin: TimeInterval = 0.15
 
     override var canBecomeFirstResponder: Bool { true }
 
@@ -64,6 +68,8 @@ final class KeyCatcher: UIView, UIKeyInput {
         // Ctrl with a letter is taken in `pressesBegan`. If the keyboard hands the same press on as a control
         // character too, it is not typed twice. Return and Tab are the two that are typed.
         let typed = String(String.UnicodeScalarView(text.unicodeScalars.filter { $0 == "\n" || $0 == "\t" || ($0.value >= 0x20 && $0.value != 0x7F) }))
+        // Nor is it typed again if the keyboard hands it on as the plain letter, a moment after.
+        if let taken, ProcessInfo.processInfo.systemUptime - taken.at < Self.sameWithin, typed.lowercased() == taken.character { return }
         if !typed.isEmpty { onText?(typed) }
     }
 
@@ -108,6 +114,7 @@ final class KeyCatcher: UIView, UIKeyInput {
             // Ctrl with a letter, as in Ctrl-C. With the Command key too it is a shortcut of the app's or of iOS.
             guard let key = press.key, key.modifierFlags.contains(.control), !key.modifierFlags.contains(.command),
                   let character = key.charactersIgnoringModifiers.first, onControl?(character) == true else { continue }
+            taken = (String(character).lowercased(), ProcessInfo.processInfo.systemUptime)
             rest.remove(press)
         }
         if !rest.isEmpty { super.pressesBegan(rest, with: event) }

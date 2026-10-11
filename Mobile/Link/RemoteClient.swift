@@ -58,6 +58,8 @@ final class RemoteClient {
     @ObservationIgnored private var longNotFound: Task<Void, Never>?
     /// Who is waiting to hear what became of each command, by the command's id.
     @ObservationIgnored private var answers: [Int: CheckedContinuation<String?, Never>] = [:]
+    /// What gives up on each of those when the Mac has had long enough.
+    @ObservationIgnored private var giveUps: [Int: Task<Void, Never>] = [:]
     #if DEBUG
     /// Where a test said the Mac's listener for this device will be, to be kept once pairing has worked.
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
@@ -299,13 +301,28 @@ final class RemoteClient {
         // A welcome starts a new connection, and the mirror forgets what the old one was sent.
         if case .welcome = message { failWaiting() }
         mirror.apply(message).forEach(terminals.receive)
-        if case .answer(let id, let refusal) = message { answers.removeValue(forKey: id)?.resume(returning: refusal) }
+        if case .answer(let id, let refusal) = message {
+            giveUps.removeValue(forKey: id)?.cancel()
+            answers.removeValue(forKey: id)?.resume(returning: refusal)
+        }
     }
 
     // MARK: Commands
 
     /// What a command is answered with when there is no Mac to hear it.
     static let notConnected = "Not connected to your Mac right now."
+    /// What a command is answered with when the Mac has been heard from and hasn't said what became of it.
+    /// It doesn't say the command failed, because it may not have.
+    static let noAnswer = "Your Mac didn't answer. Check the run on your Mac."
+    static let noAnswerTyping = "Your Mac didn't answer. Check the session on your Mac."
+    /// How long the Mac is given to answer a command. Starting a run can wait on a condition being judged,
+    /// which takes seconds. Nothing takes this long unless something is wrong.
+    static var answerWait: Duration {
+        #if DEBUG
+        if let seconds = DebugLaunch.answerWait { return .seconds(seconds) }
+        #endif
+        return .seconds(30)
+    }
 
     /// Asks the Mac to do something, and waits for what it says. Nil means it was done. Otherwise the text is
     /// why not: the Mac's own words, or that the Mac can't be reached. Nothing is kept to send later: a
@@ -323,6 +340,18 @@ final class RemoteClient {
         #if DEBUG
         debugSent.append(command)
         #endif
+        // A button waits for its command's answer, and one that never came would leave it waiting for ever.
+        giveUps[id] = Task {
+            try? await Task.sleep(for: Self.answerWait)
+            guard !Task.isCancelled else { return }
+            giveUps[id] = nil
+            mirror.giveUpWaiting(for: id)
+            let isTyping = switch command {
+            case .prompt, .keys: true
+            default: false
+            }
+            answers.removeValue(forKey: id)?.resume(returning: isTyping ? Self.noAnswerTyping : Self.noAnswer)
+        }
         return await withCheckedContinuation { waiting in
             answers[id] = waiting
             if let link { link.send(.command(id: id, command: command)) } else { outbox?(id, command) }
@@ -332,6 +361,8 @@ final class RemoteClient {
     /// The link has gone, so nothing that was sent on it will be answered.
     private func failWaiting() {
         mirror.dropWaiting()
+        giveUps.values.forEach { $0.cancel() }
+        giveUps = [:]
         let waiting = answers
         answers = [:]
         for id in waiting.keys.sorted() { waiting[id]?.resume(returning: Self.notConnected) }
@@ -353,6 +384,8 @@ final class RemoteClient {
 
     /// Shows a flow, or none. What was on show goes at once, and the new flow follows when the Mac sends it.
     func open(_ flowID: String?) {
+        // A question about the flow that was open is not one about the next.
+        if flowID != mirror.openFlowID { controls.asking = nil }
         mirror.willOpen(flowID)
         terminals.reset()
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
