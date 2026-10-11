@@ -33,11 +33,13 @@ cd Core && swift test    # under a second; run it before every pull request
 ```sh
 ./scripts/build-mobile.sh             # builds Mobile/ for the iOS Simulator, with no Apple account
 ./scripts/e2e.py terminals panels     # the app alone in the Simulator, fed a made-up flow and run
+./scripts/e2e.py controls typing      # the same, with a made-up Mac that answers: every button, the message box and the keys
 ./scripts/e2e.py mobile               # the app paired with the test copy of the Mac app; starts real sessions
 ```
 
-These three scenarios only run when named. `terminals` and `panels` need no Mac app session and no Claude Code,
-so they are the ones to run after any change under `Mobile/`. `QB_E2E_SIMULATOR="iPhone 17"` picks the simulator;
+These five scenarios only run when named. `terminals`, `panels`, `controls` and `typing` need no Mac app session
+and no Claude Code, so they are the ones to run after any change under `Mobile/`. After a change to what a device
+may ask of the Mac, under `App/Remote/`, run `./scripts/e2e.py remote` too: it needs no Simulator. `QB_E2E_SIMULATOR="iPhone 17"` picks the simulator;
 run them on an iPad and on an iPhone, because the two lay the app out differently. Keep one simulator booted at a
 time: each is heavy, and the scripts use whichever is already running. The app's launch arguments for tests are
 listed at the top of `Mobile/Link/DebugLaunch.swift`, and with `-qbCannedRun 3` the app shows a made-up run with

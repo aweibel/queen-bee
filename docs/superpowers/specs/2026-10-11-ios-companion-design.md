@@ -19,7 +19,35 @@ What stage 1 delivered:
 - The card and link details, the run log, End cards' answers, earlier runs, cost, and what is waiting on you.
 - An iPad layout in three columns and an iPhone layout as a stack with the details in a sheet.
 
-It is watch-only. The device sends the Mac nothing but which flow it has open.
+Stage 2, "Respond", is built too, by `docs/superpowers/plans/2026-10-11-ios-companion-2-respond.md`. A device is
+still watch-only until "Can control" is turned on for it in the Mac's Settings. With it on, stage 2 delivered:
+
+- Run and Stop at the foot of the canvas, "Start its agents" for a flow whose sessions haven't started, and
+  "Run from here…" in a card's details.
+- Approve, with the message edited if wanted, and Reject with a note. Allow and Don't run for a Script card's command.
+- Start agent and Restart agent on an agent's card and in its details.
+- A message box under each session's terminal and in the orchestrator's page, and keys for the terminal itself.
+- A line in the flow's log on the Mac for everything a device does, naming the device.
+
+Stage 3, editing the flow from the device, is not started.
+
+Where stage 2 differs from the design below:
+
+- **Run takes no words of its own.** The plan allowed for a command field on Run, and the link can carry one. The
+  Mac's own Run button has none, so the device's has none, and the Mac refuses a run that arrives with one. A run
+  starts with what its Start card says.
+- **A device's run starts where the Mac would start it.** With more than one Start card, that is the one selected
+  on the Mac, or the first. The device can't pick.
+- **Buttons are on the cards and in two more places.** The design put Approve and Reject on the card. They are
+  there, with Allow and Start agent, and the same buttons are in the list of what needs you and in a card's
+  details, where they are a finger's size however far the canvas is zoomed out.
+- **Typing is a message box and keys, not the terminal itself.** The design typed straight into a terminal. The
+  terminal on the device still takes nothing: a message is written in a box and delivered by the Mac when the
+  session is ready, and single keys come from the app's own keyboard catcher and a row of extra keys.
+- **"Can control" is off for a new device, and off again when a device is paired again.** The design gave each
+  device the switch and did not say where it starts.
+- **A device opening a flow doesn't start its sessions.** It offers "Start its agents", which does what choosing
+  the flow on the Mac does.
 
 What the build settled on. Some of it has already been written into the sections below, and some of them still
 describe the first idea:

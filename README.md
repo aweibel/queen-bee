@@ -82,13 +82,13 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - When the app is in the background, a notification tells you that a card needs you or a run has ended. **Settings** turns this off.
 - A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
 - **View → Appearance** switches between light, dark and following the system.
-- **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
+- **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows, and run and answer them if you let it. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
 
 ## On your iPad or iPhone
 
 There is a companion app for iPad and iPhone. It pairs with Queen Bee on your Mac over your local Wi-Fi, with no server and no account, and shows what the Mac is doing.
 
-For now it only watches. It shows:
+It shows:
 
 - every project and its flows, with the same "needs you", "running" and "stopped" badges as the Mac's sidebar;
 - the open flow's canvas as the Mac draws it, live: cards, links, groups, run marks and counts;
@@ -96,7 +96,33 @@ For now it only watches. It shows:
 - the run log, the answers the End cards collected, earlier runs, and what the flow has cost;
 - which cards are waiting on you.
 
-It can't yet run or stop a flow, approve or reject, type into a terminal, or edit anything. You do those on the Mac.
+A device you have just paired only watches. Turn on **Can control** for it on the Mac, as described below, and from the device you can also:
+
+- run a flow from its Start card and stop a run, with **Run** and **Stop** at the foot of the canvas;
+- **Approve** or **Reject** a message an Approval card is holding, with a note saying why, and edit the message before approving it;
+- let a Script card's command run with **Allow and run**, after reading it in full, or choose **Don't run**;
+- start a flow's sessions with **Start its agents**, and start or restart one agent from its card;
+- start a run part-way through, with **Run from here…** in a card's details;
+- send a message to the orchestrator or to any agent, and press keys in its terminal.
+
+The buttons are on the cards themselves, in the "needs you" list at the top of the canvas, and in a card's details. Editing a flow, and a card's settings, are still done on the Mac.
+
+### Let a device control your Mac
+
+On the Mac, open Queen Bee's **Settings** and find **Remote**. Each paired device is listed there with a **Can control** switch. Turn it on for the device. It is off for every device until you do, and off again for a device you pair a second time. Turning it off takes effect at once.
+
+Under the list the Mac says what the switch allows: "A device with “Can control” on can start and stop runs, answer approvals and type into sessions on this Mac." Typing into a session includes answering Claude Code when it asks whether it may run a command, so give this only to a device you would hand your Mac's keyboard to. [SECURITY.md](SECURITY.md) has the whole list of what it allows and what it never does. Everything done from a device is written in the flow's log on the Mac with the device's name.
+
+### Talk to the orchestrator or an agent
+
+Open the session's terminal full screen: tap the arrows on an agent's card, or open **Orchestrator** in the details and tap the arrows there. Under the terminal there are two ways to type.
+
+- **Message** is a box and a **Send** button. Write what you want to say and send it. The Mac delivers it when the session is ready for a message, so you can send one while it is busy. This is the way to chat with the orchestrator. The orchestrator's page in the details has a message box of its own, so you can write to it without opening its terminal.
+- **Keys** brings up the keyboard with a row of extra keys above it: Esc, Tab, Ctrl, the arrows, Enter and the digits and letters Claude Code's prompts ask for. Each key goes to the session as you press it. Use it to answer a prompt in the terminal, such as "Allow this command? 1. Yes 2. No", or to interrupt with Esc. When an agent is waiting for an answer like that, its line in the "needs you" list has **Open its terminal**, which opens it with the keys out.
+
+### After you update the Mac app
+
+The two apps must be on the same version. When you update Queen Bee on your Mac, build and install the iPad and iPhone app again from Xcode, from the same version of the source. Until you do, the device says which of the two needs updating and shows nothing else.
 
 The app isn't on the App Store. You build it yourself and put it on your own device, which a free Apple ID is enough for. The device needs iOS or iPadOS 26 or later.
 
@@ -168,18 +194,20 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 242 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link and what a device makes of it
+cd Core && swift test        # 254 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask and the keys it sends
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
 The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`.
 
-The iPad and iPhone app is checked in the iOS Simulator by three scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
+The iPad and iPhone app is checked in the iOS Simulator by five scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
 
 ```sh
-./scripts/e2e.py terminals panels   # the app alone, fed a made-up flow and run: no Mac app, no Claude Code
-./scripts/e2e.py mobile             # the app paired with the test copy of the Mac app, with real sessions
+./scripts/e2e.py terminals panels controls typing   # the app alone, with a Mac made up inside it: no Mac app, no Claude Code
+./scripts/e2e.py mobile                              # the app paired with the test copy of the Mac app, with real sessions
 ```
+
+`remote` checks the Mac's side of the link with a stand-in for the device, and needs no Simulator: what a device may ask, that all of it is refused until "Can control" is on, and what the Mac's log says of it.
 
 `QB_E2E_SIMULATOR="iPhone 17"` picks the simulator, and `QB_E2E_SHOTS=<folder>` says where the screenshots go.
 

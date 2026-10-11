@@ -102,6 +102,72 @@ Read the Mac's controls first: `App/Views/CanvasOverlays.swift` (the run bar), `
 - [ ] Full check: `cd Core && swift test`; both apps' Debug and Release builds; no test hooks in Release; `./scripts/e2e.py terminals panels` and `./scripts/e2e.py guard settings remote mirror mobile` once on the iPad; `./scripts/check-clean.sh`; the diff scanned for anything private.
 - [ ] Commit.
 
-## Left for the owner on a real device
+## Result
 
-Turn on "Can control" for the iPad on the Mac, then: start a run, answer an approval, type a message to the orchestrator, press keys at a permission prompt, and turn "Can control" off while connected.
+**What was built.** A device the owner has switched to "Can control" in the Mac's Settings can run a flow and stop
+it, start a run at a card, approve a held message as it is or edited, reject it with a note, let a Script card's
+command run or choose not to, start a flow's agents or one agent, send a message to the orchestrator or any agent,
+and press keys in a session's terminal. The buttons are on the cards, in the list of what needs you and in a
+card's details. Typing is a message box and a keys mode under the full-screen terminal, and a message box in the
+orchestrator's page. A device that may only watch sees none of it, and one line saying how to turn it on. The Mac
+checks the switch for every command, answers each one done or refused in its own words, and writes what a device
+did in the flow's log with the device's name. Where this differs from the design is listed at the top of the spec.
+
+**What Task 4 changed.** A review of the stage found these, and each is fixed:
+
+- Starting or stopping a run held up everything else the device sent until it was done, because the Mac read one
+  message at a time. Those three commands are now done apart from the reading, in the order they came for each
+  flow, with "Can control" asked again when each one's turn comes. A device now gives up waiting for an answer
+  after 30 seconds and says "Your Mac didn't answer. Check the run on your Mac.", without saying the command failed.
+- Only runs, stops and messages were logged. Approving, rejecting, allowing a command, not running it, starting
+  agents and typing now each add a line. Typing adds one line for each session at most every 30 seconds, and
+  never what was typed. A rejection's note is not in the line.
+- A device could give Run a command of its own, which skipped the check that there is anything to run. The Mac
+  refuses that now. The device's app never sent one.
+- Text from a device is entered into a terminal as one paste. An Esc in it could have ended the paste and turned
+  the rest into key presses. The Mac now takes Esc and every other control character but new line and tab out of
+  a device's text before using it. Keys are left as they are.
+- "Stop the run?" and the other questions now belong to the flow that was open when they were asked, and go away
+  if another flow is opened.
+- Ctrl pressed in one terminal is let go when that terminal is closed or another opened, and a letter taken with
+  Ctrl on a real keyboard is not typed a second time if iOS hands it on as text.
+- On an iPhone, a question asked while the details sheet was up could not be shown. It now comes up over the
+  sheet. The questions' own sheets were the whole screen with the question adrift in the middle, and are now as
+  tall as what they ask. A refusal was hidden under the details sheet, and is now said in it too.
+
+**How it was checked.**
+
+| What | How | Result |
+|---|---|---|
+| Core, including the commands, their limits, cleaning a device's text, and the bytes for each key | `cd Core && swift test` | 254 tests pass, and the link's own 23 |
+| Both apps build | `./scripts/build.sh`, `./scripts/build-mobile.sh`, each also with `Release` | all four succeed |
+| No test hooks in a release | `nm` and `strings` on every binary in both Release apps for the test types and launch arguments, with the Debug builds as the control | none in Release; 156 and 757 symbols in the two Debug builds |
+| What a device may ask, on the Mac's side | `./scripts/e2e.py remote`, with a stand-in for the device and no simulator: everything refused with control off and nothing changed on the Mac; each command done with it on; the log's lines; a run that is slow to start not holding up what follows; limits; control turned off mid-connection | 93 checks pass |
+| Every control and both ways of typing, with a made-up Mac | `./scripts/e2e.py terminals panels controls typing` on an iPad Pro 11-inch and on an iPhone 17 simulator | 133 of 133 on the iPad. On the iPhone 129 of 133 at first: the four, all in `typing`, measured an iPad's layout, which is where the panel is and how much of the foot of the screen an iPhone keeps. The checks now say which is which, and `typing` then passed 45 of 45 on the iPhone |
+| Against the Mac's test copy, with real sessions on Haiku | `./scripts/e2e.py guard settings remote mirror mobile` on the iPad simulator. `mobile` runs one flow wholly from the device: starts it, allows the script, rejects with a note, approves the next, stops another, sends the orchestrator a message and reads its reply | 201 of 202. The one was in `mirror`: a second terminal opened after the oldest output had been dropped showed its top rows blank. `mirror` alone then passed 10 of 10, and `remote mirror` 103 of 103, so it comes and goes and its cause is not known. Nothing in this stage touches that code |
+| Every control at phone width | Screenshots on the iPhone 17 simulator, light and dark, of a made-up run: the line for a device that can only watch, the run bar idle and running, buttons on a card, in the list and in the details, each question from the canvas and over the details sheet, the rejection's note with the keyboard up, a refusal, "Start its agents", the terminal with an empty box, a five-line draft, the keys, a session that isn't running, a device that can't control, and the orchestrator's box in the sheet | looked at one by one |
+| A held card of the usual height | The made-up Script and Approval cards are now 120 points tall, as new cards are, and were looked at zoomed in on the iPad | the line that says what it waits for, the buttons and the ports each have their own row |
+
+**What has not been tested.** A simulator driven from the command line can't press anything, so:
+
+- A real keyboard attached to an iPad: plain typing, the arrows and Esc, and Ctrl held with a letter. The code that
+  stops Ctrl-C being typed twice has never met a real key press.
+- Real touches. Every press in the checks was made by a launch argument, which calls what the button calls. That
+  each button is under the finger where it is drawn, on a card zoomed in and out, is worked out and not felt.
+- The keyboard on screen in the message box: writing, the box growing, Send. The box with text in it was checked,
+  and the keyboard with the keys row and with the rejection's note was looked at, but nothing was typed on it.
+- Putting a question away by dragging its sheet down, or tapping outside it.
+- A run whose start is slow because of an If card's judging, from a real device. The check uses a Switch card.
+
+**What is left for the owner, on a real iPad or iPhone.** The app on the device must be built again from Xcode after this update to the Mac app: the two only talk when
+they are on the same version.
+
+1. On the Mac, in Settings under Remote, turn on "Can control" for the iPad. See the sidebar say it can control.
+2. Run a flow from the iPad, and stop one. Read the flow's log on the Mac for the iPad's name.
+3. Answer an approval from the card, from the list at the top, and from the details. Reject one and write a note
+   on the keyboard. Allow a script's command after reading it.
+4. Open the orchestrator's terminal, write it a message and send it. Do the same from the orchestrator's page.
+5. When an agent asks permission in its terminal, tap "Open its terminal" and answer with the keys. Press Esc to
+   interrupt one that is working. With a keyboard attached, type, use the arrows, and press Ctrl-C.
+6. Turn "Can control" off on the Mac while the iPad is connected, and see the buttons go at once.
+7. Do 2 to 4 on an iPhone, with the details sheet up and with it down.

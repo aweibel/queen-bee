@@ -50,7 +50,7 @@ struct RemoteSettingsSection: View {
         } header: {
             Text("Remote")
         } footer: {
-            Text("An iPad or iPhone you have paired can see your flows and their terminals while it is on the same Wi-Fi as this Mac. Nothing is sent over the internet. The iPad and iPhone app is still being built.")
+            Text("An iPad or iPhone you have paired can see your flows and their terminals while it is on the same Wi-Fi as this Mac. It can only watch unless you turn on “Can control” for it. Nothing is sent over the internet.")
                 .fixedSize(horizontal: false, vertical: true)
         }
         .sheet(isPresented: $showsPairing, onDismiss: { host.cancelPairing() }) {
