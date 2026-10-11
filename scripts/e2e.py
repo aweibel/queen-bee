@@ -618,11 +618,75 @@ def scenario_mobile(app):
         check("the Mac saw the device open it", state.get("open") == ["Guard"], str(state))
         mobile.shot("mobile-4-connected")
 
+        def frames(state):
+            return {c["name"]: (c["x"], c["y"], c["width"], c["height"]) for c in (state.get("canvas") or {}).get("cards", [])}
+
+        def drawn(state):
+            return (state.get("canvas") or {}).get("flow") == GUARD["id"] and len(frames(state)) == len(GUARD["cards"])
+
+        in_file = {c["name"]: (c["x"], c["y"], c["width"], c["height"]) for c in GUARD["cards"]}
+        s = mobile.wait(drawn, 20, "the canvas to draw the flow")
+        canvas = s.get("canvas") or {}
+        check("the canvas draws every card where the flow file puts it, at its size", frames(s) == in_file, str(frames(s)))
+        check("and every link", canvas.get("links") == len(GUARD["links"]), str(canvas.get("links")))
+        check("the surface is the size of the Mac's", canvas.get("contentSize") == {"width": 14000, "height": 11000}, str(canvas.get("contentSize")))
+        clear = canvas.get("clear") or {"x": 0, "y": 0, "width": 0, "height": 0}
+        whole = all(clear["x"] <= x and x + w <= clear["x"] + clear["width"] and clear["y"] <= y and y + h <= clear["y"] + clear["height"]
+                    for x, y, w, h in in_file.values())
+        check("a newly opened flow starts fitted, whole and clear of the panels", canvas.get("fitted") is True and whole, f"{clear} {canvas.get('zoom')}")
+        check("no further in than the Mac's own size", 0.05 <= canvas.get("zoom", 0) <= 1, str(canvas.get("zoom")))
+        s = mobile.wait(lambda s: drawn(s) and all("idle" in c["badges"] for c in s["canvas"]["cards"]), 10, "the cards to say their sessions are idle")
+        check("each agent's card says what its session is doing", all("idle" in c["badges"] for c in s.get("canvas", {}).get("cards", [])),
+              str([c["badges"] for c in s.get("canvas", {}).get("cards", [])]))
+        check("and has a place for its terminal", all(c["hasTerminalPlace"] for c in s.get("canvas", {}).get("cards", [])))
+        app.op(GUARD["id"], "drag", card="Carol", dx=48, dy=72)
+        moved_at = time.time()
+        there = dict(in_file, Carol=(in_file["Carol"][0] + 48, in_file["Carol"][1] + 72) + in_file["Carol"][2:])
+        s = mobile.wait(lambda s: frames(s) == there, 10, "the card to move on the canvas")
+        check("a card moved on the Mac moves on the canvas, and only that card", frames(s) == there, str(frames(s)))
+        check("within a couple of seconds", time.time() - moved_at < 2.5, f"{time.time() - moved_at:.1f}s")
+        app.op(GUARD["id"], "undo")
+        s = mobile.wait(lambda s: frames(s) == in_file, 10, "the card to go back")
+        check("and goes back when the move is undone", frames(s) == in_file, str(frames(s)))
+
+        # A run with no agents in it, so the one session it needs is the flow's own.
+        gid = GATES["id"]
+
+        def shown(state, name):
+            return next((c for c in (state.get("canvas") or {}).get("cards", []) if c["name"] == name), {})
+
+        app.op(gid, "select")
+        mobile.launch("-qbOpen", "Gates")
+        mobile.wait(lambda s: (s.get("canvas") or {}).get("flow") == gid and len(frames(s)) == len(GATES["cards"]), 40, "the canvas to draw another flow")
+        app.op(gid, "run")
+        held(app, gid)
+        waiting = "Waiting for you to let its command run"
+        s = mobile.wait(lambda s: shown(s, "Shout").get("text") == waiting, 10, "the canvas to show the run waiting")
+        check("a card holding a message says what it is waiting for", shown(s, "Shout").get("text") == waiting, str(shown(s, "Shout")))
+        check("the link the run came along shows its count, and the card it left its tick",
+              s.get("canvas", {}).get("passes") == {"l0": 1} and shown(s, "Start").get("badges") == ["✓"], str(s.get("canvas", {}).get("passes")))
+        mobile.shot("mobile-4a-run-waiting")
+        app.op(gid, "hold", answer="allow")
+        held(app, gid, "Check it")
+        app.op(gid, "hold", answer="approve")
+        app.wait(gid, lambda s: not s["isRunning"], 20, "the run to end")
+        s = mobile.wait(lambda s: shown(s, "Done").get("badges") == ["✓"], 10, "the canvas to show where the run went")
+        check("when the run ends the canvas shows where it went and what came out",
+              shown(s, "Done").get("badges") == ["✓"] and shown(s, "Done").get("text") == "HELLO FROM THE START CARD"
+              and shown(s, "Binned").get("badges") == [] and s["canvas"].get("passes") == {"l0": 1, "l1": 1, "l2": 1} and s["canvas"].get("live") == [],
+              f"{shown(s, 'Done')} {s.get('canvas', {}).get('passes')}")
+        app.op(gid, "close")
+
         mobile.quit()
         state = remote(lambda r: r["connected"] == 0, 20, "the Mac to notice the app has gone")
         check("quitting the app ends its connection", state["connected"] == 0 and state["devices"] == 1, str(state))
-        mobile.launch("-qbOpen", "Guard")
-        s = mobile.wait(lambda s: s["state"] == "connected" and s["flows"] and s.get("openFlowCards"), 40, "the app to connect again")
+        mobile.launch("-qbOpen", "Guard", "-qbSelect", "Bob")
+        s = mobile.wait(lambda s: s["state"] == "connected" and s["flows"] and s.get("openFlowCards") and (s.get("canvas") or {}).get("selected"),
+                        40, "the app to connect again")
+        bob = next(c["id"] for c in GUARD["cards"] if c["name"] == "Bob")
+        check("a card can be selected on the canvas, and only it is", (s.get("canvas") or {}).get("selected") == {"card": bob}
+              and [c["name"] for c in s["canvas"]["cards"] if c["selected"]] == ["Bob"], str((s.get("canvas") or {}).get("selected")))
+        mobile.shot("mobile-4b-card-selected")
         check("launched again with nothing said about the Mac, the app connects by itself", s.get("state") == "connected" and s.get("device") == device, str(s))
         check("with the key it kept", s.get("hasKey") is True and remote(lambda r: r["connected"] == 1, 10, "the Mac to see it")["connected"] == 1, str(s))
 
