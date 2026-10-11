@@ -56,6 +56,9 @@ final class PanelModel {
     /// How much of the canvas's foot the panel covers, when it is a sheet that comes up over the canvas as
     /// on an iPhone. Nothing when it is beside the canvas, or put away. The canvas fits the flow into what is left.
     var cover: CGFloat = 0
+    /// True while the panel is up as a sheet, as on an iPhone. A question asked then is put up over the sheet:
+    /// the screen under a sheet can put nothing up until the sheet has gone.
+    var isSheetUp = false
     /// The page each tab was last left on, so going back to a tab goes back to that page.
     @ObservationIgnored private var left: [PanelTab: PanelPage] = [:]
 

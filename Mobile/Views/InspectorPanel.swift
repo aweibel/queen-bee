@@ -26,6 +26,15 @@ struct InspectorPanel: View {
             .padding(.top, sizeClass == .compact ? Theme.Space.m : 0)
             .background(Theme.bar.ui)
             Hairline()
+            // As a sheet the panel covers the foot of the canvas, where a refusal is said. So it is said here
+            // too: what the Mac wouldn't do is never out of sight of the button that asked for it.
+            if client.panel.isSheetUp, sizeClass == .compact, let refusal = client.controls.refusal {
+                RefusalNotice(text: refusal.text, alignment: .leading) { client.controls.refusal = nil }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.Space.l)
+                    .padding(.vertical, Theme.Space.s)
+                Hairline()
+            }
             if let run = client.canvas.viewedRun {
                 EarlierRunNotice(run: run)
                     .padding(.horizontal, Theme.Space.l)

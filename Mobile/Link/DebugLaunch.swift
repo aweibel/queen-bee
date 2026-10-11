@@ -68,6 +68,7 @@ import UIKit
 ///   -qbStale 1                          with a made-up run: its sessions have ended and the made-up Mac
 ///                                       hasn't said so yet, so what is typed is refused
 
+///   -qbWriteNote 1                      when a rejection asks for its note, start writing in the box
 ///   -qbPress <step>                     press one button as a finger does, so that what it asks first is on screen
 ///
 /// Arguments written this way are read as settings, which is how they get here.
@@ -98,6 +99,8 @@ enum DebugLaunch {
     }
 
     static var show: String? { defaults.string(forKey: "qbShow") }
+    /// Whether the box for a rejection's note takes the keyboard as soon as it is on screen.
+    static var writesNote: Bool { defaults.bool(forKey: "qbWriteNote") }
     /// How many seconds the Mac is given to answer a command, when a test wants less than the real wait.
     static var answerWait: Int? { defaults.object(forKey: "qbAnswerWait") == nil ? nil : max(1, defaults.integer(forKey: "qbAnswerWait")) }
 

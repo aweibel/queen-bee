@@ -263,6 +263,7 @@ private struct RejectSheet: View {
     let from: String
     let text: String
     @State private var note = ""
+    @FocusState private var isWriting: Bool
 
     var body: some View {
         AskSheet(title: "Reject this message?") {
@@ -273,6 +274,11 @@ private struct RejectSheet: View {
                 .dsSans()
                 .foregroundStyle(Theme.ink.ui)
                 .fieldBox()
+                .focused($isWriting)
+                #if DEBUG
+                // A test can't tap the box, and what the sheet does with the keyboard up has to be seen.
+                .task { if DebugLaunch.writesNote { isWriting = true } }
+                #endif
             Text("The message goes on along the Rejected link, with your reason ahead of it if you give one.")
                 .dsSans(Theme.Touch.caption + 1)
                 .foregroundStyle(Theme.inkSecondary.ui)
@@ -320,6 +326,13 @@ private struct AskSheet<Content: View, Action: View>: View {
     let title: String
     @ViewBuilder var content: Content
     @ViewBuilder var action: Action
+    /// How tall what is asked is, and the strip of buttons under it, once they have been laid out.
+    @State private var askedHeight: CGFloat = 0
+    @State private var footHeight: CGFloat = 0
+
+    /// The sheet's height where it comes up from the foot of the screen, as on an iPhone: as tall as what it
+    /// asks, and no taller. Left to itself it would be the whole screen, with the question adrift in the middle.
+    private var height: CGFloat { askedHeight > 0 && footHeight > 0 ? askedHeight + footHeight + 1 : 420 }
 
     var body: some View {
         let asked = VStack(alignment: .leading, spacing: Theme.Space.m) {
@@ -333,11 +346,14 @@ private struct AskSheet<Content: View, Action: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Space.l)
         VStack(spacing: 0) {
-            // As tall as what it asks, and no taller. Only something too long for the screen scrolls.
-            ViewThatFits(in: .vertical) {
-                asked
-                ScrollView { asked }
+            // As tall as what it asks, and no taller. Only something too long for the room it has scrolls: a
+            // long command, or any of it once the keyboard is up. It is one view either way, so the box
+            // being written in is never taken away from under the keyboard.
+            ScrollView {
+                asked.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { askedHeight = $0 }
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(idealHeight: askedHeight > 0 ? askedHeight : nil)
             Hairline()
             HStack(spacing: Theme.Space.s) {
                 Button("Cancel") { client.controls.asking = nil }.buttonStyle(.panel(.quiet))
@@ -347,21 +363,31 @@ private struct AskSheet<Content: View, Action: View>: View {
             .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.m)
             .background(Theme.bar.ui)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footHeight = $0 }
         }
         .background(Theme.surface.ui)
+        // Where the sheet is a panel in the middle of the screen, as on an iPad.
         .presentationSizing(.form.fitted(horizontal: false, vertical: true))
+        // Where it comes up from the foot of the screen.
+        .presentationDetents([.height(height)])
+        .presentationBackground(Theme.surface.ui)
     }
 }
 
 private struct AsksBeforeActing: ViewModifier {
     @Environment(RemoteClient.self) private var client
+    /// True for the one inside the details' sheet on an iPhone, which asks while that sheet is up. The one
+    /// on the whole app asks the rest of the time. Only one of them ever has the question.
+    let overSheet: Bool
+
+    private var isMine: Bool { overSheet || !client.panel.isSheetUp }
 
     /// What is being asked, if it is asked the way this binding is for: in a sheet, or in an alert.
     private func asking(sheet: Bool) -> Binding<Ask?> {
         Binding {
-            client.controls.asking.flatMap { $0.isSheet == sheet ? $0 : nil }
+            !isMine ? nil : client.controls.asking.flatMap { $0.isSheet == sheet ? $0 : nil }
         } set: { new in
-            if new == nil, client.controls.asking?.isSheet == sheet { client.controls.asking = nil }
+            if new == nil, isMine, client.controls.asking?.isSheet == sheet { client.controls.asking = nil }
         }
     }
 
@@ -420,5 +446,5 @@ extension Abilities {
 extension View {
     /// Puts up the questions that are asked before a press is sent: stopping a run, restarting an agent
     /// that is running, letting a command run, and the note that goes with a rejection.
-    func asksBeforeActing() -> some View { modifier(AsksBeforeActing()) }
+    func asksBeforeActing(overSheet: Bool = false) -> some View { modifier(AsksBeforeActing(overSheet: overSheet)) }
 }

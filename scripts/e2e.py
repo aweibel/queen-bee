@@ -1827,8 +1827,16 @@ def scenario_typing():
         """Whether the bar is under the terminal and reaches the foot of the screen, or the top of the keyboard."""
         c = composer(state)
         bar, shown = c.get("bars", {}).get("viewer") or {}, ((state.get("terminals") or {}).get(key) or {})
-        foot = (c.get("keyboard") or {}).get("y") or c.get("screen", {}).get("height", 0)
-        return bool(bar) and bar["height"] >= 44 and abs(bar["y"] + bar["height"] - foot) <= 30 and shown.get("onScreen", {}).get("y", 1e9) < bar["y"]
+        keyboard = (c.get("keyboard") or {}).get("y")
+        foot = keyboard or c.get("screen", {}).get("height", 0)
+        # With no keyboard up, an iPhone keeps 34 points at its foot for the bar that goes home. What is in the
+        # bar stops above that, and only its background runs on down. An iPad keeps 20.
+        slack = 30 if keyboard or not is_phone(state) else 40
+        return bool(bar) and bar["height"] >= 44 and abs(bar["y"] + bar["height"] - foot) <= slack and shown.get("onScreen", {}).get("y", 1e9) < bar["y"]
+
+    def is_phone(state):
+        """Whether the app is running at an iPhone's width, where the panel is a sheet over the canvas and not beside it."""
+        return composer(state).get("screen", {}).get("width", 1000) < 600
 
     try:
         s = play(1, *on, "-qbExpand", "orchestrator", also=open_in(orchestrator))
@@ -1938,8 +1946,14 @@ def scenario_typing():
 
         s = play(1, *on, "-qbShow", "orchestrator", also=lambda s: "panel" in composer(s).get("bars", {}))
         panel = composer(s)["bars"].get("panel") or {}
-        check("the orchestrator's panel has a message box of its own, beside the canvas", panel.get("height", 0) >= 44 and s.get("expanded") is None
-              and panel.get("x", 0) > composer(s)["screen"]["width"] / 2, str(composer(s).get("bars")))
+        if is_phone(s):
+            # On an iPhone the panel is a sheet that comes up over the foot of the canvas, as wide as the screen.
+            check("the orchestrator's panel has a message box of its own, in the sheet over the canvas", panel.get("height", 0) >= 44 and s.get("expanded") is None
+                  and panel.get("y", 0) > composer(s)["screen"]["height"] / 2 and panel.get("width", 0) > composer(s)["screen"]["width"] * 0.8
+                  and panel.get("y", 0) + panel.get("height", 0) <= composer(s)["screen"]["height"], str(composer(s).get("bars")))
+        else:
+            check("the orchestrator's panel has a message box of its own, beside the canvas", panel.get("height", 0) >= 44 and s.get("expanded") is None
+                  and panel.get("x", 0) > composer(s)["screen"]["width"] / 2, str(composer(s).get("bars")))
         both("typing-11-orchestrator-panel")
         s = play(1, *on, "-qbShow", "orchestrator", "-qbDo", "say:orchestrator:From the panel", steps=1, also=lambda s: "From the panel" in text(s, orchestrator))
         check("and a message sent from there reaches the orchestrator", did(s)[0][1] is None and composer(s).get("sent") == ["prompt:orchestrator:14"], str(composer(s)))

@@ -162,6 +162,8 @@ private struct StackShell: View {
         // At half height the canvas above it still takes taps, so a card can be picked with its details open.
         .sheet(isPresented: $showsDetails) {
             InspectorPanel()
+                // What a button here or on the canvas asks first comes up over this sheet, not under it.
+                .asksBeforeActing(overSheet: true)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
@@ -171,7 +173,11 @@ private struct StackShell: View {
         // With the details up, the canvas fits the flow into what shows above them. It is told through the
         // panel's model: a screen that has been pushed isn't drawn again when this one's own state changes.
         .onChange(of: cover, initial: true) { client.panel.cover = cover }
-        .onDisappear { client.panel.cover = 0 }
+        .onChange(of: showsDetails, initial: true) { client.panel.isSheetUp = showsDetails }
+        .onDisappear {
+            client.panel.cover = 0
+            client.panel.isSheetUp = false
+        }
         // The details belong to the open flow, and go when it does.
         .onChange(of: client.mirror.openFlowID) { _, open in
             if open == nil { showsDetails = false }
