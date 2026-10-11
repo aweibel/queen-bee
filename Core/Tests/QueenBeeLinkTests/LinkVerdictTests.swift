@@ -42,6 +42,10 @@ import Testing
         #expect((0..<6).map(LinkVerdict.wait(beforeAttempt:)) == [1, 2, 4, 8, 8, 8])
     }
 
+    @Test func aListenerThatDoesNotAnswerTwiceRunningMeansTheMacIsOutOfReach() {
+        #expect((0..<4).map(LinkVerdict.isOutOfReach(afterMisses:)) == [false, false, true, true])
+    }
+
     /// The real thing: a listener with another key says so in a way the device can tell from nobody being there.
     @Test func aListenerWithAnotherKeyIsToldApartFromNoListener() async throws {
         let listener = try LinkListener(key: LinkSecurity.randomKey(), service: nil, localOnly: true)

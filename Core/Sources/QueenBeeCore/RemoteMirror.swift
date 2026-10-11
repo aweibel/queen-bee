@@ -21,6 +21,9 @@ public struct RemoteMirror: Equatable, Sendable {
     /// The revision of the last `.flow` change seen for the open flow, or 0 when its snapshot has had none yet.
     /// The Mac counts these per connection, so it says how many times the flow changed, not which copy is newer.
     public private(set) var revision = 0
+    /// True once the Mac's list has come without the open flow in it. The Mac stops sending that flow then, so
+    /// one that comes back has to be asked for again. Cleared by asking, and by a fresh snapshot of it.
+    public private(set) var openFlowWentAway = false
 
     public init() {}
 
@@ -30,6 +33,15 @@ public struct RemoteMirror: Equatable, Sendable {
         openFlowID = flowID
         snapshot = nil
         revision = 0
+        openFlowWentAway = false
+    }
+
+    /// The terminal bytes a message carries for the open flow, if it carries any. Reading them changes nothing
+    /// here, so a device can hand them straight to its terminals without touching what everything else draws from.
+    public func terminalEvent(in message: HostMessage) -> TerminalEvent? {
+        // Terminals do not wait for the snapshot: their first chunk sets the screen up.
+        guard case .terminal(let id, let key, let chunk) = message, id == openFlowID else { return nil }
+        return TerminalEvent(key: key, chunk: chunk)
     }
 
     /// Takes one message from the Mac. Returns the terminal bytes it carried, if any, for the terminals to draw.
@@ -42,12 +54,16 @@ public struct RemoteMirror: Equatable, Sendable {
             refusal = text
         case .library(let library):
             self.library = library
+            if let openFlowID, !library.projects.contains(where: { $0.flows.contains { $0.id == openFlowID } }) {
+                openFlowWentAway = true
+            }
         case .opened(let snapshot):
             // The reply to an earlier open can arrive after the person has moved on to another flow.
             // A second snapshot of the open flow is a fresh start, as after reconnecting.
             guard snapshot.flow.id == openFlowID else { break }
             self.snapshot = snapshot
             revision = 0
+            openFlowWentAway = false
         case .flow(let id, let revision, let flow):
             guard isShowing(id) else { break }
             snapshot?.flow = flow
@@ -65,10 +81,8 @@ public struct RemoteMirror: Equatable, Sendable {
         case .history(let id, let runs):
             guard isShowing(id) else { break }
             snapshot?.runs = runs
-        case .terminal(let id, let key, let chunk):
-            // Terminals do not wait for the snapshot: their first chunk sets the screen up.
-            guard id == openFlowID else { break }
-            return [TerminalEvent(key: key, chunk: chunk)]
+        case .terminal:
+            return terminalEvent(in: message).map { [$0] } ?? []
         }
         return []
     }

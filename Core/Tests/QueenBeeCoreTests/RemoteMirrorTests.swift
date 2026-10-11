@@ -177,6 +177,42 @@ import Testing
         #expect(mirror.apply(.terminal(id: held.flow.id, key: "k", chunk: chunk)).count == 1)
     }
 
+    /// A device reads terminal bytes without changing the mirror, so output arriving redraws nothing else.
+    @Test func terminalBytesCanBeReadWithoutTouchingTheMirror() throws {
+        let held = try base()
+        let mirror = mirror(holding: held)
+        let chunk = TerminalChunk(reset: false, cols: 80, rows: 24, data: Data("more".utf8))
+        #expect(mirror.terminalEvent(in: .terminal(id: held.flow.id, key: "k", chunk: chunk)) == TerminalEvent(key: "k", chunk: chunk))
+        #expect(mirror.terminalEvent(in: .terminal(id: "another", key: "k", chunk: chunk)) == nil)
+        #expect(mirror.terminalEvent(in: .log(id: held.flow.id, lines: [], reset: false)) == nil)
+        #expect(RemoteMirror().terminalEvent(in: .terminal(id: held.flow.id, key: "k", chunk: chunk)) == nil)
+    }
+
+    @Test func aFlowThatLeftTheMacsListIsKnownToNeedAskingForAgain() throws {
+        let held = try base()
+        var mirror = mirror(holding: held)
+        let summary = RemoteFlowSummary(id: held.flow.id, name: "Demo", isSubflow: false, activity: .quiet)
+        func library(_ flows: [RemoteFlowSummary]) -> HostMessage {
+            .library(RemoteLibrary(projects: [RemoteProject(id: "p", name: "Work", flows: flows)]))
+        }
+        _ = mirror.apply(library([summary]))
+        #expect(!mirror.openFlowWentAway)
+        _ = mirror.apply(library([]))
+        #expect(mirror.openFlowWentAway)
+        // Back in the list, it is still not being sent: only asking again, or a fresh copy, changes that.
+        _ = mirror.apply(library([summary]))
+        #expect(mirror.openFlowWentAway)
+        mirror.willOpen(held.flow.id)
+        #expect(!mirror.openFlowWentAway)
+        _ = mirror.apply(library([]))
+        _ = mirror.apply(.opened(held))
+        #expect(!mirror.openFlowWentAway)
+        // With no flow open there is nothing to have gone.
+        mirror.willOpen(nil)
+        _ = mirror.apply(library([]))
+        #expect(!mirror.openFlowWentAway)
+    }
+
     /// Whatever the Mac decides to send for a change must take the device to the same place.
     @Test func applyingTheMacsUpdatesFollowsEveryChange() throws {
         let start = try base()

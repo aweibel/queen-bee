@@ -25,6 +25,14 @@ public enum LinkVerdict: Equatable, Sendable {
         (error as? LinkError)?.keyRefused == true ? .mustPairAgain(keyRefusedText) : .tryAgain
     }
 
+    /// Whether to say the Mac can't be found, after its listener was found `misses` times running and didn't
+    /// answer. Once can be a blip. Twice is a Mac that is asleep, with its name still remembered by the network.
+    public static func isOutOfReach(afterMisses misses: Int) -> Bool { misses >= 2 }
+
+    /// How long the Mac stays not found before the device adds that it may have been removed on the Mac. A Mac
+    /// that removed a device while it was away has no listener for it and no way to tell it.
+    public static let removedHintDelay: TimeInterval = 30
+
     /// How long to leave it before try number `attempt` (the first retry is 0): 1, 2, 4, then 8 seconds each time.
     public static func wait(beforeAttempt attempt: Int) -> TimeInterval {
         TimeInterval(1 << min(max(attempt, 0), 3))
