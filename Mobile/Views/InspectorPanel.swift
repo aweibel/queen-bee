@@ -207,6 +207,7 @@ struct NothingOpen: View {
 
 /// The session that runs the open flow: what it is doing, and its terminal as the Mac's side panel has it.
 /// The terminal here is a picture that follows the session. Reading back through it is done full screen.
+/// Under it is a box for sending the orchestrator a message, when this device may.
 struct OrchestratorPanel: View {
     @Environment(RemoteClient.self) private var client
     private let key = TerminalRegistry.orchestratorKey
@@ -223,7 +224,7 @@ struct OrchestratorPanel: View {
                     Text("Runs this flow").dsSans().foregroundStyle(Theme.inkSecondary.ui)
                     if let badge = caption.badge { Badge(text: badge.text, tone: badge.tone) }
                     Spacer(minLength: Theme.Space.s)
-                    Button { client.terminals.expand(key) } label: {
+                    Button { client.openTerminal(key) } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(Theme.ink.ui)
@@ -241,6 +242,8 @@ struct OrchestratorPanel: View {
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .background(Theme.terminal.ui)
+                // A message for the orchestrator can be written here. Keys are for the full-screen view.
+                ComposerBar(key: key, isCompact: true)
             }
         } else {
             VStack(alignment: .leading, spacing: Theme.Space.s) {

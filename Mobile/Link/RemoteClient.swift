@@ -43,6 +43,8 @@ final class RemoteClient {
     let panel = PanelModel()
     /// What the person is being asked before a control does its work, and the last thing the Mac turned down.
     let controls = ControlsModel()
+    /// What the person has written for each session and not sent, and the keys on their way.
+    let composer = ComposerModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)
@@ -61,6 +63,8 @@ final class RemoteClient {
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
     /// Stands in for the link when a test has no Mac: it is handed each command in place of one.
     @ObservationIgnored var debugOutbox: ((_ id: Int, _ command: RemoteCommand) -> Void)?
+    /// Every command that left for the Mac, in order, for a test to see that nothing else did.
+    private(set) var debugSent: [RemoteCommand] = []
     #endif
 
     /// One connection and the things waiting to be sent on it, which leave in the order they were asked for.
@@ -90,7 +94,7 @@ final class RemoteClient {
     init() {
         // The canvas puts each session's terminal in its card, and is told when one comes, goes or moves.
         canvas.terminalSource = { [terminals] key in terminals.view(for: key) }
-        canvas.expandTerminal = { [terminals] key in terminals.expand(key) }
+        canvas.expandTerminal = { [weak self] key in self?.openTerminal(key) }
         terminals.onChange = { [canvas] in canvas.terminalsChanged() }
         canvas.onPress = { [weak self] in self?.press($0) }
     }
@@ -316,6 +320,9 @@ final class RemoteClient {
         #endif
         guard link != nil || outbox != nil else { return Self.notConnected }
         let id = mirror.willSend(command)
+        #if DEBUG
+        debugSent.append(command)
+        #endif
         return await withCheckedContinuation { waiting in
             answers[id] = waiting
             if let link { link.send(.command(id: id, command: command)) } else { outbox?(id, command) }
@@ -425,6 +432,7 @@ final class RemoteClient {
         mac = nil
         mirror = RemoteMirror()
         controls.clear()
+        composer.clear()
         terminals.reset()
         canvas.viewports = [:]
         noteMac(notFound: false)

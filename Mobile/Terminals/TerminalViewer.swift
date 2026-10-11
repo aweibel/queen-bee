@@ -22,13 +22,18 @@ struct SessionCaption: Equatable {
 
 /// One session's terminal, full screen: at a size that can be read, following what the session prints,
 /// with a finger scrolling back through what it printed before. Two fingers make it larger or smaller.
-/// Nothing can be typed: this is for reading.
+///
+/// The terminal itself takes no typing. When the Mac lets this device control it and the session is running,
+/// a bar under the terminal does: see `ComposerBar`. The bar stays above the keyboard, and the terminal
+/// takes what room is left, with the row it is writing on kept in view.
 struct TerminalViewer: View {
     @Environment(RemoteClient.self) private var client
     let key: String
 
     var body: some View {
         let caption = SessionCaption(key: key, client: client)
+        let typing = client.abilities.typing[key] ?? Typing()
+        let hasFoot = typing.hasBar || typing.line != nil
         VStack(spacing: 0) {
             HStack(spacing: Theme.Space.m) {
                 Image(systemName: "terminal")
@@ -45,18 +50,25 @@ struct TerminalViewer: View {
                 if client.state != .connected { ConnectionPill(isBrief: true) }
                 Button("Done") { client.terminals.expand(nil) }
                     .buttonStyle(.panel())
-                    .keyboardShortcut(.cancelAction)
+                    // In keys mode Esc is a key for the session, like any other.
+                    .keyboardShortcut(typing.hasBar && client.composer.mode == .keys ? nil : KeyboardShortcut.cancelAction)
             }
             .padding(.horizontal, Theme.Space.l)
             .frame(minHeight: Theme.Touch.target + Theme.Space.s)
             .background(Theme.bar.ui)
             Hairline()
             TerminalStage(registry: client.terminals, key: key, size: client.terminals.sizes[key] ?? .zero)
-                .ignoresSafeArea(edges: .bottom)
+                // With nothing under it the terminal runs to the foot of the screen.
+                .ignoresSafeArea(edges: hasFoot ? [] : .bottom)
                 .accessibilityLabel("\(caption.name)'s terminal")
                 .accessibilityHint("Drag to read earlier output.")
+            ComposerBar(key: key)
         }
         .background(Theme.terminal.ui)
+        .onDisappear {
+            client.composer.wantsKeyboard = false
+            client.composer.mode = .message
+        }
     }
 }
 
@@ -71,6 +83,7 @@ private struct TerminalStage: UIViewRepresentable {
 
     func updateUIView(_ stage: TerminalStageView, context: Context) {
         stage.show(registry.expandedView(for: key), size: size)
+        registry.onExpandedOutput = { [weak stage] in stage?.outputArrived() }
     }
 
     static func dismantleUIView(_ stage: TerminalStageView, coordinator: ()) {
@@ -94,6 +107,12 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
     private var laidOut = CGSize.zero
     /// True until the person zooms, so turning the device or a new size from the Mac fits it afresh.
     private var isFitted = true
+    /// True until the person moves the terminal about themselves. While it is, the row the session is writing
+    /// on is kept in view when the terminal is taller than the room for it, as it is with the keyboard up.
+    private var follows = true
+    private var isFollowPending = false
+    /// Kept in view under the row the cursor is on, so what is being typed isn't hard against the bar.
+    private static let rowsBelow = 2
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -104,6 +123,8 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
         zoomer.scrollsToTop = false
         zoomer.bouncesZoom = false
         zoomer.contentInsetAdjustmentBehavior = .never
+        // A drag that carries on down into the keyboard takes the keyboard with it.
+        zoomer.keyboardDismissMode = .interactive
         addSubview(zoomer)
     }
 
@@ -126,6 +147,7 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
                 new.isUserInteractionEnabled = true
                 zoomer.addSubview(new)
                 isFitted = true
+                follows = true
                 natural = .zero
             }
         }
@@ -157,7 +179,35 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
         zoomer.maximumZoomScale = max(Self.largest, start)
         zoomer.zoomScale = isFitted ? start : min(max(was, zoomer.minimumZoomScale), zoomer.maximumZoomScale)
         settle()
+        // The room has changed: the keyboard came or went, or the device was turned.
+        follows = true
+        showLatest()
     }
+
+    /// The session printed something. A moment later, so a burst of output moves the terminal once.
+    func outputArrived() {
+        guard follows, !isFollowPending else { return }
+        isFollowPending = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            isFollowPending = false
+            if follows, !zoomer.isTracking, !zoomer.isDecelerating, !zoomer.isZooming { showLatest() }
+        }
+    }
+
+    /// Brings the row the cursor is on into view, when the terminal is taller than the room it has. A
+    /// terminal that fits is left at the top, where `settle` put it.
+    private func showLatest() {
+        guard let mount, mount.superview === zoomer, mount.cell.height > 0 else { return }
+        let shown = zoomer.contentSize
+        guard shown.height > bounds.height - Self.margin * 2 else { return }
+        let row = mount.terminal.terminalStateSnapshot().cursor.row
+        let under = CGFloat(row + 1 + Self.rowsBelow) * mount.cell.height * zoomer.zoomScale
+        let lowest = shown.height + zoomer.contentInset.bottom - bounds.height
+        zoomer.contentOffset.y = min(lowest, max(-zoomer.contentInset.top, under + Self.margin - bounds.height))
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { follows = false }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
@@ -177,7 +227,10 @@ final class TerminalStageView: UIView, UIScrollViewDelegate {
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { mount }
-    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { isFitted = false }
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
+        isFitted = false
+        follows = false
+    }
     func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { settle() }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {

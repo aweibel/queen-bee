@@ -110,6 +110,8 @@ struct RunBar: View {
 /// Something the Mac wouldn't do, in its own words. A tap puts it away, and so does the next thing that works.
 struct RefusalNotice: View {
     let text: String
+    /// Which side it keeps to where there is more room than it needs.
+    var alignment = Alignment.trailing
     let dismiss: () -> Void
 
     var body: some View {
@@ -130,7 +132,7 @@ struct RefusalNotice: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: 420, alignment: .trailing)
+        .frame(maxWidth: 420, alignment: alignment)
         .accessibilityHint("Puts this message away.")
     }
 }

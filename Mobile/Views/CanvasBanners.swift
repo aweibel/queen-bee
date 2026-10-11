@@ -23,8 +23,8 @@ struct CanvasBanners: View {
 }
 
 /// The cards waiting on the person, in canvas order. Tapping one goes to it. When this device may answer,
-/// each has its card's buttons under it, at full size however small the card is on screen. What can't be
-/// answered from here is said in the last line.
+/// each has its card's buttons under it, at full size however small the card is on screen. An agent waiting
+/// in its terminal has a button that opens the terminal. What can't be answered from here is said in the last line.
 private struct NeedsYouBanner: View {
     @Environment(RemoteClient.self) private var client
     let waiting: [WaitingCard]
@@ -72,6 +72,11 @@ private struct NeedsYouBanner: View {
                         .padding(.horizontal, Theme.Space.m)
                         .padding(.bottom, Theme.Space.s)
                         .frame(maxWidth: .infinity, alignment: .trailing)
+                } else if abilities.inTerminal.contains(card.id), client.terminals.sizes[card.id] != nil {
+                    OpenTerminalButton(cardID: card.id, name: card.name)
+                        .padding(.horizontal, Theme.Space.m)
+                        .padding(.bottom, Theme.Space.s)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
             let more = waiting.count > Self.most ? "And \(waiting.count - Self.most) more." : nil
@@ -91,6 +96,22 @@ private struct NeedsYouBanner: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.live.ui, lineWidth: Theme.Stroke.card))
     }
 
+}
+
+/// For an agent that is waiting on the person in its terminal: opens the terminal full screen with the keys
+/// out, which is what answers it.
+struct OpenTerminalButton: View {
+    @Environment(RemoteClient.self) private var client
+    let cardID: String
+    let name: String
+    static let title = "Open its terminal"
+
+    var body: some View {
+        Button(Self.title) { client.openTerminal(cardID, keys: true) }
+            .buttonStyle(.panel(.live))
+            .accessibilityLabel("\(Self.title), \(name)")
+            .accessibilityHint("Opens \(name)'s terminal full screen, with keys to answer it.")
+    }
 }
 
 extension RemoteClient {

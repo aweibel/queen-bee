@@ -46,6 +46,7 @@ struct DetailsPage: View {
 /// it. Nothing it is set to can be changed here, and the last line says where it can. What a run is waiting
 /// on can be answered here, and a run started at the card, when this device may control the Mac.
 private struct DetailsView: View {
+    @Environment(RemoteClient.self) private var client
     let details: Details
     /// The card, when it is a card that is selected.
     let card: Card?
@@ -59,13 +60,19 @@ private struct DetailsView: View {
         return run.holds.first { $0.cardID == card.id && ($0.kind == .approval || $0.needsAllow) }
     }
 
+    /// The card, when it is an agent waiting in its terminal and this device may open that and answer.
+    private var inTerminal: Card? {
+        guard let card, abilities.inTerminal.contains(card.id), client.terminals.sizes[card.id] != nil else { return nil }
+        return card
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ForEach(Array(details.items.enumerated()), id: \.offset) { _, item in
                 Hairline()
                 ItemView(item: item, answerLine: details.answerLine ? abilities.answerLine ?? WaitingCard.answer : nil,
-                         hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [])
+                         hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [], inTerminal: inTerminal)
             }
             if let messages = details.messages {
                 Hairline()
@@ -136,6 +143,8 @@ private struct ItemView: View {
     /// The held message this card is waiting with, and the buttons that answer it, when it can be answered here.
     var hold: PendingHold?
     var buttons: [PressButton] = []
+    /// The agent this is about, when it is waiting in its terminal and that can be opened and answered here.
+    var inTerminal: Card?
 
     var body: some View {
         switch item.style {
@@ -196,6 +205,9 @@ private struct ItemView: View {
                 }
                 if let hold, !buttons.isEmpty {
                     HoldAnswer(hold: hold, buttons: buttons)
+                } else if let inTerminal {
+                    OpenTerminalButton(cardID: inTerminal.id, name: inTerminal.name)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 } else if let answerLine {
                     Text(answerLine).dsSans(Theme.Touch.caption + 1).fixedSize(horizontal: false, vertical: true)
                 }

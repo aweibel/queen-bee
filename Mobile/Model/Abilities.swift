@@ -86,6 +86,10 @@ nonisolated struct Abilities: Equatable {
     var runFrom: Set<String> = []
     /// Said under what is waiting, when some of it can't be answered from here.
     var answerLine: String?
+    /// The agents waiting on the person in their terminals, which this device may open and type into.
+    var inTerminal: Set<String> = []
+    /// What typing into each session comes to, by the session's key. See `Typing`.
+    var typing: [String: Typing] = [:]
 
     static let howToTurnOn = "This device can only watch. To run and answer from here, turn on “Can control” for it on your Mac: Settings, then Remote."
     static let nothingToRun = "Nothing to run yet. On your Mac, give the Start card something to start with and link it to a card."
@@ -98,7 +102,11 @@ nonisolated struct Abilities: Equatable {
         guard let snapshot else { return }
         let flow = snapshot.flow, run = snapshot.run
         let held = run.holds.filter { $0.kind == .approval || $0.needsAllow }
-        let inTerminal = flow.cards.contains { $0.kind == .agent && run.sessions[$0.id] == .needsYou }
+        // The sessions a flow has are its orchestrator's and each agent card's.
+        let keys = [Remote.orchestratorKey] + flow.cards.filter { $0.kind == .agent }.map(\.id)
+        for key in keys {
+            typing[key] = Typing(state: run.sessions[key] ?? .notStarted, canControl: canControl, isConnected: isConnected, isEarlier: viewed != nil)
+        }
         guard isConnected, canControl, viewed == nil else {
             // The Mac's words for it are kept for the device that can't answer at all.
             answerLine = isConnected && canControl ? "Go back to the latest run to answer." : WaitingCard.answer
@@ -106,8 +114,8 @@ nonisolated struct Abilities: Equatable {
             return
         }
         canAct = true
-        // Typing into a session's terminal comes later.
-        answerLine = inTerminal ? "An agent that is waiting in its terminal is answered on your Mac for now." : nil
+        // An agent waiting in its terminal is answered there, with the keys.
+        inTerminal = Set(flow.cards.filter { $0.kind == .agent && run.sessions[$0.id] == .needsYou }.map(\.id))
         func button(_ title: String, _ press: Press, main: Bool = false, hint: String) -> PressButton {
             PressButton(title: title, press: press, isMain: main, isEnabled: !press.isBusy(among: waiting), hint: hint)
         }
@@ -126,11 +134,8 @@ nonisolated struct Abilities: Equatable {
             }
             bar = [runButton]
         }
-        // The sessions a flow has are its orchestrator's and each agent card's.
-        let keys = [Remote.orchestratorKey] + flow.cards.filter { $0.kind == .agent }.map(\.id)
-        if keys.contains(where: { (run.sessions[$0] ?? .notStarted) == .notStarted }) {
-            bar.insert(button("Start its agents", .startAgents, hint: "Starts this flow's sessions on your Mac."), at: 0)
-        }
+        let startAll = button("Start its agents", .startAgents, hint: "Starts this flow's sessions on your Mac.")
+        if keys.contains(where: { (run.sessions[$0] ?? .notStarted) == .notStarted }) { bar.insert(startAll, at: 0) }
 
         for card in flow.cards {
             if let hold = held.first(where: { $0.cardID == card.id }) {
@@ -150,6 +155,74 @@ nonisolated struct Abilities: Equatable {
                 details[card.id] = [start]
             }
             if !run.isRunning, acceptsInput(card) { runFrom.insert(card.id) }
+        }
+        // A session that isn't running is offered its way of starting, beside the line that says so.
+        for key in keys where typing[key]?.line == Typing.notRunning {
+            if key != Remote.orchestratorKey {
+                typing[key]?.action = details[key]?.first
+            } else if (run.sessions[key] ?? .notStarted) == .notStarted {
+                typing[key]?.action = startAll
+            }
+        }
+    }
+}
+
+/// What typing into one session comes to on this device right now: a bar to type in, or one line saying why
+/// there is none. Like the rest of `Abilities` it is a courtesy. The Mac checks every message and every key.
+nonisolated struct Typing: Equatable {
+    /// The message box and the keys are on show.
+    var hasBar = false
+    /// They are on show and nothing can leave them now: the Mac can't be reached. What was written is kept.
+    var isAway = false
+    /// Said by the message box: when what is sent will reach the session.
+    var note: String?
+    /// The session is waiting on the person in its terminal, which keys answer and a message doesn't.
+    var wantsKeys = false
+    /// Said in place of the bar.
+    var line: String?
+    /// Beside the line: what starts the session.
+    var action: PressButton?
+
+    static let howToTurnOn = "This device can only watch. To type here, turn on “Can control” for it on your Mac: Settings, then Remote."
+    static let notRunning = "This session isn't running."
+    static let earlier = "Go back to the latest run to type here."
+    static let away = "Not connected to your Mac right now. What you've written is kept here."
+    static let queued = "It's busy. Your message will be delivered when it's ready."
+    static let waiting = "It's waiting for an answer in its terminal. Switch to Keys to answer. A message is delivered after that."
+    static let waitingInPanel = "It's waiting for an answer in its terminal. Open the terminal full screen to answer with keys."
+
+    init() {}
+
+    init(state: SessionState, canControl: Bool, isConnected: Bool, isEarlier: Bool) {
+        let isLive = state != .notStarted && state != .exited
+        guard isConnected else {
+            // The link has dropped. A box that was there stays, so what is in it isn't lost from sight.
+            if canControl, isLive, !isEarlier {
+                hasBar = true
+                isAway = true
+                note = Self.away
+            }
+            return
+        }
+        guard canControl else {
+            line = Self.howToTurnOn
+            return
+        }
+        guard !isEarlier else {
+            line = Self.earlier
+            return
+        }
+        guard isLive else {
+            line = Self.notRunning
+            return
+        }
+        hasBar = true
+        switch state {
+        case .working, .starting: note = Self.queued
+        case .needsYou:
+            note = Self.waiting
+            wantsKeys = true
+        default: break
         }
     }
 }
@@ -179,6 +252,82 @@ nonisolated enum Ask: Hashable, Identifiable, Sendable {
 nonisolated struct ControlRefusal: Equatable, Sendable {
     var command: RemoteCommand
     var text: String
+}
+
+/// Where a person is typing for the sessions of the open flow: what they have written and not sent, by
+/// session, and the keys on their way. What is written is kept for as long as the app runs, so it is
+/// still there when a terminal is closed and opened again, and when the link drops and comes back.
+@Observable
+final class ComposerModel {
+    /// The two ways to type into a session, which share the bar under its terminal.
+    enum Mode: String {
+        /// A message, written whole and then sent. The Mac enters it when the session is ready for one.
+        case message
+        /// Keys, each sent as it is pressed: for answering a prompt in the terminal, or interrupting.
+        case keys
+    }
+
+    /// Which of the two the full-screen terminal's bar is showing.
+    var mode = Mode.message
+    /// In keys mode: the keyboard is wanted. It is the app's own key catcher that asks for it.
+    var wantsKeyboard = false
+    /// The key catcher has the keyboard: the one on screen, or a real one.
+    var isCatching = false
+    /// What has been written and not sent, by flow and session.
+    fileprivate(set) var drafts: [String: String] = [:]
+    /// The sessions with a message on its way to the Mac and not yet answered.
+    fileprivate(set) var sending: Set<String> = []
+    /// The last thing the Mac wouldn't type, by flow and session, until it is put away or the next thing works.
+    fileprivate(set) var refusals: [String: String] = [:]
+    /// Holds Ctrl between its press and the key it goes with.
+    fileprivate(set) var typer = KeyTyper()
+
+    /// Keys pressed and not yet sent, by flow and session, in the order they were pressed.
+    @ObservationIgnored fileprivate var pending: [String: [UInt8]] = [:]
+    /// What is sending each session's keys, one message at a time.
+    @ObservationIgnored fileprivate var pumps: [String: Task<Void, Never>] = [:]
+    /// How long keys are gathered before they are sent, so that quick typing goes as one message.
+    fileprivate static let gather: Duration = .milliseconds(12)
+    #if DEBUG
+    /// Where each bar is on screen, for a test that can't see it: "viewer" and "panel".
+    var debugFrames: [String: CGRect] = [:]
+    #endif
+
+    func draft(_ id: String?) -> String { id.flatMap { drafts[$0] } ?? "" }
+
+    func write(_ text: String, for id: String?) {
+        guard let id else { return }
+        drafts[id] = text.isEmpty ? nil : text
+    }
+
+    func dismissRefusal(_ id: String?) {
+        if let id { refusals[id] = nil }
+    }
+
+    func toggleControl() { typer.toggleControl() }
+
+    /// The next message's worth of a session's keys, taken off the front. Nil when there are none left.
+    fileprivate func next(_ id: String) -> Data? {
+        guard let bytes = pending[id], let first = TerminalKeys.chunks(bytes).first else {
+            pending[id] = nil
+            return nil
+        }
+        pending[id] = Array(bytes.dropFirst(first.count))
+        return first
+    }
+
+    /// Another Mac, or none: nothing written for the last one's sessions is this one's.
+    func clear() {
+        pumps.values.forEach { $0.cancel() }
+        pumps = [:]
+        pending = [:]
+        drafts = [:]
+        sending = []
+        refusals = [:]
+        typer = KeyTyper()
+        mode = .message
+        wantsKeyboard = false
+    }
 }
 
 /// What the controls are in the middle of: a question put to the person, and the last thing that was turned down.
@@ -266,4 +415,81 @@ extension RemoteClient {
         controls.refusal = refusal.map { ControlRefusal(command: command, text: $0) }
         return refusal
     }
+
+    // MARK: Typing
+
+    /// What a session of the open flow goes by in `composer`: its flow and its key. Nil with no flow open.
+    func composerID(_ key: String) -> String? { mirror.openFlowID.map { "\($0)/\(key)" } }
+
+    /// Opens a session's terminal full screen, with the message box under it, or with the keys.
+    func openTerminal(_ key: String, keys: Bool = false) {
+        composer.mode = keys ? .keys : .message
+        composer.wantsKeyboard = keys
+        terminals.expand(key)
+    }
+
+    /// Send was pressed: what is written for a session goes to the Mac as one message. Returns nil when the
+    /// Mac took it, and the box is emptied. Otherwise why not, and what was written stays.
+    @discardableResult
+    func sendMessage(to key: String) async -> String? {
+        guard let flowID = mirror.openFlowID, let id = composerID(key) else { return Self.notConnected }
+        guard !composer.sending.contains(id) else { return nil }
+        let text = composer.draft(id)
+        composer.sending.insert(id)
+        let refusal = await send(.prompt(flowID: flowID, key: key, text: text))
+        composer.sending.remove(id)
+        composer.refusals[id] = refusal
+        // More may have been written while the Mac was answering, and that is not thrown away.
+        if refusal == nil, composer.draft(id) == text { composer.drafts[id] = nil }
+        return refusal
+    }
+
+    /// Text came from the keyboard for a session's terminal. It is sent at once, as the keys that make it.
+    func type(_ text: String, into key: String) {
+        enqueue(composer.typer.type(text), for: key)
+    }
+
+    /// One of the keys beside the keyboard was pressed.
+    func press(_ named: TerminalKey, in key: String) {
+        enqueue(composer.typer.press(named), for: key)
+    }
+
+    /// Ctrl was held down with a character on a real keyboard. False if Ctrl does nothing to that character.
+    @discardableResult
+    func control(_ character: Character, in key: String) -> Bool {
+        guard let bytes = composer.typer.control(character) else { return false }
+        enqueue(bytes, for: key)
+        return true
+    }
+
+    /// Keys leave in the order they were pressed. Each session has one sender, which waits for the Mac's
+    /// answer to a message before it sends the next, so nothing can overtake. Keys pressed while it waits go
+    /// together in the next message. If the Mac refuses, the keys still waiting are dropped: typed late and
+    /// out of step they could answer a question the person never saw.
+    private func enqueue(_ bytes: [UInt8], for key: String) {
+        guard !bytes.isEmpty, let flowID = mirror.openFlowID, let id = composerID(key) else { return }
+        composer.pending[id, default: []] += bytes
+        guard composer.pumps[id] == nil else { return }
+        composer.pumps[id] = Task {
+            try? await Task.sleep(for: ComposerModel.gather)
+            while !Task.isCancelled, let data = composer.next(id) {
+                let refusal = await send(.keys(flowID: flowID, key: key, data: data))
+                if composer.refusals[id] != refusal { composer.refusals[id] = refusal }
+                if refusal != nil {
+                    composer.pending[id] = nil
+                    break
+                }
+            }
+            composer.pumps[id] = nil
+        }
+    }
+
+    #if DEBUG
+    /// Waits until every key pressed for a session has been sent and answered. Returns what the Mac refused, if it did.
+    func debugKeysSent(for key: String) async -> String? {
+        guard let id = composerID(key) else { return Self.notConnected }
+        await composer.pumps[id]?.value
+        return composer.refusals[id]
+    }
+    #endif
 }

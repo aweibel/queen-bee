@@ -46,6 +46,8 @@ final class TerminalRegistry {
     @ObservationIgnored private var terminals: [String: MirrorTerminal] = [:]
     /// Called when a terminal has come, gone or moved, so the canvas can put the right one in each card.
     @ObservationIgnored var onChange: (() -> Void)?
+    /// Called when the terminal that is open full screen has been fed more, so that view can keep up with it.
+    @ObservationIgnored var onExpandedOutput: (() -> Void)?
 
     func receive(_ event: TerminalEvent) {
         let terminal: MirrorTerminal
@@ -64,6 +66,7 @@ final class TerminalRegistry {
         terminals[event.key] = terminal
         if isNew || resized { sizes[event.key] = terminal.mount.natural }
         if isNew { onChange?() }
+        if event.key == expandedKey { onExpandedOutput?() }
         #if DEBUG
         noteChange()
         #endif

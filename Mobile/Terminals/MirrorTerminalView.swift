@@ -4,6 +4,9 @@ import UIKit
 /// A terminal that only shows. It is fed what a session on the Mac printed and gives nothing back: no
 /// keyboard, no taps, no answers to the questions the program asks its terminal. In the full-screen view a
 /// finger scrolls it back through earlier output, and that is all a finger does.
+///
+/// Typing into a session doesn't change any of that. What is typed never passes through here: the app's own
+/// `KeyCatcher` and `ComposerBar` take it, and `TerminalKeys` makes its bytes.
 final class MirrorTerminalView: TerminalView {
     /// Takes whatever the terminal would send to its program, and keeps none of it.
     private let sink = ReplySink()
@@ -32,6 +35,8 @@ final class MirrorTerminalView: TerminalView {
         showsHorizontalScrollIndicator = false
         scrollsToTop = false
         contentInsetAdjustmentBehavior = .never
+        // Dragged down through earlier output and on into the keyboard, the drag takes the keyboard with it.
+        keyboardDismissMode = .interactive
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
