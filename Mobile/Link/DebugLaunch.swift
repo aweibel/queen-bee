@@ -4,6 +4,7 @@ import Network
 import Observation
 import QueenBeeCore
 import QueenBeeLink
+import UIKit
 
 /// What a test tells the app as it launches it, and what the app tells the test back. None of this is in
 /// a release build. `scripts/e2e.py` is the test.
@@ -17,6 +18,9 @@ import QueenBeeLink
 ///   -qbShow update|pairAgain|localNetwork
 ///                                       show that full-screen message and nothing else
 ///   -qbOpen <flow name>                 once connected, open the flow with this name
+///   -qbSelect <card name>|link:<n>      once that flow is on the canvas, select the card, or its nth link
+///   -qbZoom <n>                         and set the canvas's zoom, where 1 is the Mac's own size
+///   -qbZoomCard <card name>             or zoom so that card fills the canvas
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -73,6 +77,25 @@ enum DebugLaunch {
         }
     }
 
+    private static var hasArranged = false
+
+    /// Sets up the canvas the way a test asked, once, when the first flow has been put on it.
+    static func arrange(_ canvas: CanvasView, model: CanvasModel, flow: Flow?) {
+        guard !hasArranged, let flow else { return }
+        hasArranged = true
+        if let name = defaults.string(forKey: "qbZoomCard"), let card = flow.cards.first(where: { $0.name == name }) {
+            canvas.zoom(toCard: card.id, animated: false)
+        } else if defaults.object(forKey: "qbZoom") != nil {
+            canvas.debugSetZoom(CGFloat(defaults.double(forKey: "qbZoom")))
+        }
+        guard let wanted = defaults.string(forKey: "qbSelect") else { return }
+        if wanted.hasPrefix("link:"), let n = Int(wanted.dropFirst(5)), flow.links.indices.contains(n) {
+            model.select(.link(flow.links[n].id))
+        } else if let card = flow.cards.first(where: { $0.name == wanted }) {
+            model.select(.card(card.id))
+        }
+    }
+
     static var savedDirect: Direct? {
         get {
             guard let host = defaults.string(forKey: "debugDirectHost"), let port = port("debugDirectPort") else { return nil }
@@ -118,6 +141,9 @@ enum DebugLaunch {
                 "flows": client.mirror.library?.projects.flatMap(\.flows).map(\.name) ?? [],
                 "hasKey": DeviceIdentity.key != nil,
             ]
+            // What the canvas is drawing, written again whenever it changes.
+            _ = client.canvas.shownRevision
+            fields["canvas"] = client.canvas.view?.debugState ?? NSNull()
         } onChange: {
             Task { @MainActor in report(client) }
         }

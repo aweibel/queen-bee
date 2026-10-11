@@ -7,35 +7,37 @@ struct CanvasArea: View {
     /// Brings the list of flows back when it is hidden, if it can be. Nil when the list is on show or one tap back.
     var showFlows: (() -> Void)?
 
+    /// The connection strip floats over the canvas's foot: its own height and the gap on either side of it.
+    private static let foot = Theme.Touch.target + Theme.Space.m * 2
+
     var body: some View {
-        ZStack {
-            Paper()
-            Group {
-                if let open = client.openFlow {
-                    // The canvas goes here. Until it is drawn, the flow's name stands in for it.
-                    Plate(title: open.flow.name, text: summary(of: open))
-                } else if client.mirror.openFlowID != nil {
-                    // The Mac has closed or deleted the flow that was open.
-                    Plate(symbol: "point.3.connected.trianglepath.dotted", title: "This flow has gone",
-                          text: "It isn't in Queen Bee on your Mac any more. Pick another from the list.") { flowsButton }
-                } else {
-                    Plate(symbol: "point.3.connected.trianglepath.dotted", title: "No flow open",
-                          text: "Pick a flow from the list to watch it here.") { flowsButton }
-                }
+        Group {
+            if let open = client.openFlow {
+                // The canvas draws its own paper, so the dots scroll and zoom with the cards as on the Mac.
+                CanvasRepresentable(client: client, foot: Self.foot)
+                    .ignoresSafeArea()
+                    .overlay {
+                        // Asked for and not sent yet.
+                        if client.mirror.snapshot == nil { Plate(title: open.flow.name, text: "Opening…") }
+                    }
+            } else if client.mirror.openFlowID != nil {
+                // The Mac has closed or deleted the flow that was open.
+                Plate(symbol: "point.3.connected.trianglepath.dotted", title: "This flow has gone",
+                      text: "It isn't in Queen Bee on your Mac any more. Pick another from the list.") { flowsButton }
+                    .background { Paper() }
+            } else {
+                Plate(symbol: "point.3.connected.trianglepath.dotted", title: "No flow open",
+                      text: "Pick a flow from the list to watch it here.") { flowsButton }
+                    .background { Paper() }
             }
-            .dimmedWhileAway(client.state == .connected)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .dimmedWhileAway(client.state == .connected)
     }
 
     @ViewBuilder private var flowsButton: some View {
         if let showFlows {
             Button("Show flows", action: showFlows).buttonStyle(.panel())
         }
-    }
-
-    private func summary(of open: RemoteClient.OpenFlow) -> String {
-        guard let flow = client.mirror.snapshot?.flow else { return "Opening…" }
-        let cards = flow.cards.count == 1 ? "1 card" : "\(flow.cards.count) cards"
-        return "\(open.project.name) · \(cards)"
     }
 }

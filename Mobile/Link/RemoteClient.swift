@@ -35,6 +35,8 @@ final class RemoteClient {
     /// True when iOS won't let the app look for the Mac.
     private(set) var localNetworkBlocked = false
     let terminals = TerminalRegistry()
+    /// What this device is looking at on the open flow's canvas, and what it has selected there.
+    let canvas = CanvasModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)
@@ -324,6 +326,7 @@ final class RemoteClient {
         mac = nil
         mirror = RemoteMirror()
         terminals.reset()
+        canvas.viewports = [:]
         macNotFound = false
         localNetworkBlocked = false
         pairingProblem = nil

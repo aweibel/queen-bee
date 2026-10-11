@@ -1,0 +1,180 @@
+import QueenBeeCore
+import UIKit
+
+/// Draws every link as a right-angled route under the cards, as the Mac's `LinkLayerView` does. It never
+/// takes a touch: the canvas asks it which link a point is on.
+///
+/// Links at rest are drawn in ink. A link the run has travelled is green and carries its pass count. A link
+/// a message is travelling right now gets orange dashes that march toward the card it is headed for.
+///
+/// The Mac paints all of them in one pass. Here each link has its own layers, so a change to one link
+/// touches only that link, and nothing has to hold a picture the size of the whole canvas.
+final class LinkLayerView: UIView {
+    /// One link's layers: its line, the dashes that march while it is live, its arrowhead and its count.
+    private final class Strand {
+        var look: LinkLook
+        let line = CAShapeLayer()
+        let marching = CAShapeLayer()
+        let arrow = CAShapeLayer()
+        var plate: UILabel?
+        var path: CGPath
+
+        init(look: LinkLook) {
+            self.look = look
+            path = LinkRouter.path(through: look.points)
+            for layer in [line, marching] {
+                layer.fillColor = nil
+                layer.lineCap = .butt
+                layer.lineJoin = .round
+            }
+            marching.lineWidth = 2
+        }
+    }
+
+    private var strands: [String: Strand] = [:]
+    private var order: [String] = []
+    /// How finely the layers are drawn, which the canvas raises when it is zoomed in so lines stay sharp.
+    var sharpness: CGFloat = 1 { didSet { if sharpness != oldValue { strands.values.forEach(sharpen) } } }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: LinkLayerView, _) in
+            view.strands.values.forEach { view.restyle($0) }
+        }
+        // The dashes stop when the app leaves the screen, and nothing restarts them by itself.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.strands.values.forEach { self?.march($0) } }
+        }
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    var count: Int { order.count }
+
+    /// Brings the layers in line with the links. A link whose look hasn't changed is left alone.
+    func update(_ links: [(id: String, look: LinkLook)]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let wanted = Set(links.map(\.id))
+        for (id, strand) in strands where !wanted.contains(id) {
+            [strand.line, strand.marching, strand.arrow].forEach { $0.removeFromSuperlayer() }
+            strand.plate?.removeFromSuperview()
+            strands[id] = nil
+        }
+        for (id, look) in links {
+            if let strand = strands[id] {
+                guard strand.look != look else { continue }
+                let rerouted = strand.look.points != look.points
+                strand.look = look
+                if rerouted { strand.path = LinkRouter.path(through: look.points) }
+                apply(strand, rerouted: rerouted)
+            } else {
+                let strand = Strand(look: look)
+                strands[id] = strand
+                [strand.line, strand.marching, strand.arrow].forEach(layer.addSublayer)
+                sharpen(strand)
+                apply(strand, rerouted: true)
+            }
+        }
+        order = links.map(\.id)
+        CATransaction.commit()
+    }
+
+    private func apply(_ strand: Strand, rerouted: Bool) {
+        let look = strand.look
+        if rerouted {
+            strand.line.path = strand.path
+            strand.marching.path = strand.path
+            // A small triangle pointing into the target's input dot.
+            if let tip = look.points.last {
+                let x = tip.x - CanvasGeometry.portRadius - 1
+                let head = CGMutablePath()
+                head.move(to: CGPoint(x: x, y: tip.y))
+                head.addLine(to: CGPoint(x: x - 8, y: tip.y - 4.5))
+                head.addLine(to: CGPoint(x: x - 8, y: tip.y + 4.5))
+                head.closeSubpath()
+                strand.arrow.path = head
+            }
+        }
+        // The marching layer draws a live link's line. Selected, the line is drawn as well.
+        strand.line.isHidden = look.isLive && !look.isSelected
+        strand.line.lineWidth = look.isSelected ? Theme.Stroke.selected : Theme.Stroke.link
+        strand.marching.isHidden = !look.isLive
+        restyle(strand)
+        march(strand)
+
+        // A pass count on a small green plate, so it reads against the line under it.
+        if look.count > 0 {
+            let plate = strand.plate ?? {
+                let label = UILabel()
+                label.font = Theme.mono(Theme.Size.caption, .medium)
+                label.textColor = Theme.passInk
+                label.backgroundColor = Theme.passTint
+                label.textAlignment = .center
+                label.layer.cornerRadius = Theme.Radius.badge
+                label.layer.masksToBounds = true
+                label.contentScaleFactor = traitCollection.displayScale * sharpness
+                addSubview(label)
+                strand.plate = label
+                return label
+            }()
+            plate.text = "\(look.count)"
+            let size = plate.intrinsicContentSize, point = LinkRouter.labelPoint(of: look.points)
+            plate.frame = CGRect(x: point.x - size.width / 2 - 4, y: point.y - size.height / 2 - 1, width: size.width + 8, height: size.height + 2)
+        } else {
+            strand.plate?.removeFromSuperview()
+            strand.plate = nil
+        }
+    }
+
+    private func restyle(_ strand: Strand) {
+        let look = strand.look
+        let color = (look.isSelected ? Theme.select : look.isLive ? Theme.live : look.count > 0 ? Theme.passInk : Theme.ink).cg(in: self)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        strand.line.strokeColor = color
+        strand.arrow.fillColor = color
+        strand.marching.strokeColor = Theme.live.cg(in: self)
+        CATransaction.commit()
+    }
+
+    private func march(_ strand: Strand) {
+        let key = "march"
+        if !strand.look.isLive || !Theme.Motion.isAllowed {
+            strand.marching.removeAnimation(forKey: key)
+            // With motion off, a live link is a solid orange line.
+            strand.marching.lineDashPattern = Theme.Motion.isAllowed ? [6, 6] : nil
+        } else if strand.marching.animation(forKey: key) == nil {
+            strand.marching.lineDashPattern = [6, 6]
+            let march = CABasicAnimation(keyPath: "lineDashPhase")
+            march.fromValue = 0
+            march.toValue = -12
+            march.duration = Theme.Motion.march
+            march.repeatCount = .infinity
+            strand.marching.add(march, forKey: key)
+        }
+    }
+
+    private func sharpen(_ strand: Strand) {
+        let scale = traitCollection.displayScale * sharpness
+        [strand.line, strand.marching, strand.arrow].forEach { $0.contentsScale = scale }
+        strand.plate?.contentScaleFactor = scale
+    }
+
+    /// The link whose route passes nearest `point`, and how far off it is. Of two as near, the one drawn last.
+    func nearestLink(to point: CGPoint) -> (id: String, distance: CGFloat)? {
+        var best: (id: String, distance: CGFloat)?
+        for id in order {
+            guard let points = strands[id]?.look.points, points.count > 1 else { continue }
+            for (a, b) in zip(points, points.dropFirst()) {
+                // How far the point is from this straight run of the route.
+                let run = CGPoint(x: b.x - a.x, y: b.y - a.y), length = run.x * run.x + run.y * run.y
+                let along = length > 0 ? min(max(((point.x - a.x) * run.x + (point.y - a.y) * run.y) / length, 0), 1) : 0
+                let distance = hypot(point.x - (a.x + run.x * along), point.y - (a.y + run.y * along))
+                if distance <= best?.distance ?? .infinity { best = (id, distance) }
+            }
+        }
+        return best
+    }
+}
