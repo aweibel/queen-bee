@@ -10,6 +10,11 @@
 //   reconnect        connect again, as a device does when it thinks the link has dropped
 //   silent           open a second connection and say nothing on it
 //   stranger         open a second connection and say hello as some other device
+//   {"id": 1, "do": "run", "flow": "<flow id>", ...}
+//                    send a command, as a device that may control the Mac does. "do" is the command's name.
+//                    The rest are whichever of "card", "hold", "key", "text" and "hex" (key presses, as
+//                    hexadecimal) that command takes. Nothing is checked here: the Mac has to do that.
+//                    The Mac's answer is printed as {"type": "answer", "id": 1, "refusal": null or its reason}.
 // It never prints a key.
 import Foundation
 import Network
@@ -153,8 +158,44 @@ Task {
     }
 }
 
+/// The command a line of JSON on standard input describes, or nil if it describes none.
+@Sendable func command(from fields: [String: Any]) -> RemoteCommand? {
+    func text(_ name: String) -> String { fields[name] as? String ?? "" }
+    let flow = text("flow")
+    switch fields["do"] as? String {
+    case "openOnMac": return .openOnMac(flowID: flow)
+    case "run": return .run(flowID: flow, command: fields["text"] as? String)
+    case "runFrom": return .runFrom(flowID: flow, cardID: text("card"), text: text("text"))
+    case "stop": return .stop(flowID: flow)
+    case "approve": return .approve(flowID: flow, holdID: text("hold"), text: text("text"))
+    case "reject": return .reject(flowID: flow, holdID: text("hold"), note: text("text"))
+    case "allowScript": return .allowScript(flowID: flow, holdID: text("hold"))
+    case "refuseScript": return .refuseScript(flowID: flow, holdID: text("hold"))
+    case "startSession": return .startSession(flowID: flow, cardID: text("card"))
+    case "prompt": return .prompt(flowID: flow, key: text("key"), text: text("text"))
+    case "keys":
+        let hex = Array(text("hex"))
+        let bytes = stride(from: 0, to: hex.count - 1, by: 2).compactMap { UInt8(String(hex[$0...$0 + 1]), radix: 16) }
+        return .keys(flowID: flow, key: text("key"), data: Data(bytes))
+    default: return nil
+    }
+}
+
 Thread.detachNewThread { [deviceID] in
     while let line = readLine() {
+        if line.hasPrefix("{") {
+            guard let fields = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  let id = fields["id"] as? Int, let command = command(from: fields) else {
+                say(["type": "unknown", "line": String(line.prefix(200))])
+                continue
+            }
+            Task {
+                do { try await shared.link.send(DeviceMessage.command(id: id, command: command)) } catch {
+                    say(["type": "command-failed", "id": id, "error": "\(error)"])
+                }
+            }
+            continue
+        }
         let words = line.split(separator: " ").map(String.init)
         switch words.first {
         case "open" where words.count == 2:
@@ -204,11 +245,13 @@ while true {
         try? await connection.send(DeviceMessage.open(flowID: shared.flowID))
     case .opened(let snapshot):
         say(["type": "opened", "name": snapshot.flow.name, "cards": snapshot.flow.cards.count,
+             "cardIDs": Dictionary(snapshot.flow.cards.map { ($0.name, $0.id) }) { first, _ in first },
              "sessions": snapshot.run.sessions.mapValues(\.rawValue)])
     case .flow(_, let revision, let flow):
         say(["type": "flow", "revision": revision, "efforts": flow.cards.map { $0.effort ?? "" }])
     case .run(let id, let state):
-        say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue)])
+        say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue),
+             "holds": state.holds.map { ["id": $0.id, "card": $0.cardID, "kind": $0.kind.rawValue, "needsAllow": $0.needsAllow] as [String: Any] }])
     case .log(_, let lines, let reset):
         say(["type": "log", "lines": lines.count, "reset": reset])
     case .messages(_, let link, let all):

@@ -256,7 +256,18 @@ ASK = flow("Ask", [
     card("end", "Out", 900, 40),
 ], [("Start", "out", "Asker", 1), ("Asker", "out", "Out", 1)])
 
-FLOWS = {"guard": GUARD, "pan": PAN, "fanout": FANOUT, "switch": SWITCH, "loop": LOOP, "exit": EXIT, "apifail": APIFAIL, "ask": ASK}
+# No agents, so a device can start, hold up and stop runs of it at the cost of nothing but its orchestrator.
+# The gates scenario has a flow of its own like it: a command allowed here stays allowed.
+DOORS = flow("Doors", [
+    card("start", "Start", 0, 0, command="hello from afar"),
+    card("script", "Shout", 312, 0, command="tr a-z A-Z"),
+    card("approval", "Check it", 624, 0, text="Is this loud enough?"),
+    card("end", "Done", 936, 0),
+    card("end", "Binned", 936, 192),
+], [("Start", "out", "Shout", 9), ("Shout", "pass", "Check it", 9), ("Check it", "approved", "Done", 9),
+    ("Check it", "rejected", "Binned", 9), ("Shout", "fail", "Binned", 9)])
+
+FLOWS = {"doors": DOORS, "guard": GUARD, "pan": PAN, "fanout": FANOUT, "switch": SWITCH, "loop": LOOP, "exit": EXIT, "apifail": APIFAIL, "ask": ASK}
 
 
 # ---- scenarios ----
@@ -362,6 +373,170 @@ class Device:
         self.proc.kill()
 
 
+def remote_control(app, device, device_id):
+    """What a device may do to the Mac: nothing until "Can control" is on for it, and then only what the Mac's
+    own buttons and keyboard do. The device has Guard open, with its agents idle."""
+    guard, doors = GUARD["id"], DOORS["id"]
+    alice = next(c["id"] for c in GUARD["cards"] if c["name"] == "Alice")
+    gate = next(c["id"] for c in DOORS["cards"] if c["name"] == "Check it")
+    sent = [0]
+
+    def ask(do, flow=doors, **fields):
+        """Sends one command and returns the Mac's answer to it."""
+        sent[0] += 1
+        n = sent[0]
+        device.tell(json.dumps(dict(id=n, do=do, flow=flow, **fields)))
+        return device.until(lambda m: m["type"] == "answer" and m["id"] == n, 30)
+
+    def done(answer):
+        return answer is not None and answer["refusal"] is None
+
+    def refused(answer, words):
+        return answer is not None and words in (answer["refusal"] or "")
+
+    def since(mark, test, timeout=20):
+        """A message that passes `test` among those read since `mark`, or the next one to come."""
+        return next((m for m in device.seen[mark:] if test(m)), None) or device.until(test, timeout)
+
+    def screen():
+        return "\n".join(app.op(guard, "terminal", card="Alice")["screen"])
+
+    def mac():
+        """Everything a command could change on the Mac."""
+        d, g = app.state(doors), app.state(guard)
+        return ({k: d[k] for k in ("isRunning", "log", "runs", "holds", "results", "sessions", "orchestrator", "marks")},
+                {k: g[k] for k in ("isRunning", "log", "runs", "sessions")}, app.op("app", "remote-state")["selected"])
+
+    every = [("openOnMac", {}), ("run", {}), ("run", {"text": "typed on the device"}), ("runFrom", {"card": gate, "text": "straight to the gate"}),
+             ("stop", {}), ("approve", {"hold": "none", "text": "yes"}), ("reject", {"hold": "none", "text": "no"}),
+             ("allowScript", {"hold": "none"}), ("refuseScript", {"hold": "none"}), ("startSession", {"flow": guard, "card": alice}),
+             ("prompt", {"flow": guard, "key": alice, "text": "Reply with exactly the word REFUSED and nothing else."}),
+             ("prompt", {"flow": guard, "key": "orchestrator", "text": "Reply with exactly the word REFUSED and nothing else."}),
+             ("keys", {"flow": guard, "key": alice, "hex": "zzqq".encode().hex()})]
+
+    check("pairing leaves a device able to watch and nothing more", app.op("app", "remote-state")["controlling"] == 0)
+    before = mac()
+    answers = [(do, ask(do, **fields)) for do, fields in every]
+    unrefused = [do for do, answer in answers if not refused(answer, "can only watch")]
+    check("a device that may only watch has every kind of command refused, and is told how to change that",
+          not unrefused and all("Can control" in a["refusal"] for _, a in answers), str(unrefused or answers[:2]))
+    time.sleep(3)
+    check("and nothing happens on the Mac", mac() == before and "zzqq" not in screen(),
+          str([(a, b) for a, b in zip(mac(), before) if a != b])[:600])
+
+    app.op("app", "remote-control", device=device_id, on=True)
+    told = device.until("control", 10)
+    check("turning “Can control” on tells a connected device at once", told is not None and told["canControl"] is True, str(device.seen[-3:]))
+    with open(os.path.join(app.support, "remote-devices.json")) as saved:
+        kept = [d["canControl"] for d in json.load(saved)["devices"]]
+    check("and it is kept, in the file the devices are saved in", app.op("app", "remote-state")["controlling"] == 1 and kept == [True], str(kept))
+
+    # Doors has never been on screen on the Mac, so none of its sessions have started.
+    device.tell(f"open {doors}")
+    opened = device.until(lambda m: m["type"] == "opened" and m["name"] == "Doors")
+    check("the device opens a flow whose sessions haven't started",
+          opened is not None and all(v == "notStarted" for v in opened["sessions"].values()) and opened["cardIDs"].get("Check it") == gate,
+          str(opened))
+    mark = len(device.seen)
+    check("it can ask the Mac to start them", done(ask("openOnMac")), str(device.seen[-3:]))
+    started = since(mark, lambda m: m["type"] == "run" and m["flow"] == doors
+                    and m["sessions"].get("orchestrator", "notStarted") != "notStarted", 60)
+    check("and they start", started is not None, str(device.seen[-4:]))
+    check("while the Mac goes on showing the flow it was showing", app.op("app", "remote-state")["selected"] == guard)
+
+    def hold_of(kind, mark):
+        """The id of the message held at a card of that kind, as the device is told of it."""
+        update = since(mark, lambda m: m["type"] == "run" and m["flow"] == doors and m["holds"] and m["holds"][0]["kind"] == kind)
+        return update and update["holds"][0]
+
+    mark = len(device.seen)
+    check("it can start a run", done(ask("run")), str(device.seen[-3:]))
+    script = hold_of("script", mark)
+    s = app.state(doors)
+    check("and the run starts on the Mac, and stops at the script's command as it would there",
+          s["isRunning"] and script is not None and script["needsAllow"], f"{s['isRunning']} {script}")
+    check("and the Mac's log says which device started it", "Run started from Test device" in s["log"], str(s["log"]))
+    check("a second run is refused in the Mac's words while one is going", refused(ask("run"), "already going"), str(device.seen[-2:]))
+    check("an approval can't be given to a script's command", refused(ask("approve", hold=script["id"], text="yes"), "no longer waiting"),
+          str(device.seen[-2:]))
+    mark = len(device.seen)
+    check("it can allow a script's command", done(ask("allowScript", hold=script["id"])), str(device.seen[-3:]))
+    approval = hold_of("approval", mark)
+    h = held(app, doors, "Check it")
+    check("and the command runs", approval is not None and h[0]["text"] == "HELLO FROM AFAR", f"{approval} {h}")
+    check("it can reject a held message with a note", done(ask("reject", hold=approval["id"], text="Too loud")), str(device.seen[-3:]))
+    s = app.wait(doors, lambda s: not s["isRunning"], 20, "the rejected run to end")
+    binned = s["results"].get("Binned", "")
+    check("and the note goes out ahead of the message", list(s["results"]) == ["Binned"] and binned.startswith("Too loud\n"), str(s["results"]))
+    check("an answer to a message that is no longer held is refused",
+          refused(ask("approve", hold=approval["id"], text="late"), "no longer waiting"), str(device.seen[-2:]))
+
+    mark = len(device.seen)
+    check("it can run the flow again", done(ask("run")), str(device.seen[-3:]))
+    approval = hold_of("approval", mark)
+    h = held(app, doors, "Check it")
+    check("a command allowed from a device stays allowed, as one allowed on the Mac does",
+          approval is not None and not h[0]["needsAllow"] and h[0]["card"] == "Check it", f"{approval} {h}")
+    check("it can approve a held message, edited", done(ask("approve", hold=approval["id"], text="EDITED FROM AFAR")), str(device.seen[-3:]))
+    s = app.wait(doors, lambda s: not s["isRunning"], 20, "the approved run to end")
+    check("and the edited message goes on", s["results"] == {"Done": "EDITED FROM AFAR"}, str(s["results"]))
+
+    check("it can start a run at a card", done(ask("runFrom", card=gate, text="straight to the gate")), str(device.seen[-3:]))
+    h = held(app, doors, "Check it")
+    check("and the message arrives there", h[0]["text"] == "straight to the gate", str(h))
+    check("it can stop a run", done(ask("stop")), str(device.seen[-3:]))
+    s = app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    check("and the run stops", not s["holds"] and s["runs"][-1]["outcome"] == "stopped", f"{s['holds']} {s['runs'][-1]}")
+    check("and the Mac's log says which device stopped it", "Stopped from Test device" in s["log"], str(s["log"][-4:]))
+    check("stopping when nothing runs is refused", refused(ask("stop"), "No run is going"), str(device.seen[-2:]))
+
+    was = app.state(guard)["sessions"]["Alice"]["lastReply"]
+    check("it can send an agent a message", done(ask("prompt", flow=guard, key=alice, text="Reply with exactly the word PINEAPPLE and nothing else.")),
+          str(device.seen[-3:]))
+    try:
+        s = app.wait(guard, lambda s: s["sessions"]["Alice"]["lastReply"] not in (None, was) and s["sessions"]["Alice"]["state"] == "idle",
+                     120, "Alice to answer the device")
+        check("and the agent replies", "PINEAPPLE" in s["sessions"]["Alice"]["lastReply"], s["sessions"]["Alice"]["lastReply"][:200])
+    except TimeoutError as e:
+        check("and the agent replies", False, str(e)[:300])
+    check("and the Mac's log says which device sent it", "Test device sent a message to Alice" in app.state(guard)["log"], str(app.state(guard)["log"][-4:]))
+
+    check("it can press keys in a session's terminal", done(ask("keys", flow=guard, key=alice, hex="qbkeys".encode().hex())), str(device.seen[-3:]))
+    deadline = time.time() + 10
+    while "qbkeys" not in screen() and time.time() < deadline:
+        time.sleep(0.3)
+    check("and they are typed there", "qbkeys" in screen(), screen()[-400:])
+    # Ctrl-U empties the line, so nothing typed here is ever sent to the agent.
+    ask("keys", flow=guard, key=alice, hex="15")
+    deadline = time.time() + 10
+    while "qbkeys" in screen() and time.time() < deadline:
+        time.sleep(0.3)
+    s = app.state(guard)["sessions"]["Alice"]
+    check("and a control key does what it does on the Mac", "qbkeys" not in screen() and s["state"] == "idle", f"{s['state']} {screen()[-300:]}")
+
+    # The orchestrator the device started may still be starting, and that would show as a change.
+    app.wait(doors, lambda s: s["orchestrator"]["state"] == "idle", 90, "Doors' orchestrator to be ready")
+    quiet = mac()
+    check("a message longer than a device may send is refused",
+          refused(ask("prompt", flow=guard, key=alice, text="a" * 16001), "too long"), str(device.seen[-1:])[:300])
+    check("and so are too many keys at once", refused(ask("keys", flow=guard, key=alice, hex="61" * 4097), "too much"), str(device.seen[-1:])[:300])
+    check("and a message that says nothing", refused(ask("prompt", flow=guard, key=alice, text="  "), "nothing to send"), str(device.seen[-1:]))
+    check("a command for a flow the Mac doesn't have is refused", refused(ask("stop", flow="tnowhere"), "no longer on your Mac"), str(device.seen[-1:]))
+    check("and for a card the flow doesn't have", refused(ask("startSession", card="nocard"), "no longer in the flow"), str(device.seen[-1:]))
+    check("and for a card that isn't an agent", refused(ask("startSession", card=gate), "Only an agent"), str(device.seen[-1:]))
+    check("and for a session that isn't running", refused(ask("prompt", key=gate, text="hello"), "isn't running")
+          and refused(ask("keys", key="nocard", hex="61"), "isn't running"), str(device.seen[-2:]))
+    check("and none of those does anything on the Mac", mac() == quiet, str([(a, b) for a, b in zip(mac(), quiet) if a != b])[:600])
+
+    app.op("app", "remote-control", device=device_id, on=False)
+    told = device.until("control", 10)
+    check("turning “Can control” off tells a connected device at once", told is not None and told["canControl"] is False, str(device.seen[-3:]))
+    check("and its next command is refused", refused(ask("run"), "can only watch"), str(device.seen[-2:]))
+    time.sleep(1)
+    check("and does nothing", mac() == quiet)
+    app.op(doors, "close")
+
+
 def scenario_remote(app):
     print("remote: a paired device gets the flow, its changes and its terminals, and nobody else gets anything", flush=True)
     fid = GUARD["id"]
@@ -372,7 +547,7 @@ def scenario_remote(app):
     offer = app.op("app", "remote-pair")
     check("pairing puts a one-time code on offer", str(offer.get("code", "")).startswith("queenbee-pair:1:"), str(offer.keys()))
 
-    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "150")
+    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "600")
     try:
         paired = device.until("paired")
         check("the device pairs", paired is not None, str(device.seen))
@@ -422,6 +597,8 @@ def scenario_remote(app):
         app.op(other, "close")
         device.tell(f"open {fid}")
         check("and can go back to the first flow", device.until(lambda m: m["type"] == "opened" and m["name"] == "Guard") is not None)
+
+        remote_control(app, device, paired["device"])
 
         again = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid)
         check("a used code pairs nothing", again.until(lambda m: m["type"] in ("pair-failed", "pair-refused"), 10) is not None, str(again.seen))
@@ -1770,7 +1947,7 @@ def main():
     project = tempfile.mkdtemp(prefix="qb-e2e-")
     # Guard is written first so it is the flow the app opens on, and the others wait their turn.
     for i, name in enumerate(["guard", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "inner", "subflow", "timed"]
-                             + [f"level{n}" for n in range(5)]):
+                             + [f"level{n}" for n in range(5)] + ["doors"]):
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 

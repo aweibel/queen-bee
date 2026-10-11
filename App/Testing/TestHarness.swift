@@ -64,10 +64,16 @@ enum TestHarness {
                     "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
                     "open": .array(host.sessions.compactMap(\.openFlowName).map(JSONValue.string)),
                     "received": .number(Double(host.sessions.reduce(0) { $0 + $1.received })),
+                    "controlling": .number(Double(host.devices.devices.filter(\.canControl).count)),
+                    "selected": AppServices.shared.selectedFlowID.map(JSONValue.string) ?? .null,
                     "problem": host.problem.map(JSONValue.string) ?? .null]
         case "remote-vault":
             // Makes keeping a key fail, the way a locked or broken Keychain would.
             KeyVault.failsWrites = payload["fails"]?.boolValue ?? false
+            return [:]
+        case "remote-control":
+            // The "Can control" switch in Settings.
+            host.setCanControl(payload["on"]?.boolValue ?? true, for: payload["device"]?.stringValue ?? "")
             return [:]
         case "remote-remove":
             host.remove(payload["device"]?.stringValue ?? "")
