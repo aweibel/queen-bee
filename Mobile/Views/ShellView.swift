@@ -60,7 +60,7 @@ struct ConnectionBar: View {
             }
             if ConnectionStatus(client) == .macNotFound {
                 Hairline()
-                Text(ConnectionStatus.macNotFoundHelp)
+                Text(ConnectionStatus.help(client))
                     .dsSans(Theme.Touch.caption + 1)
                     .foregroundStyle(Theme.inkSecondary.ui)
                     // The strip is as wide as what is in it, and this sentence on one line would be the whole screen.

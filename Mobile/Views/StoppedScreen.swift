@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// A full-screen message for when carrying on needs the person to do something. One thing to do, each time.
+/// A full-screen message for when carrying on needs the person to do something. One thing to do, each time,
+/// and where that may not be the way out, a quieter way to forget the Mac and start again.
 struct StoppedScreen: View {
     enum Reason: Equatable {
         /// The Mac no longer knows this device. The text is the Mac's.
@@ -13,9 +14,13 @@ struct StoppedScreen: View {
 
     let reason: Reason
     let perform: () -> Void
+    /// Forgets the Mac. Given when the message covers the settings, where that is otherwise done.
+    var forget: (() -> Void)?
+    @State private var asksToForget = false
 
-    init(_ reason: Reason, perform: @escaping () -> Void) {
+    init(_ reason: Reason, forget: (() -> Void)? = nil, perform: @escaping () -> Void) {
         self.reason = reason
+        self.forget = forget
         self.perform = perform
     }
 
@@ -38,6 +43,15 @@ struct StoppedScreen: View {
             Plate(symbol: words.symbol, title: words.title, text: words.text) {
                 Button(words.action, action: perform)
                     .buttonStyle(.panel(.filled, wide: true))
+                if let forget {
+                    Button("Forget this Mac") { asksToForget = true }
+                        .buttonStyle(.panel(.quiet))
+                        .confirmationDialog("Forget this Mac?", isPresented: $asksToForget, titleVisibility: .visible) {
+                            Button("Forget this Mac", role: .destructive, action: forget)
+                        } message: {
+                            Text("This device will have to be paired again before it can connect.")
+                        }
+                }
             }
         }
     }

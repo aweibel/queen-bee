@@ -76,8 +76,9 @@ struct FlowList: View {
     private func row(for flow: RemoteFlowSummary) -> some View {
         let isOpen = client.mirror.openFlowID == flow.id
         return Button {
-            // Asking for the flow already on show would blank it for a moment for nothing.
-            if !isOpen { client.open(flow.id) }
+            // Asking for the flow already on show would blank it for a moment for nothing. Unless it went from
+            // the Mac's list and has come back: the Mac stopped sending it then, and what is on show is old.
+            if !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) }
         } label: {
             HStack(spacing: Theme.Space.s) {
                 if flow.isSubflow {

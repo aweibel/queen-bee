@@ -27,6 +27,12 @@ final class MacBrowser {
     private(set) var isBlocked = false
 
     @ObservationIgnored private var browser: NWBrowser?
+    /// True between `start` and `stop`: the list of Macs is on screen.
+    @ObservationIgnored private var isWanted = false
+    /// Goes up with each browser made, so one that has been replaced can't speak for the new one.
+    @ObservationIgnored private var generation = 0
+    /// How long to leave it before looking again after the look failed, so a look that keeps failing doesn't spin.
+    private static let retry: Duration = .seconds(1)
 
     /// What iOS answers when the person has turned Local Network off for the app (kDNSServiceErr_PolicyDenied).
     private nonisolated static let policyDenied: Int32 = -65570
@@ -41,25 +47,62 @@ final class MacBrowser {
 
     /// Starts listing the Macs that are offering to pair. The list follows them as they come and go.
     func start() {
+        isWanted = true
         guard browser == nil else { return }
+        generation += 1
+        let mine = generation
         let browser = NWBrowser(for: .bonjour(type: Remote.pairingService, domain: nil), using: NWParameters())
         self.browser = browser
         // Both handlers run on the browser's queue, so what they find is carried over to the main actor.
         browser.stateUpdateHandler = { [weak self] state in
-            guard let blocked = Self.isBlocked(state) else { return }
-            Task { @MainActor in self?.isBlocked = blocked }
+            let blocked = Self.isBlocked(state)
+            let failed = if case .failed = state { true } else { false }
+            guard blocked != nil || failed else { return }
+            Task { @MainActor in
+                guard let self, self.generation == mine else { return }
+                if let blocked { self.isBlocked = blocked }
+                // A browser that has failed finds nothing more. Blocked, a new one would only fail the same way.
+                if failed, blocked != true { self.lookAgainSoon() }
+            }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let found = Self.macs(in: results)
-            Task { @MainActor in self?.macs = found }
+            Task { @MainActor in
+                guard let self, self.generation == mine else { return }
+                self.macs = found
+            }
         }
         browser.start(queue: DispatchQueue(label: "dev.queenbee.mobile.browser"))
     }
 
     func stop() {
+        isWanted = false
+        discard()
+        macs = []
+    }
+
+    /// Looks afresh, if the list is on screen. For when the app comes back to the front: the browser may have
+    /// died while it was away, or Local Network may have been turned on in Settings. The Macs already listed
+    /// stay until the new look says otherwise.
+    func restart() {
+        guard isWanted else { return }
+        discard()
+        start()
+    }
+
+    private func discard() {
         browser?.cancel()
         browser = nil
-        macs = []
+        generation += 1
+    }
+
+    private func lookAgainSoon() {
+        discard()
+        let mine = generation
+        Task {
+            try? await Task.sleep(for: Self.retry)
+            if isWanted, generation == mine { start() }
+        }
     }
 
     /// One row for each Mac, by name. A Mac reachable two ways (Wi-Fi and a cable, say) is found twice.
@@ -74,10 +117,11 @@ final class MacBrowser {
 
     /// Waits until the paired Mac's listener for this device shows up on the network, and returns where it is.
     /// Nil if the wait is cancelled. There is no time limit: a Mac that is asleep may be back in an hour.
-    nonisolated static func findListener(deviceID: String, macID: String) async -> ListenerSearch? {
+    /// `onAllowed` is called, on the browser's queue, when iOS has let the app look.
+    nonisolated static func findListener(deviceID: String, macID: String, onAllowed: @escaping @Sendable () -> Void) async -> ListenerSearch? {
         // The record is asked for along with the name, because it is what says whose listener each one is.
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Remote.service, domain: nil), using: NWParameters())
-        let search = Search(browser)
+        let search = Search(browser, onAllowed: onAllowed)
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 search.begin(continuation) { result in
@@ -96,8 +140,12 @@ final class MacBrowser {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<ListenerSearch?, Never>?
         private var isFinished = false
+        private let onAllowed: @Sendable () -> Void
 
-        init(_ browser: NWBrowser) { self.browser = browser }
+        init(_ browser: NWBrowser, onAllowed: @escaping @Sendable () -> Void) {
+            self.browser = browser
+            self.onAllowed = onAllowed
+        }
 
         func begin(_ continuation: CheckedContinuation<ListenerSearch?, Never>, isWanted: @escaping @Sendable (NWBrowser.Result) -> Bool) {
             let alreadyFinished = lock.withLock {
@@ -107,7 +155,11 @@ final class MacBrowser {
             // Cancelled before it began.
             guard !alreadyFinished else { continuation.resume(returning: nil); return }
             browser.stateUpdateHandler = { [weak self] state in
-                if MacBrowser.isBlocked(state) == true { self?.finish(.blocked) }
+                switch MacBrowser.isBlocked(state) {
+                case .some(true): self?.finish(.blocked)
+                case .some(false): self?.onAllowed()
+                case nil: break
+                }
                 if case .failed = state { self?.finish(.failed) }
             }
             browser.browseResultsChangedHandler = { [weak self] results, _ in

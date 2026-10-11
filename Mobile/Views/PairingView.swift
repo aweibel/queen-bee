@@ -95,6 +95,7 @@ private struct StepRow: View {
 
 /// The Macs showing a pairing code right now.
 private struct MacListScreen: View {
+    @Environment(\.scenePhase) private var scenePhase
     let browser: MacBrowser
     let choose: (FoundMac) -> Void
 
@@ -147,7 +148,11 @@ private struct MacListScreen: View {
         }
         .navigationTitle("Choose your Mac")
         .navigationBarTitleDisplayMode(.inline)
+        // Looked for only while this list is on screen: not under the code's screen, and not once paired.
         .onAppear { browser.start() }
+        .onDisappear { browser.stop() }
+        // The look can die while the app is away, and nothing else would start another.
+        .onChange(of: scenePhase) { if scenePhase == .active { browser.restart() } }
     }
 }
 
@@ -158,7 +163,13 @@ private struct CodeScreen: View {
 
     @State private var camera = AVCaptureDevice.authorizationStatus(for: .video)
     @State private var pastes = !CodeScanner.isSupported
+    /// The code the camera last tried, and when that try ended.
     @State private var scanned: PairingCode?
+    @State private var scanEnded: Date?
+    /// How long a code that didn't work is left alone while it is still in front of the camera.
+    private static let scanPause: TimeInterval = 4
+    /// True when the camera was allowed and then couldn't be used.
+    @State private var cameraFailed = false
     @State private var typed = ""
     @State private var typedProblem: String?
 
@@ -188,7 +199,10 @@ private struct CodeScreen: View {
                     .background(Theme.failTint.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
             }
             if !isPairing, CodeScanner.isSupported {
-                Button(pastes ? "Scan the code instead" : "Paste the code instead") { pastes.toggle() }
+                Button(pastes ? "Scan the code instead" : "Paste the code instead") {
+                    pastes.toggle()
+                    cameraFailed = false
+                }
                     .buttonStyle(.panel(.quiet))
                     .frame(maxWidth: .infinity)
             }
@@ -201,6 +215,7 @@ private struct CodeScreen: View {
                 camera = await AVCaptureDevice.requestAccess(for: .video) ? .authorized : .denied
             }
         }
+        .onChange(of: isPairing) { if !isPairing { scanEnded = .now } }
     }
 
     @ViewBuilder private var scan: some View {
@@ -211,10 +226,17 @@ private struct CodeScreen: View {
                 .foregroundStyle(Theme.ink.ui)
                 .frame(maxWidth: .infinity, alignment: .leading)
             CodeScanner { code in
-                // A code that didn't work is still in front of the camera, and would be tried again for ever.
-                guard code != scanned else { return }
+                guard !isPairing else { return }
+                // A code that didn't work is still in front of the camera, and is seen again many times a
+                // second. It is given a moment before another go, and not shut out for good: the code may be
+                // fine and the try have failed for some other reason.
+                if code == scanned, let scanEnded, Date.now.timeIntervalSince(scanEnded) < Self.scanPause { return }
                 scanned = code
+                scanEnded = nil
                 client.pair(with: code, at: mac.endpoint)
+            } unavailable: {
+                cameraFailed = true
+                pastes = true
             }
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
@@ -236,9 +258,11 @@ ProgressView().tint(Theme.inkSecondary.ui).frame(maxWidth: .infinity).padding(.v
 
     private var paste: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
-            Text(CodeScanner.isSupported
-                 ? "On your Mac, choose “Copy the code as text” under the code. Then paste it here."
-                 : "This device has no camera to scan with. On your Mac, choose “Copy the code as text” under the code. Then paste it here.")
+            Text(!CodeScanner.isSupported
+                 ? "This device has no camera to scan with. On your Mac, choose “Copy the code as text” under the code. Then paste it here."
+                 : cameraFailed
+                 ? "The camera can't be used right now. On your Mac, choose “Copy the code as text” under the code. Then paste it here."
+                 : "On your Mac, choose “Copy the code as text” under the code. Then paste it here.")
                 .dsSans()
                 .foregroundStyle(Theme.ink.ui)
             TextField("queenbee-pair:…", text: $typed, axis: .vertical)

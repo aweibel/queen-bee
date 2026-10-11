@@ -32,6 +32,8 @@ final class RemoteClient {
     /// True once the Mac has been looked for and not found, until it next lets the device in. Before that,
     /// not being connected is only "reconnecting".
     private(set) var macNotFound = false
+    /// True once the Mac has stayed not found for a while, which is when it is worth saying it may have removed this device.
+    private(set) var macLongNotFound = false
     /// True when iOS won't let the app look for the Mac.
     private(set) var localNetworkBlocked = false
     let terminals = TerminalRegistry()
@@ -49,6 +51,7 @@ final class RemoteClient {
     @ObservationIgnored private var hasStarted = false
     /// Goes up whenever connecting is stopped or started afresh, so a try from before knows it is no longer wanted.
     @ObservationIgnored private var turn = 0
+    @ObservationIgnored private var longNotFound: Task<Void, Never>?
     #if DEBUG
     /// Where a test said the Mac's listener for this device will be, to be kept once pairing has worked.
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
@@ -87,7 +90,7 @@ final class RemoteClient {
 
     // MARK: Starting and stopping
 
-    /// Runs once at launch. A second window asks too, and is told nothing new.
+    /// Runs once at launch. Asked again, it does nothing new.
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
@@ -119,6 +122,8 @@ final class RemoteClient {
         if active {
             // Worth another go: the Mac may have been updated while the app was away.
             if case .needsUpdate = state { state = .lookingForMac }
+            // And Local Network may have been turned on in Settings. The look that starts now says so again if not.
+            localNetworkBlocked = false
             connect()
         } else {
             stop()
@@ -157,6 +162,8 @@ final class RemoteClient {
     /// goes to the background, or when trying again can't help.
     private func keepConnected(_ mine: Int) async {
         var attempt = 0
+        /// How many times running the Mac's listener was found and didn't answer.
+        var misses = 0
         while turn == mine, let mac {
             guard let key = DeviceIdentity.key else {
                 // The Mac is remembered and its key has gone, as after restoring this device from a backup.
@@ -183,6 +190,9 @@ final class RemoteClient {
             case .tryAgain:
                 state = .lookingForMac
             }
+            // A Mac that is asleep can still be listed on the network, so finding it is not the same as it being there.
+            misses = endpoint != nil && !gotIn ? misses + 1 : 0
+            if LinkVerdict.isOutOfReach(afterMisses: misses) { noteMac(notFound: true) }
             // A connection that worked and then dropped starts the waits again from the shortest.
             if gotIn { attempt = 0 }
             try? await Task.sleep(for: .seconds(LinkVerdict.wait(beforeAttempt: attempt)))
@@ -197,10 +207,13 @@ final class RemoteClient {
         #endif
         let slow = Task {
             try? await Task.sleep(for: Self.lookLimit)
-            if !Task.isCancelled, turn == mine { macNotFound = true }
+            if !Task.isCancelled, turn == mine { noteMac(notFound: true) }
         }
         defer { slow.cancel() }
-        let search = await MacBrowser.findListener(deviceID: DeviceIdentity.deviceID, macID: mac.macID)
+        let search = await MacBrowser.findListener(deviceID: DeviceIdentity.deviceID, macID: mac.macID) {
+            // iOS let the app look, which is all "not blocked" means. The Mac itself may be asleep and never found.
+            Task { @MainActor in if self.turn == mine { self.localNetworkBlocked = false } }
+        }
         guard turn == mine else { return nil }
         switch search {
         case .found(let endpoint):
@@ -208,7 +221,7 @@ final class RemoteClient {
             return endpoint
         case .blocked:
             localNetworkBlocked = true
-            macNotFound = true
+            noteMac(notFound: true)
             return nil
         case .failed, nil:
             return nil
@@ -232,14 +245,14 @@ final class RemoteClient {
             while true {
                 let message = try await connection.receive(HostMessage.self)
                 guard turn == mine else { return (.tryAgain, gotIn) }
-                mirror.apply(message).forEach(terminals.receive)
+                take(message)
                 switch message {
                 case .refused(let text):
                     return (LinkVerdict.refused(text), gotIn)
                 case .welcome(let welcome):
                     gotIn = true
                     state = .connected
-                    macNotFound = false
+                    noteMac(notFound: false)
                     if welcome.macName != mac.macName, self.mac?.macID == mac.macID {
                         self.mac?.macName = welcome.macName
                         self.mac.map(DeviceIdentity.rename)
@@ -255,9 +268,31 @@ final class RemoteClient {
             let verdict = LinkVerdict.failed(error)
             #if DEBUG
             // With no browsing, nothing answering at the address is all "the Mac isn't there" can look like.
-            if DebugLaunch.savedDirect != nil, !gotIn, verdict == .tryAgain, turn == mine { macNotFound = true }
+            if DebugLaunch.savedDirect != nil, !gotIn, verdict == .tryAgain, turn == mine { noteMac(notFound: true) }
             #endif
             return (verdict, gotIn)
+        }
+    }
+
+    /// Takes one message from the Mac. Terminal output is most of what arrives, and it is handed to the terminals
+    /// without touching `mirror`: assigning to it, even with nothing changed, has everything drawn from it worked out again.
+    private func take(_ message: HostMessage) {
+        if case .terminal = message {
+            mirror.terminalEvent(in: message).map(terminals.receive)
+        } else {
+            mirror.apply(message).forEach(terminals.receive)
+        }
+    }
+
+    /// Says whether the Mac can't be found, and starts or stops the wait before saying it has been a long time.
+    private func noteMac(notFound: Bool) {
+        guard notFound != macNotFound else { return }
+        macNotFound = notFound
+        macLongNotFound = false
+        longNotFound?.cancel()
+        longNotFound = !notFound ? nil : Task {
+            try? await Task.sleep(for: .seconds(LinkVerdict.removedHintDelay))
+            if !Task.isCancelled { macLongNotFound = true }
         }
     }
 
@@ -328,7 +363,7 @@ final class RemoteClient {
         mac = DeviceIdentity.pairedMac
         mirror = RemoteMirror()
         terminals.reset()
-        macNotFound = false
+        noteMac(notFound: false)
         state = .lookingForMac
         connect()
     }
@@ -344,7 +379,7 @@ final class RemoteClient {
         mirror = RemoteMirror()
         terminals.reset()
         canvas.viewports = [:]
-        macNotFound = false
+        noteMac(notFound: false)
         localNetworkBlocked = false
         pairingProblem = nil
         state = .unpaired
@@ -353,14 +388,14 @@ final class RemoteClient {
     #if DEBUG
     /// Takes a message as if the Mac had just sent it, for a test that has no Mac. It goes the way a real one does.
     func debugTake(_ message: HostMessage) {
-        mirror.apply(message).forEach(terminals.receive)
+        take(message)
         if case .welcome = message { state = .connected }
     }
 
     /// As if the connection had dropped and the Mac had then been looked for and not found.
     func debugLoseMac() {
         state = .lookingForMac
-        macNotFound = true
+        noteMac(notFound: true)
     }
 
     /// A test launched the app with a pairing code: it starts from nothing and pairs by itself. True if it did.

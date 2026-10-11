@@ -37,7 +37,8 @@ struct RootView: View {
         #if DEBUG
         // A test asks for a message it has no honest way to bring about.
         if let stopped = DebugLaunch.stoppedScreen {
-            StoppedScreen(stopped) {}
+            // The one that covers the settings is shown as the app shows it, with the way to forget the Mac on it.
+            StoppedScreen(stopped, forget: DebugLaunch.show == "localNetwork" ? {} : nil) {}
         } else {
             content
         }
@@ -56,8 +57,9 @@ struct RootView: View {
             StoppedScreen(.update(text)) { client.tryAgain() }
         case .lookingForMac, .connecting, .connected:
             // Without the local network there is no Mac to find and nothing was ever shown, so say only that.
+            // It covers the app's own settings, so the way to forget the Mac is put on it.
             if client.localNetworkBlocked {
-                StoppedScreen(.localNetwork(client.mac?.macName ?? "your Mac")) { openSettings() }
+                StoppedScreen(.localNetwork(client.mac?.macName ?? "your Mac"), forget: { client.forget() }) { openSettings() }
             } else {
                 ShellView()
             }

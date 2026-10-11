@@ -339,7 +339,7 @@ final class RemoteHost {
             if TestHarness.isEnabled { testDevicePorts[id] = testPorts.device }
             #endif
             let name = String(request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-            // A device being paired again keeps working with its old key until it has been given the new one.
+            // A device being paired again goes back to its old key if it can't be given the new one.
             let before = devices.devices.first { $0.id == id }
             let oldKey = devices.key(for: id)
             guard let key = devices.add(id: id, name: name.isEmpty ? "Device" : name) else {
@@ -347,18 +347,24 @@ final class RemoteHost {
                 try await connection.send(PairReply.refused("Queen Bee couldn't save this device's key on the Mac."))
                 return
             }
+            // Whatever it had open used the old key, so it ends, and the listener starts again with the new one.
+            // Before the device is given the key, and not after: it connects the moment it has it, and a
+            // listener still on the old key would tell it that its new key was wrong.
+            stopListening(id)
+            if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
             do {
                 try await connection.send(PairReply.granted(PairGrant(key: key, deviceID: id, macID: devices.macID, macName: macName)))
             } catch {
-                // The device never got its new key. One that was paired before goes back to its old key, and its
-                // listener was never touched. A new one could never connect, and listing it would only mislead.
-                if let before, let oldKey, devices.restore(before, key: oldKey) { return }
+                // The device never got its new key. One that was paired before goes back to its old key, and is
+                // listened for with that again. A new one could never connect, and listing it would only mislead.
+                stopListening(id)
+                if let before, let oldKey, devices.restore(before, key: oldKey) {
+                    listen(for: before)
+                    return
+                }
                 remove(id)
                 return
             }
-            // Whatever it had open used the old key, so it ends, and the listener starts again with the new one.
-            stopListening(id)
-            if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
         } catch {}
     }
 }

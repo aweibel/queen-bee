@@ -29,6 +29,14 @@ enum ConnectionStatus: Equatable {
 
     /// What to check when the Mac can't be found, for anywhere there is room to say it.
     static let macNotFoundHelp = "Check that Queen Bee is open on your Mac and that both are on the same Wi-Fi."
+    /// Added once the Mac has been missing for a while. A Mac that removed this device while it was away can't
+    /// tell it so, and from here that looks the same as a Mac that isn't there.
+    static let removedHelp = "If you removed this device on your Mac, open Settings here, choose “Forget this Mac” and pair again."
+
+    /// What to say under "Mac not found".
+    @MainActor static func help(_ client: RemoteClient) -> String {
+        client.macLongNotFound ? "\(macNotFoundHelp) \(removedHelp)" : macNotFoundHelp
+    }
 }
 
 /// The connection, in a few words with a dot: green when connected, orange while trying, red when the Mac
@@ -52,7 +60,7 @@ struct ConnectionPill: View {
         }
         .animation(Theme.Motion.standard, value: status)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(status == .macNotFound ? "\(status.text). \(ConnectionStatus.macNotFoundHelp)" : status.text)
+        .accessibilityLabel(status == .macNotFound ? "\(status.text). \(ConnectionStatus.help(client))" : status.text)
     }
 
     private func dot(for status: ConnectionStatus) -> UIColor {
