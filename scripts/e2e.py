@@ -15,6 +15,7 @@ first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by 
 `terminals` is run only when named: it checks the iPad app's terminals against output made up inside the app,
 so it needs the Simulator and no Mac app or Claude Code session.
 `panels` is run only when named: it checks the iPad app's panels against a run made up inside the app, the same way.
+`typing` is run only when named: it checks the iPad app's message box and keys under a terminal, the same way.
 `controls` is run only when named: it checks the iPad app's run bar and buttons against a Mac made up inside the app,
 the same way.
 """
@@ -717,12 +718,19 @@ class Mobile:
             os.remove(self._state_file())
         except OSError:
             pass
+        for left in glob.glob(os.path.join(os.path.dirname(self._state_file()), "qb-wait-*")):
+            os.remove(left)
         started = simctl("launch", self.udid, self.id, *args)
         if started.returncode != 0:
             raise RuntimeError("the iPad app couldn't be launched: " + started.stderr.strip()[:300])
 
     def quit(self):
         simctl("terminate", self.udid, self.id)
+
+    def go(self, name):
+        """Lets the app past the step `wait:<name>` it was launched with."""
+        with open(os.path.join(os.path.dirname(self._state_file()), "qb-wait-" + name), "w"):
+            pass
 
     def state(self):
         try:
@@ -1068,6 +1076,99 @@ def scenario_mobile(app):
               shown(s, "Done").get("badges") == ["✓"] and shown(s, "Done").get("text") == "HELLO FROM THE START CARD"
               and shown(s, "Binned").get("badges") == [] and s["canvas"].get("passes") == {"l0": 1, "l1": 1, "l2": 1} and s["canvas"].get("live") == [],
               f"{shown(s, 'Done')} {s.get('canvas', {}).get('passes')}")
+
+        # Typing, to the one session this flow has: its orchestrator. A message first, then keys, then both
+        # again with control turned off. The app does each when the file it is waiting for appears.
+        app.wait(gid, lambda s: s["orchestrator"]["state"] == "idle", 120, "Gates' orchestrator to be ready")
+        # A moment, and asked again: anything the runs above left for it to be told has reached it by now.
+        time.sleep(3)
+        app.wait(gid, lambda s: s["orchestrator"]["state"] == "idle", 120, "Gates' orchestrator to be ready")
+        word, ask_for = "PINEAPPLE", "Reply with exactly the word made by joining PINE and APPLE, in capitals, and nothing else. Do not use any tools."
+
+        def composer(state):
+            return state.get("composer") or {}
+
+        def box(state):
+            return (composer(state).get("typing") or {}).get("orchestrator") or {}
+
+        def mac_screen():
+            return "\n".join(app.op(gid, "terminal", card="orchestrator")["screen"])
+
+        def device_screen(state):
+            return "\n".join(((state.get("terminals") or {}).get("orchestrator") or {}).get("screen", []))
+
+        def both_show(text, shown=True):
+            """Waits until the Mac's terminal and the device's copy of it both show the text, or both don't."""
+            deadline = time.time() + 20
+            while True:
+                real, here = text in mac_screen(), text in device_screen(mobile.state())
+                if (real == shown and here == shown) or time.time() > deadline:
+                    return real == shown and here == shown
+                time.sleep(0.4)
+
+        was = app.state(gid)["orchestrator"]["lastReply"]
+        mobile.launch("-qbOpen", "Gates", "-qbExpand", "orchestrator", "-qbDo",
+                      f"wait:a;say:orchestrator:{ask_for};wait:b;type:orchestrator:qbkeys;wait:c;key:orchestrator:ctrl-u;wait:d;say:orchestrator:Say BANANA;type:orchestrator:qbnope")
+        s = mobile.wait(lambda s: s.get("expanded") == "orchestrator" and "viewer" in composer(s).get("bars", {}) and box(s).get("bar"), 40,
+                        "the orchestrator's terminal to open with its message box")
+        check("with control on, the orchestrator's terminal opens with a message box under it",
+              box(s).get("bar") is True and composer(s).get("mode") == "message" and composer(s).get("commands") == 0, str(composer(s)))
+        mobile.shot("mobile-8a-message-box")
+        heard = app.op("app", "remote-state").get("received")
+        dropped = ((s.get("terminals") or {}).get("orchestrator") or {}).get("droppedReplies", 0)
+        mobile.go("a")
+        s = mobile.wait(lambda s: len(did(s)) >= 2, 30, "the Mac to take the message")
+        check("a message sent from the device is taken by the Mac, and the box is emptied", did(s)[-1:] == [(f"say:orchestrator:{ask_for}", None)]
+              and composer(s).get("drafts") == {}, f"{did(s)} {composer(s).get('drafts')}")
+        try:
+            real = app.wait(gid, lambda s: s["orchestrator"]["lastReply"] not in (None, was) and s["orchestrator"]["state"] == "idle",
+                            180, "the orchestrator to answer the device")
+            reply = real["orchestrator"]["lastReply"]
+            check("and the orchestrator replies to it", word in reply, reply[:200])
+        except TimeoutError as e:
+            reply = was
+            check("and the orchestrator replies to it", False, str(e)[:300])
+        check("the reply shows in the device's terminal, as in the Mac's", both_show(word), device_screen(mobile.state())[-300:])
+        check("and the Mac's log says which device sent the message", f"{name} sent a message to the orchestrator" in app.state(gid)["log"], str(app.state(gid)["log"][-4:]))
+        mobile.shot("mobile-8b-orchestrator-replied")
+        mobile.go("b")
+        check("keys typed on the device are typed in the Mac's terminal", both_show("qbkeys"), mac_screen()[-300:])
+        mobile.go("c")
+        # Ctrl-U empties the line, so nothing typed here is ever sent to the orchestrator.
+        check("and Ctrl-U from the device clears them, as it does on the Mac", both_show("qbkeys", shown=False), mac_screen()[-300:])
+        s = mobile.wait(lambda s: len(did(s)) >= 6, 20, "the keys to be answered")
+        now = app.state(gid)["orchestrator"]
+        check("with nothing sent to the orchestrator by them", now["lastReply"] == reply and now["state"] == "idle", f"{now['state']} {str(now['lastReply'])[:80]}")
+        sent = composer(s).get("sent", [])
+        check("what left the device was the message and the two lots of keys, as the bytes they make",
+              sent == [f"prompt:orchestrator:{len(ask_for)}", "keys:orchestrator:" + "qbkeys".encode().hex(), "keys:orchestrator:15"], str(sent))
+        after = app.op("app", "remote-state").get("received")
+        check("and the Mac heard exactly those three commands from it, and nothing else", after - heard == 3 and composer(s).get("commands") == 3,
+              f"{heard} messages before, {after} after; the app sent {composer(s).get('commands')} commands")
+        every = s.get("terminals") or {}
+        now_dropped = (every.get("orchestrator") or {}).get("droppedReplies", 0)
+        # Claude Code asks its terminal most of its questions as it starts, so the count may not move while a
+        # short message is typed. What matters is that answers were made, none was sent, and none could be.
+        check("the terminal's own answers were dropped, before the typing and through it, and no terminal had the keyboard",
+              now_dropped > 0 and now_dropped >= dropped and not any(t["isFirstResponder"] for t in every.values()), f"{dropped} before, {now_dropped} after")
+        print(f"        answers dropped by the orchestrator's terminal: {dropped} before typing, {now_dropped} after", flush=True)
+
+        allow(False)
+        s = mobile.wait(lambda s: box(s).get("bar") is False, 15, "the app to hear it may no longer control the Mac")
+        check("with control turned off, the message box goes and a line says how to get it back",
+              box(s).get("bar") is False and "Can control" in (box(s).get("line") or ""), str(box(s)))
+        mobile.shot("mobile-8c-cannot-control")
+        before, heard = mac(), app.op("app", "remote-state").get("received")
+        mobile.go("d")
+        s = mobile.wait(lambda s: len(did(s)) >= 9, 30, "the Mac to refuse the message and the keys")
+        check("typed anyway, the message and the keys are both refused", [r is not None and "can only watch" in r for _, r in did(s)[-2:]] == [True, True], str(did(s)[-2:]))
+        time.sleep(3)
+        now = app.state(gid)["orchestrator"]
+        check("and nothing is typed on the Mac", mac() == before and "qbnope" not in mac_screen() and "BANANA" not in mac_screen()
+              and now["lastReply"] == reply and now["state"] == "idle", f"{[k for k in before if mac()[k] != before[k]]} {mac_screen()[-200:]}")
+        check("the message that was refused is still in its box", composer(s).get("drafts") == {"orchestrator": len("Say BANANA")}, str(composer(s).get("drafts")))
+        allow(True)
+        mobile.wait(lambda s: controls(s).get("canAct"), 15, "the app to hear it may control the Mac again")
 
         # A second run that ends another way, so there is an earlier one to look back at.
         app.op(gid, "run")
@@ -1494,8 +1595,9 @@ def scenario_controls():
         check("a script waiting to be allowed has the Mac's two answers on its card, in the banner and in its details",
               c.get("cards") == {"Style guide": script} and c.get("banner") == {"Style guide": script} and c.get("details") == script
               and drawn(s, "Style guide") == [(t, True) for t in script], f"{c} {drawn(s, 'Style guide')}")
-        check("an agent waiting in its terminal is still answered on the Mac, and the banner says so",
-              "terminal" in (c.get("answerLine") or "") and drawn(s, "Writer") == [], str(c.get("answerLine")))
+        check("an agent waiting in its terminal has no buttons on its card: it is answered in its terminal",
+              c.get("answerLine") is None and drawn(s, "Writer") == [] and (s.get("composer") or {}).get("openTerminal") == ["Writer"],
+              f"{c.get('answerLine')} {(s.get('composer') or {}).get('openTerminal')}")
         both("controls-03-script-waiting")
         s = play(1, *on, "-qbPress", "allow:Style guide", also=lambda s: controls(s).get("asking"))
         check("Allow shows the whole command and asks before anything is sent",
@@ -1591,6 +1693,208 @@ def scenario_controls():
         both("controls-13-start-agents")
         s = play(6, *on, "-qbDo", "startAgents", steps=1, also=lambda s: controls(s).get("bar") == ["Run"])
         check("asked to, the Mac starts them", did(s) == [("startAgents", None)] and controls(s).get("bar") == ["Run"] and controls(s).get("cards") == {}, str(controls(s)))
+    finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_typing():
+    print("typing: the iPad app's message box and keys under a terminal, with a Mac made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    # What `DebugCannedRun` in the app plays: at stage 1 the orchestrator is idle and Writer is waiting in its
+    # terminal, at 4 Writer is working, at 5 its session has ended. The made-up Mac prints back what is typed.
+    on = ("-qbControl", "1")
+    writer, orchestrator = "writer01", "orchestrator"
+    not_running, watch_only = "That session isn't running.", "can only watch"
+
+    def composer(state):
+        return state.get("composer") or {}
+
+    def typing(state, name):
+        return (composer(state).get("typing") or {}).get(name) or {}
+
+    def did(state):
+        return [(d["step"], d["refusal"]) for d in (state.get("controls") or {}).get("done", [])]
+
+    def text(state, key):
+        return "\n".join(((state.get("terminals") or {}).get(key) or {}).get("screen", []))
+
+    def play(stage, *args, also=lambda s: True, steps=0):
+        """Plays the made-up run to a stage, and waits for that many of the steps it was told to do."""
+        mobile.launch("-qbCannedRun", str(stage), *args)
+        return mobile.wait(lambda s: s.get("cannedStage") == stage and len((s.get("canvas") or {}).get("cards", [])) == 8
+                           and len(did(s)) >= steps and also(s), 40, f"stage {stage} of the made-up run")
+
+    def open_in(key, bar="viewer"):
+        """True once that session's terminal is full screen with something under it."""
+        return lambda s: s.get("expanded") == key and bar in composer(s).get("bars", {})
+
+    def both(name):
+        """The same screen in light and in dark."""
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    def under(state, key):
+        """Whether the bar is under the terminal and reaches the foot of the screen, or the top of the keyboard."""
+        c = composer(state)
+        bar, shown = c.get("bars", {}).get("viewer") or {}, ((state.get("terminals") or {}).get(key) or {})
+        foot = (c.get("keyboard") or {}).get("y") or c.get("screen", {}).get("height", 0)
+        return bool(bar) and bar["height"] >= 44 and abs(bar["y"] + bar["height"] - foot) <= 30 and shown.get("onScreen", {}).get("y", 1e9) < bar["y"]
+
+    try:
+        s = play(1, *on, "-qbExpand", "orchestrator", also=open_in(orchestrator))
+        c = composer(s)
+        check("allowed to control, a running session's terminal has a bar under it, with the message box first",
+              typing(s, "orchestrator").get("bar") is True and c.get("mode") == "message" and c.get("drafts") == {} and typing(s, "orchestrator").get("line") is None, str(c))
+        check("the bar is under the terminal, at the foot of the screen", under(s, orchestrator), f"{c.get('bars')} {c.get('keyboard')} {c.get('screen')}")
+        check("nothing has the keyboard until it is asked for", c.get("catching") is False and c.get("wantsKeyboard") is False
+              and not any(t["isFirstResponder"] for t in (s.get("terminals") or {}).values()), str(c))
+        check("an idle session's box says nothing about waiting", typing(s, "orchestrator").get("note") is None, str(typing(s, "orchestrator")))
+        check("a session waiting in its terminal says keys answer it, and one that is busy that the message will wait",
+              typing(s, "Writer").get("wantsKeys") is True and "Keys" in (typing(s, "Writer").get("note") or ""), str(typing(s, "Writer")))
+        both("typing-01-message-box-empty")
+
+        lines = ["Please check the note again.", "Keep it under 100 words.", "Then tell me what you changed."]
+        s = play(1, *on, "-qbExpand", "orchestrator", "-qbDo", "draft:orchestrator:" + "\\n".join(lines), steps=1, also=open_in(orchestrator))
+        check("what is written is kept as the session's draft, and nothing is sent", composer(s).get("drafts") == {"orchestrator": len("\n".join(lines))} and composer(s).get("sent") == []
+              and composer(s).get("commands") == 0, str(composer(s)))
+        check("the bar grows with it and stays under the terminal", under(s, orchestrator) and composer(s)["bars"]["viewer"]["height"] > 130, str(composer(s).get("bars")))
+        both("typing-02-message-box-draft")
+
+        def dropped(state):
+            return ((state.get("terminals") or {}).get(orchestrator) or {}).get("droppedReplies", 0)
+
+        s = play(1, *on, "-qbExpand", "orchestrator", "-qbDo", "wait:a;say:orchestrator:Hello from the iPad", also=open_in(orchestrator))
+        before = dropped(s)
+        mobile.go("a")
+        s = mobile.wait(lambda s: len(did(s)) >= 2 and "Hello from the iPad" in text(s, orchestrator) and dropped(s) > before, 20, "the message to be sent and printed back")
+        check("Send sends the draft as one message, and the box is emptied", did(s)[1:] == [("say:orchestrator:Hello from the iPad", None)]
+              and composer(s).get("sent") == ["prompt:orchestrator:19"] and composer(s).get("drafts") == {} and composer(s).get("refusals") == {}, str(composer(s)))
+        check("and nothing else is sent", composer(s).get("commands") == 1 and composer(s).get("waiting") == [], str(composer(s)))
+        check("what the session prints back shows in its terminal", "> Hello from the iPad" in text(s, orchestrator), text(s, orchestrator)[-200:])
+        check("the terminal answered the question the program asked as it printed, and the answer went nowhere",
+              dropped(s) > before and composer(s).get("commands") == 1 and not any(t["isFirstResponder"] for t in (s.get("terminals") or {}).values()),
+              f"{before} answers dropped before, {dropped(s)} after; {composer(s).get('commands')} commands sent")
+        mobile.shot("typing-03-message-sent")
+
+        s = play(1, *on, "-qbStale", "1", "-qbExpand", "orchestrator", "-qbDo", "say:orchestrator:Are you there?", steps=1, also=open_in(orchestrator))
+        check("a message the Mac refuses stays in the box, with the Mac's words", did(s) == [("say:orchestrator:Are you there?", not_running)]
+              and composer(s).get("drafts") == {"orchestrator": 14} and composer(s).get("refusals") == {"orchestrator": not_running}, str(composer(s)))
+        check("the bar is still under the terminal with the refusal in it", under(s, orchestrator), str(composer(s).get("bars")))
+        both("typing-04-refusal")
+
+        s = play(1, *on, "-qbExpand", "orchestrator", "-qbDo", "say:orchestrator:@16001", steps=1, also=open_in(orchestrator))
+        check("a message over the limit is refused on the device, and never sent", "too long" in (did(s)[0][1] or "") and composer(s).get("sent") == []
+              and composer(s).get("commands") == 0 and composer(s).get("drafts") == {"orchestrator": 16001}, str(composer(s))[:400])
+        mobile.shot("typing-05-over-the-limit")
+        s = play(1, *on, "-qbDo", "say:orchestrator:@16000", steps=1)
+        check("one at the limit is sent", did(s)[0][1] is None and composer(s).get("sent") == ["prompt:orchestrator:16000"], str(composer(s))[:300])
+        s = play(1, *on, "-qbDo", "say:orchestrator:  ", steps=1)
+        check("and one that says nothing is not", "nothing to send" in (did(s)[0][1] or "") and composer(s).get("commands") == 0, str(did(s)))
+
+        s = play(1, *on, "-qbDo", "draft:orchestrator:one;draft:Writer:three;open:Writer:message;close;open:orchestrator:message;away;pause", steps=5,
+                 also=lambda s: typing(s, "orchestrator").get("away"))
+        check("each session keeps its own draft, through closing its terminal and opening another",
+              composer(s).get("drafts") == {"orchestrator": 3, "Writer": 5} and s.get("expanded") == orchestrator, str(composer(s)))
+        check("and through losing the Mac: the box stays, and says it can't send now",
+              typing(s, "orchestrator").get("bar") is True and typing(s, "orchestrator").get("away") is True
+              and "kept" in (typing(s, "orchestrator").get("note") or ""), str(typing(s, "orchestrator")))
+        mobile.shot("typing-06-away-draft-kept")
+
+        keys = "type:Writer:1;key:Writer:ctrl;type:Writer:c;key:Writer:up;key:Writer:backtab;key:Writer:enter;type:Writer:é;key:Writer:ctrl-u;key:Writer:esc;key:Writer:backspace"
+        s = play(1, *on, "-qbExpand", "Writer", "-qbKeys", "1", "-qbDo", keys, steps=10, also=open_in(writer))
+        c = composer(s)
+        check("opened with the keys out, the bar is in keys mode", c.get("mode") == "keys" and typing(s, "Writer").get("bar") is True, str(c))
+        check("each key is sent at once as the bytes it makes: 1, Ctrl-C, up, Shift-Tab, Enter, é, Ctrl-U, Esc, Backspace",
+              c.get("sent") == ["keys:Writer:" + h for h in ("31", "03", "1b5b41", "1b5b5a", "0d", "c3a9", "15", "1b", "7f")], str(c.get("sent")))
+        check("and nothing else is", c.get("commands") == 9 and all(r is None for _, r in did(s)), f"{c.get('commands')} {did(s)}")
+        check("the Ctrl button is let go by the key it went with", c.get("controlHeld") is False, str(c.get("controlHeld")))
+        check("the app's own key catcher has the keyboard, and no terminal does", c.get("catching") is True
+              and not any(t["isFirstResponder"] for t in (s.get("terminals") or {}).values()), str(c.get("catching")))
+        check("the bar is under the terminal, above the keyboard if one is up", under(s, writer), f"{c.get('bars')} {c.get('keyboard')} {c.get('screen')}")
+        check("what was typed shows in the terminal", "1é" in text(s, writer), text(s, writer)[-120:])
+        print(f"        keyboard on screen: {c.get('keyboard')}; bar: {c.get('bars', {}).get('viewer')}; screen: {c.get('screen')}", flush=True)
+        both("typing-07-keys")
+        s = play(1, *on, "-qbExpand", "Writer", "-qbKeys", "1", "-qbDo", "key:Writer:ctrl", steps=1, also=open_in(writer))
+        check("Ctrl waits for its letter, and sends nothing by itself", composer(s).get("controlHeld") is True and composer(s).get("commands") == 0, str(composer(s)))
+        mobile.shot("typing-08-ctrl-held")
+
+        s = play(1, *on, "-qbDo", "burst:Writer:quick brown", steps=1)
+        check("keys pressed quickly go together, in the order they were pressed",
+              composer(s).get("sent") == ["keys:Writer:" + "quick brown".encode().hex()], str(composer(s).get("sent")))
+        s = play(1, *on, "-qbDo", "type:Writer:@5000", steps=1)
+        check("more than fits one message is cut into messages that each fit", composer(s).get("sent") == ["keys:Writer:4096 bytes", "keys:Writer:904 bytes"]
+              and did(s)[0][1] is None, str(composer(s).get("sent")))
+        s = play(1, *on, "-qbStale", "1", "-qbExpand", "Writer", "-qbKeys", "1", "-qbDo", "type:Writer:@5000;key:Writer:enter", steps=2, also=open_in(writer))
+        check("a refusal stops the keys that were waiting, and the Mac's words show once",
+              composer(s).get("sent") == ["keys:Writer:4096 bytes", "keys:Writer:0d"] and [r for _, r in did(s)] == [not_running, not_running]
+              and composer(s).get("refusals") == {"Writer": not_running}, str(composer(s)))
+        mobile.shot("typing-09-keys-refused")
+
+        s = play(1, *on, "-qbSelect", "Writer")
+        c = (s.get("controls") or {})
+        check("an agent waiting in its terminal is offered “Open its terminal”, and no longer sent to the Mac",
+              composer(s).get("openTerminal") == ["Writer"] and c.get("answerLine") is None, f"{composer(s).get('openTerminal')} {c.get('answerLine')}")
+        both("typing-10-open-its-terminal")
+        s = play(1, *on, "-qbDo", "openWaiting:Writer", steps=1, also=open_in(writer))
+        check("which opens it full screen in keys mode", s.get("expanded") == writer and composer(s).get("mode") == "keys" and composer(s).get("wantsKeyboard") is True,
+              f"{s.get('expanded')} {composer(s)}")
+        s = play(1, *on, "-qbDo", "openWaiting:Writer;close;open:orchestrator:message", steps=3, also=open_in(orchestrator))
+        check("a terminal opened the usual way after that is back at the message box", composer(s).get("mode") == "message" and composer(s).get("wantsKeyboard") is False,
+              str(composer(s)))
+
+        s = play(1, *on, "-qbShow", "orchestrator", also=lambda s: "panel" in composer(s).get("bars", {}))
+        panel = composer(s)["bars"].get("panel") or {}
+        check("the orchestrator's panel has a message box of its own, beside the canvas", panel.get("height", 0) >= 44 and s.get("expanded") is None
+              and panel.get("x", 0) > composer(s)["screen"]["width"] / 2, str(composer(s).get("bars")))
+        both("typing-11-orchestrator-panel")
+        s = play(1, *on, "-qbShow", "orchestrator", "-qbDo", "say:orchestrator:From the panel", steps=1, also=lambda s: "From the panel" in text(s, orchestrator))
+        check("and a message sent from there reaches the orchestrator", did(s)[0][1] is None and composer(s).get("sent") == ["prompt:orchestrator:14"], str(composer(s)))
+        check("the keyboard never comes from the canvas", composer(s).get("catching") is False, str(composer(s).get("catching")))
+
+        s = play(4, *on, "-qbExpand", "Writer", also=open_in(writer))
+        check("a session that is working says the message will be delivered when it is ready",
+              typing(s, "Writer").get("bar") is True and "delivered when" in (typing(s, "Writer").get("note") or ""), str(typing(s, "Writer")))
+        mobile.shot("typing-12-working")
+
+        s = play(1, "-qbExpand", "orchestrator", also=open_in(orchestrator))
+        t = typing(s, "orchestrator")
+        check("a device that may only watch has no bar, and one line saying how to turn typing on",
+              t.get("bar") is False and "Can control" in (t.get("line") or "") and t.get("action") is None and composer(s)["bars"]["viewer"]["height"] < 110, str(t))
+        both("typing-13-cannot-control")
+        s = play(1, "-qbDo", "say:orchestrator:Let me in;type:Writer:y", steps=2)
+        check("typed anyway, the Mac refuses the message and the key, and the message is kept",
+              all(watch_only in (r or "") for _, r in did(s)) and len(did(s)) == 2 and composer(s).get("drafts") == {"orchestrator": 9}, str(did(s)))
+        s = play(1, "-qbShow", "orchestrator", also=lambda s: "panel" in composer(s).get("bars", {}))
+        check("and the panel's box is gone too, with the same line", typing(s, "orchestrator").get("bar") is False, str(typing(s, "orchestrator")))
+        mobile.shot("typing-14-panel-cannot-control")
+
+        s = play(5, *on, "-qbExpand", "Writer", also=open_in(writer))
+        t = typing(s, "Writer")
+        check("a session that has ended has no bar: one line says so, with the way to start it again",
+              t.get("bar") is False and t.get("line") == "This session isn't running." and t.get("action") == "Restart agent", str(t))
+        both("typing-15-not-running")
+        s = play(5, "-qbExpand", "Writer", also=open_in(writer))
+        check("and no way to start it on a device that may only watch", typing(s, "Writer").get("action") is None and "Can control" in (typing(s, "Writer").get("line") or ""),
+              str(typing(s, "Writer")))
+        s = play(5, *on, "-qbDo", "say:Writer:Wake up;type:Writer:y", steps=2)
+        check("typed anyway, both are refused in the Mac's words", [r for _, r in did(s)] == [not_running, not_running], str(did(s)))
+        s = play(3, *on, "-qbViewRun", "0", "-qbExpand", "orchestrator", also=open_in(orchestrator))
+        check("while an earlier run is on show there is no bar either", typing(s, "orchestrator").get("bar") is False
+              and "latest run" in (typing(s, "orchestrator").get("line") or ""), str(typing(s, "orchestrator")))
+        s = play(1, *on, "-qbExpand", "orchestrator", "-qbDo", "pause;control:off", also=lambda s: typing(s, "orchestrator").get("bar") is False)
+        check("when “Can control” is turned off on the Mac the bar goes at once", typing(s, "orchestrator").get("bar") is False
+              and "Can control" in (typing(s, "orchestrator").get("line") or ""), str(typing(s, "orchestrator")))
     finally:
         mobile.appearance("light")
         mobile.quit()
@@ -2211,7 +2515,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels", "controls")]
+    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels", "controls", "typing")]
     if in_app:
         app = App(project)
         try:
@@ -2246,6 +2550,11 @@ def main():
             scenario_controls()
         except Exception as e:
             check("controls ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "typing" in wanted:
+        try:
+            scenario_typing()
+        except Exception as e:
+            check("typing ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)

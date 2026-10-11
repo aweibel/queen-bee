@@ -30,6 +30,7 @@ import UIKit
 ///   -qbViewRun <n>                      once that flow has runs and none is going, put the nth on show, where
 ///                                       0 is the oldest the Mac has kept
 ///   -qbExpand <card name>|orchestrator  once that session has a terminal, open it full screen
+///   -qbKeys 1                           and with the keys out in place of the message box
 ///   -qbScrollBack <n>                   and scroll it back n lines, as a finger would
 ///   -qbCanned <n>                       no Mac at all: play the first n steps of a made-up flow and its
 ///                                       terminals, as if a Mac had sent them. See `DebugCanned`.
@@ -48,6 +49,23 @@ import UIKit
 ///                                       and, with a made-up run, control:on | control:off | away | pause.
 ///                                       A step that names a card waits until that card has something to
 ///                                       answer. One that starts with ~ isn't waited for.
+///                                       Typing, where <session> is a card's name or orchestrator:
+///                                         draft:<session>:<text>     write in its message box, and send nothing
+///                                         say:<session>:<text>       write that and press Send
+///                                         type:<session>:<text>      type it on the keyboard, in keys mode
+///                                         burst:<session>:<text>     the same, a letter at a time, quickly
+///                                         key:<session>:<key>        press esc | tab | backtab | up | down | left |
+///                                                                    right | enter | backspace, the Ctrl button
+///                                                                    as ctrl, or Ctrl held with a letter as ctrl-u
+///                                         open:<session>:keys|message   open its terminal full screen
+///                                         openWaiting:<card>         press "Open its terminal" for a waiting agent
+///                                         close                      close the full-screen terminal
+///                                       In <text>, \n is a new line and @<n> is n letters.
+///                                         wait:<name>                wait until the test makes the file
+///                                                                    Library/Caches/qb-wait-<name>
+///   -qbStale 1                          with a made-up run: its sessions have ended and the made-up Mac
+///                                       hasn't said so yet, so what is typed is refused
+
 ///   -qbPress <step>                     press one button as a finger does, so that what it asks first is on screen
 ///
 /// Arguments written this way are read as settings, which is how they get here.
@@ -235,6 +253,9 @@ enum DebugLaunch {
                 case "control:on", "control:off": client.debugTake(.control(canControl: step == "control:on"))
                 case "away": client.debugLoseMac()
                 case "pause": try? await Task.sleep(for: .seconds(3))
+                case _ where typing(step, in: client) != nil:
+                    guard let work = typing(step, in: client) else { continue }
+                    client.controls.debugNote(step, await work())
                 default:
                     let parts = step.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
                     let work: () async -> String?
@@ -263,6 +284,160 @@ enum DebugLaunch {
                 }
             }
         }
+    }
+
+    // MARK: Typing
+
+    /// A typing step a test named, as the work its button or key does. Nil for a step that isn't one of these.
+    private static func typing(_ step: String, in client: RemoteClient) -> (() async -> String?)? {
+        let parts = step.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        let said = parts.count > 2 ? text(parts[2]) : ""
+        /// The session's key, once the open flow has it.
+        func key() async -> String {
+            guard parts.count > 1, parts[1] != TerminalRegistry.orchestratorKey else { return TerminalRegistry.orchestratorKey }
+            while true {
+                if let card = client.mirror.snapshot?.flow.cards.first(where: { $0.name == parts[1] }) { return card.id }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        switch parts[0] {
+        case "draft":
+            return {
+                client.composer.write(said, for: client.composerID(await key()))
+                return nil
+            }
+        case "say":
+            return {
+                let key = await key()
+                client.composer.write(said, for: client.composerID(key))
+                return await client.sendMessage(to: key)
+            }
+        case "type":
+            return {
+                let key = await key()
+                client.type(said, into: key)
+                return await client.debugKeysSent(for: key)
+            }
+        case "burst":
+            return {
+                let key = await key()
+                for letter in said { client.type(String(letter), into: key) }
+                return await client.debugKeysSent(for: key)
+            }
+        case "key":
+            return {
+                let key = await key()
+                let named: [String: TerminalKey] = ["esc": .escape, "tab": .tab, "backtab": .backTab, "up": .up, "down": .down,
+                                                    "left": .left, "right": .right, "enter": .enter, "backspace": .backspace]
+                if let named = named[said] {
+                    client.press(named, in: key)
+                } else if said == "ctrl" {
+                    client.composer.toggleControl()
+                } else if said.hasPrefix("ctrl-"), let letter = said.last {
+                    client.control(letter, in: key)
+                }
+                return await client.debugKeysSent(for: key)
+            }
+        case "open", "openWaiting":
+            return {
+                let key = await key()
+                while client.terminals.sizes[key] == nil || client.canvas.shownRevision == 0 { try? await Task.sleep(for: .milliseconds(200)) }
+                client.openTerminal(key, keys: parts[0] == "openWaiting" || said == "keys")
+                // A moment, so the terminal is on screen before the next step.
+                try? await Task.sleep(for: .milliseconds(900))
+                return nil
+            }
+        case "close":
+            return {
+                client.terminals.expand(nil)
+                try? await Task.sleep(for: .milliseconds(900))
+                return nil
+            }
+        case "wait":
+            return {
+                let file = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("qb-wait-\(parts.count > 1 ? parts[1] : "")")
+                while !FileManager.default.fileExists(atPath: file.path) { try? await Task.sleep(for: .milliseconds(200)) }
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// The text of a typing step: \n for a new line, and @<n> for n letters.
+    private static func text(_ written: String) -> String {
+        if written.hasPrefix("@"), let count = Int(written.dropFirst()) { return String(repeating: "a", count: count) }
+        return written.replacingOccurrences(of: "\\n", with: "\n")
+    }
+
+    /// A command that left for the Mac, in a few words: what kind, who for, and how much.
+    private static func summary(_ command: RemoteCommand, in client: RemoteClient) -> String? {
+        func name(_ key: String) -> String { client.mirror.snapshot?.flow.card(key)?.name ?? key }
+        switch command {
+        case .prompt(_, let key, let text): return "prompt:\(name(key)):\(text.count)"
+        case .keys(_, let key, let data):
+            return "keys:\(name(key)):" + (data.count > 16 ? "\(data.count) bytes" : data.map { String(format: "%02x", $0) }.joined())
+        default: return nil
+        }
+    }
+
+    /// Where the keyboard on screen is, when it is up.
+    private static var keyboard: CGRect?
+    private static var isWatchingKeyboard = false
+
+    private static func watchKeyboard(_ client: RemoteClient) {
+        guard !isWatchingKeyboard else { return }
+        isWatchingKeyboard = true
+        let centre = NotificationCenter.default
+        for name in [UIResponder.keyboardDidShowNotification, UIResponder.keyboardDidChangeFrameNotification, UIResponder.keyboardDidHideNotification] {
+            centre.addObserver(forName: name, object: nil, queue: .main) { note in
+                let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                let isHidden = note.name == UIResponder.keyboardDidHideNotification
+                Task { @MainActor in
+                    keyboard = isHidden ? nil : frame
+                    client.canvas.didChangeWhatIsShown()
+                }
+            }
+        }
+    }
+
+    /// The bar under a terminal and what has been typed into it, worked out the way the views work it out.
+    static func composerState(_ client: RemoteClient) -> [String: Any] {
+        let composer = client.composer, abilities = client.abilities
+        let cards = client.mirror.snapshot?.flow.cards ?? []
+        var names = Dictionary(cards.map { ($0.id, $0.name) }) { first, _ in first }
+        names[TerminalRegistry.orchestratorKey] = TerminalRegistry.orchestratorKey
+        /// By session name, for the open flow's sessions.
+        func bySession<T>(_ all: [String: T]) -> [String: T] {
+            var named: [String: T] = [:]
+            for (key, name) in names {
+                if let id = client.composerID(key), let value = all[id] { named[name] = value }
+            }
+            return named
+        }
+        func rect(_ r: CGRect) -> [String: Any] { ["x": r.minX, "y": r.minY, "width": r.width, "height": r.height] }
+        let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds ?? .zero
+        return [
+            "mode": composer.mode.rawValue,
+            "wantsKeyboard": composer.wantsKeyboard,
+            // The app's own key catcher has the keyboard. No terminal ever does: see `terminals`.
+            "catching": composer.isCatching,
+            "controlHeld": composer.typer.isControlHeld,
+            "drafts": bySession(composer.drafts).mapValues(\.count),
+            "waiting": names.filter { key, _ in client.composerID(key).map(composer.sending.contains) ?? false }.values.sorted(),
+            "refusals": bySession(composer.refusals),
+            "sent": client.debugSent.compactMap { summary($0, in: client) },
+            // Everything that left for the Mac, typing or not.
+            "commands": client.debugSent.count,
+            "typing": Dictionary(abilities.typing.compactMap { key, typing in
+                names[key].map { ($0, ["bar": typing.hasBar, "away": typing.isAway, "note": typing.note ?? NSNull(), "line": typing.line ?? NSNull(),
+                                       "action": typing.action?.title ?? NSNull(), "wantsKeys": typing.wantsKeys] as [String: Any]) }
+            }) { first, _ in first },
+            "openTerminal": cards.filter { abilities.inTerminal.contains($0.id) && client.terminals.sizes[$0.id] != nil }.map(\.name),
+            "bars": composer.debugFrames.mapValues(rect),
+            "keyboard": keyboard.map(rect) ?? NSNull(),
+            "screen": ["width": screen.width, "height": screen.height],
+        ]
     }
 
     private static var hasPressed = false
@@ -341,7 +516,7 @@ enum DebugLaunch {
         Task {
             // A moment, so the terminal has been seen in its card before it leaves it.
             try? await Task.sleep(for: .milliseconds(600))
-            client.terminals.expand(key)
+            client.openTerminal(key, keys: defaults.bool(forKey: "qbKeys"))
             let lines = defaults.integer(forKey: "qbScrollBack")
             if lines > 0 {
                 try? await Task.sleep(for: .milliseconds(900))
@@ -392,6 +567,7 @@ enum DebugLaunch {
     /// is: a build run on a real device from Xcode has DEBUG set too, and what the Mac sent stays off its disk.
     static func report(_ client: RemoteClient) {
         #if targetEnvironment(simulator)
+        watchKeyboard(client)
         var fields: [String: Any] = [:]
         withObservationTracking {
             let (name, text): (String, String?) = switch client.state {
@@ -429,6 +605,7 @@ enum DebugLaunch {
             fields["cannedStage"] = DebugCannedRun.stage
             fields["panel"] = panelState(client)
             fields["controls"] = controlsState(client)
+            fields["composer"] = composerState(client)
         } onChange: {
             Task { @MainActor in report(client) }
         }

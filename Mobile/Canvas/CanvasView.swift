@@ -623,7 +623,9 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             entry["badges"] = view.badgeTexts
             entry["text"] = (view as? LogicCardView)?.summaryText ?? NSNull()
             entry["hasTerminalPlace"] = terminalContainer(for: card.id) != nil
-            // The buttons drawn on the card, with the middle of each on screen, for a test to tap.
+            // The buttons drawn on the card, with the middle of each on screen, for a test to tap. Laid out
+            // first: this can be asked for after a card was given its buttons and before it has placed them.
+            view.layoutIfNeeded()
             entry["buttons"] = view.buttonsShown.map { button -> [String: Any] in
                 let frame = document.convert(button.drawn, to: nil)
                 return ["title": button.title, "enabled": button.isEnabled, "x": frame.midX, "y": frame.midY, "width": frame.width, "height": frame.height]

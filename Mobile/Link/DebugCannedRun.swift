@@ -17,6 +17,8 @@ import QueenBeeCore
 ///
 /// With `-qbControl 1` the made-up Mac lets the device control it, and answers each command roughly as a
 /// real one would: it changes the run, or refuses in the real Mac's words. With `-qbSilent 1` it never answers.
+/// What is typed for a session that is running shows up in that session's terminal, as it would once the
+/// program echoed it. With `-qbStale 1` the sessions have ended without the device being told, so typing is refused.
 enum DebugCannedRun {
     static var isWanted: Bool { wanted > 0 }
     private static var wanted: Int { UserDefaults.standard.integer(forKey: "qbCannedRun") }
@@ -26,6 +28,8 @@ enum DebugCannedRun {
     private(set) static var isPlayed = false
     /// The run as the made-up Mac has it now, for it to answer commands from.
     private static var current: RemoteRunState?
+    /// The size each made-up terminal was started at, by session, so more can be printed in it.
+    private static let screens = [writer: (cols: 58, rows: 16), orchestrator: (cols: 40, rows: 30)]
 
     static let flowID = "canned10"
     private static let start = "start001", writer = "writer01", style = "style001", both = "both0001"
@@ -172,9 +176,9 @@ enum DebugCannedRun {
         client.open(flowID)
         client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, log: log, messages: messages, runs: [first, second])))
         current = run
-        terminal(writer, cols: 58, rows: 16, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"
+        terminal(writer, cols: screens[writer]?.cols ?? 0, rows: screens[writer]?.rows ?? 0, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"
             + "I'd like to save the draft.\r\n\r\n\(esc)[1mAllow writing to notes/welcome.md?\(esc)[0m\r\n\(esc)[7m 1. Yes \(esc)[0m\r\n 2. No\r\n")
-        terminal(orchestrator, cols: 40, rows: 30, "\(esc)[1mOrchestrator\(esc)[0m\r\n\(esc)[2mRuns the flow called Welcome note.\(esc)[0m\r\n\r\n"
+        terminal(orchestrator, cols: screens[orchestrator]?.cols ?? 0, rows: screens[orchestrator]?.rows ?? 0, "\(esc)[1mOrchestrator\(esc)[0m\r\n\(esc)[2mRuns the flow called Welcome note.\(esc)[0m\r\n\r\n"
             + "\(esc)[32m✓\(esc)[0m run started\r\n\(esc)[33m…\(esc)[0m waiting on two cards\r\n")
         if await done(1) { return }
 
@@ -290,8 +294,12 @@ enum DebugCannedRun {
                     run.sessions[cardID] = .starting
                 case .openOnMac:
                     for key in [writer, orchestrator] where (run.sessions[key] ?? .notStarted) == .notStarted { run.sessions[key] = .starting }
-                case .prompt, .keys:
-                    refusal = "That session isn't running."
+                case .prompt(_, let key, let text):
+                    if isRunning(key, in: run) { echo(client, key, "\r\n> \(text.replacingOccurrences(of: "\n", with: "\r\n  "))\r\n") } else { refusal = notRunning }
+                case .keys(_, let key, let data):
+                    // Only plain text is printed back: a real program decides for itself what any other key shows.
+                    let isText = data.allSatisfy { $0 >= 0x20 && $0 != 0x7F }
+                    if isRunning(key, in: run) { echo(client, key, isText ? String(decoding: data, as: UTF8.self) : "") } else { refusal = notRunning }
                 }
             }
             if refusal == nil {
@@ -300,6 +308,21 @@ enum DebugCannedRun {
             }
             client.debugTake(.answer(id: id, refusal: refusal))
         }
+    }
+
+    private static let notRunning = "That session isn't running."
+
+    private static func isRunning(_ key: String, in run: RemoteRunState) -> Bool {
+        let state = run.sessions[key] ?? .notStarted
+        return state != .notStarted && state != .exited && !UserDefaults.standard.bool(forKey: "qbStale")
+    }
+
+    /// Prints in a session's terminal what the program there would print back. With it goes a question to
+    /// the terminal, where its cursor is, as a real program asks while it draws. The terminal answers, and
+    /// the answer must go nowhere: typing has not opened a way back to the Mac for it.
+    private static func echo(_ client: RemoteClient, _ key: String, _ text: String) {
+        guard let screen = screens[key], !text.isEmpty else { return }
+        client.debugTake(.terminal(id: flowID, key: key, chunk: TerminalChunk(reset: false, cols: screen.cols, rows: screen.rows, data: Data(("\u{1b}[6n" + text).utf8))))
     }
 }
 #endif
