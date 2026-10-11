@@ -29,6 +29,7 @@ struct SettingsSheet: View {
                         }
                         .padding(.horizontal, Theme.Space.m)
                         .frame(minHeight: Theme.Touch.target)
+                        .accessibilityElement(children: .combine)
                     }
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
                         Button("Forget this Mac") { asksToForget = true }
@@ -53,7 +54,8 @@ struct SettingsSheet: View {
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             }
-            .background(Theme.paper.ui)
+            // The surface, not the paper: the lighter ink of the headings and the note is too faint on paper.
+            .background(Theme.surface.ui)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

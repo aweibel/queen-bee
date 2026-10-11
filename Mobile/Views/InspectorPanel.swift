@@ -16,9 +16,13 @@ struct InspectorPanel: View {
                 // A sheet needs its own way out. Beside the canvas, the bar's button hides the panel.
                 if sizeClass == .compact {
                     Button("Done") { dismiss() }.buttonStyle(.panel(.quiet))
+                        .padding(.trailing, Theme.Space.xs)
+                        .accessibilityHint("Closes the details.")
                 }
             }
             .frame(minHeight: Theme.Touch.target)
+            // Clear of the handle a sheet is dragged by.
+            .padding(.top, sizeClass == .compact ? Theme.Space.m : 0)
             .background(Theme.bar.ui)
             Hairline()
             if let run = client.canvas.viewedRun {
@@ -94,6 +98,8 @@ private struct TabStrip: View {
                     }
                 }
                 .padding(.horizontal, Theme.Space.xs)
+                .accessibilityElement(children: .contain)
+                .accessibilityAddTraits(.isTabBar)
             }
             .scrollIndicators(.hidden)
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
@@ -158,6 +164,8 @@ private struct PageSwitch: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
         .animation(Theme.Motion.quick, value: selected)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isTabBar)
     }
 }
 

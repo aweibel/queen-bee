@@ -64,6 +64,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         linkLayer.frame = document.bounds
         linkLayer.bounds.origin = document.bounds.origin
         document.addSubview(linkLayer)
+        linkLayer.onActivate = { [weak self] id in self?.model.select(.link(id)) }
 
         scrollView.delegate = self
         scrollView.backgroundColor = .clear
@@ -180,6 +181,9 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             } else {
                 cardViews[card.id]?.removeFromSuperview()
                 view = card.kind == .agent ? AgentCardView(card: card) : LogicCardView(card: card)
+                let id = card.id
+                view.onActivate = { [weak self] in self?.model.select(.card(id)) }
+                (view as? AgentCardView)?.onExpand = { [weak self] in self?.model.expandTerminal?(id) }
                 view.zoom = zoom
                 document.addSubview(view)
                 cardViews[card.id] = view
@@ -219,6 +223,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 view = existing
             } else {
                 view = GroupFrameView(look: look)
+                let id = look.group.id
+                view.onActivate = { [weak self] in self?.model.select(.group(id)) }
                 groupViews[look.group.id] = view
             }
             // A frame sits behind its cards. Folded, the one card sits where cards do.

@@ -33,6 +33,10 @@ final class LinkLayerView: UIView {
 
     private var strands: [String: Strand] = [:]
     private var order: [String] = []
+    /// What VoiceOver is given for each link, since a line on a layer is nothing it can find by itself.
+    private var spoken: [String: LinkElement] = [:]
+    /// Selects a link, when VoiceOver's double tap lands on it.
+    var onActivate: ((_ id: String) -> Void)?
     /// How finely the layers are drawn, which the canvas raises when it is zoomed in so lines stay sharp.
     var sharpness: CGFloat = 1 { didSet { if sharpness != oldValue { strands.values.forEach(sharpen) } } }
 
@@ -79,6 +83,31 @@ final class LinkLayerView: UIView {
         }
         order = links.map(\.id)
         CATransaction.commit()
+        speak(links)
+    }
+
+    /// One element for each link, kept from one update to the next so VoiceOver doesn't lose its place.
+    private func speak(_ links: [(id: String, look: LinkLook)]) {
+        var kept: [String: LinkElement] = [:]
+        for (id, look) in links {
+            let element = spoken[id] ?? LinkElement(accessibilityContainer: self)
+            element.activate = { [weak self] in self?.onActivate?(id) }
+            element.accessibilityLabel = look.spoken
+            element.accessibilityValue = look.isLive ? "A message is going along it now"
+                : look.count == 1 ? "Carried 1 message in the run on show" : look.count > 1 ? "Carried \(look.count) messages in the run on show" : nil
+            element.accessibilityTraits = look.isSelected ? [.button, .selected] : .button
+            element.accessibilityHint = "Shows what it carried."
+            // Room for a finger around a route that runs dead straight.
+            element.accessibilityFrameInContainerSpace = (strands[id]?.path.boundingBoxOfPath ?? .zero).insetBy(dx: -12, dy: -12)
+            kept[id] = element
+        }
+        spoken = kept
+    }
+
+    override var isAccessibilityElement: Bool { get { false } set {} }
+    override var accessibilityElements: [Any]? {
+        get { order.compactMap { spoken[$0] } }
+        set {}
     }
 
     private func apply(_ strand: Strand, rerouted: Bool) {
@@ -176,5 +205,15 @@ final class LinkLayerView: UIView {
             }
         }
         return best
+    }
+}
+
+/// One link, as VoiceOver finds it.
+private final class LinkElement: UIAccessibilityElement {
+    var activate: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        activate?()
+        return activate != nil
     }
 }

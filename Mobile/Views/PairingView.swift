@@ -45,9 +45,10 @@ private struct IntroScreen: View {
                     .dsMono(28, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .accessibilityAddTraits(.isHeader)
+                // Ink, as is everything written straight on the paper here: the lighter ink is too faint on it to read easily.
                 Text("Watch the flows running on your Mac. Pair this device with your Mac once, and it connects by itself from then on.")
                     .dsSans()
-                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .foregroundStyle(Theme.ink.ui)
             }
             VStack(alignment: .leading, spacing: 0) {
                 StepRow(number: 1, title: "On your Mac",
@@ -59,7 +60,7 @@ private struct IntroScreen: View {
             .floatingPanel()
             Text("Both need to be on the same Wi-Fi. Nothing is sent over the internet.")
                 .dsSans(Theme.Touch.caption + 1)
-                .foregroundStyle(Theme.inkSecondary.ui)
+                .foregroundStyle(Theme.ink.ui)
             Button("Continue", action: next)
                 .buttonStyle(.panel(.filled, wide: true))
         }
@@ -110,18 +111,20 @@ private struct MacListScreen: View {
                     ForEach(browser.macs) { mac in
                         Button { choose(mac) } label: {
                             HStack(spacing: Theme.Space.m) {
-                                Image(systemName: "desktopcomputer").foregroundStyle(Theme.inkSecondary.ui)
+                                Image(systemName: "desktopcomputer").foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true)
                                 Text(mac.name).dsMono().foregroundStyle(Theme.ink.ui).lineLimit(1)
                                 Spacer(minLength: Theme.Space.s)
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(Theme.inkSecondary.ui)
+                                    .accessibilityHidden(true)
                             }
                             .padding(.horizontal, Theme.Space.l)
                             .frame(minHeight: 52)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityHint("Pairs with this Mac.")
                         Hairline()
                     }
                     HStack(spacing: Theme.Space.m) {
@@ -132,11 +135,14 @@ private struct MacListScreen: View {
                     }
                     .padding(.horizontal, Theme.Space.l)
                     .frame(minHeight: 52)
+                    .accessibilityElement(children: .combine)
                 }
+                // As wide as the page, whether or not a Mac's name has made it so.
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .floatingPanel()
                 Text("A Mac is listed while it is showing a pairing code. If yours isn't here, choose “Pair a device…” in Queen Bee's settings on the Mac, and check that both are on the same Wi-Fi.")
                     .dsSans(Theme.Touch.caption + 1)
-                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .foregroundStyle(Theme.ink.ui)
             }
         }
         .navigationTitle("Choose your Mac")
@@ -167,6 +173,7 @@ private struct CodeScreen: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 60)
+                .accessibilityElement(children: .combine)
             } else if pastes {
                 paste
             } else {
@@ -214,7 +221,8 @@ private struct CodeScreen: View {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
                 .accessibilityLabel("Camera, looking for the pairing code")
         case .notDetermined:
-            ProgressView().tint(Theme.inkSecondary.ui).frame(maxWidth: .infinity).padding(.vertical, 60)
+ProgressView().tint(Theme.inkSecondary.ui).frame(maxWidth: .infinity).padding(.vertical, 60)
+                .accessibilityLabel("Waiting for the camera")
         default:
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 Text("Queen Bee isn't allowed to use the camera, so it can't scan the code. Turn on Camera for Queen Bee in Settings, or paste the code instead.")

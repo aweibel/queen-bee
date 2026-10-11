@@ -13,6 +13,7 @@ final class GroupFrameView: UIView {
         self.look = look
         super.init(frame: .zero)
         isUserInteractionEnabled = false
+        isAccessibilityElement = true
         layer.cornerRadius = Theme.Radius.card
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.textColor = Theme.ink
@@ -23,6 +24,20 @@ final class GroupFrameView: UIView {
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    /// Selects the group, when VoiceOver's double tap lands on it.
+    var onActivate: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        onActivate?()
+        return onActivate != nil
+    }
+
+    /// VoiceOver is given the name strip, like a finger: the frame's inside belongs to its cards.
+    override var accessibilityFrame: CGRect {
+        get { superview.map { UIAccessibility.convertToScreenCoordinates(handle, in: $0) } ?? super.accessibilityFrame }
+        set {}
+    }
 
     /// The part a tap selects the group by: the name strip, or the whole card when folded. The frame's
     /// inside is empty canvas.
@@ -36,6 +51,9 @@ final class GroupFrameView: UIView {
         if frame != target { frame = target }
         nameLabel.text = new.group.name
         detailLabel.text = new.detail
+        accessibilityLabel = new.group.isFolded ? "Group \(new.group.name), folded" : "Group \(new.group.name)"
+        accessibilityValue = new.detail
+        accessibilityTraits = new.isSelected ? [.button, .selected] : .button
         restyle()
         setNeedsLayout()
     }

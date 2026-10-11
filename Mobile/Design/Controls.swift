@@ -48,7 +48,7 @@ struct Badge: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .bold)) }
+            if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .bold)).accessibilityHidden(true) }
             if !text.isEmpty { Text(text) }
         }
         .dsMono(Theme.Touch.caption, .medium)

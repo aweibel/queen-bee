@@ -31,6 +31,8 @@ nonisolated struct LinkLook: Equatable {
     var isLive = false
     /// How many times it has fired in the run on show.
     var count = 0
+    /// Which cards it joins, for VoiceOver, which can't see the line.
+    var spoken = ""
 }
 
 /// How one group is drawn.
@@ -120,8 +122,10 @@ nonisolated struct CanvasContent: Equatable {
 
         for link in flow.links {
             guard let points = CanvasGeometry.route(of: link, in: flow) else { continue }
+            let from = flow.card(link.from)?.name ?? "a card", to = flow.card(link.to)?.name ?? "a card"
             links.append((link.id, LinkLook(points: points, isSelected: selection == .link(link.id),
-                                            isLive: live.contains(link.id), count: passes[link.id] ?? 0)))
+                                            isLive: live.contains(link.id), count: passes[link.id] ?? 0,
+                                            spoken: "Link from \(from) to \(to)")))
         }
 
         // The Mac's `cardsNeedingYou`.

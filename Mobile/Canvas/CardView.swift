@@ -199,9 +199,17 @@ class CardView: UIView {
         let said = overviewText.caseInsensitiveCompare(new.name) == .orderedSame ? nil : overviewText
         let count = runCount > 0 ? (runCount > 1 ? "✓ \(runCount)" : "✓") : nil
         overviewDetail.text = [said, count].compactMap { $0 }.joined(separator: " · ")
+        speak()
         restyle(animated: !isFirst)
         // A card that only moved keeps its size, so nothing would lay it out again by itself.
         setNeedsLayout()
+    }
+
+    /// Called when the overview has closed over the card, and when it is about to lift. What it covers
+    /// stops being drawn: with the whole canvas faded, as it is while the Mac is away, a title bar or a
+    /// terminal under the overview would otherwise show through it.
+    private func setCovered(_ isCovered: Bool) {
+        for view in [titleBar, content, titleRule] where view.isHidden != isCovered { view.isHidden = isCovered }
     }
 
     /// What the overview says under the name. Subclasses say what the card is doing.
@@ -213,8 +221,14 @@ class CardView: UIView {
     private func applyZoom(from old: CGFloat) {
         let shows = zoom < Self.overviewBelow
         if shows != (old < Self.overviewBelow) || (shows && overview.alpha == 0) {
+            // What the overview covers is put back before it starts to fade, and taken away once it has closed over it.
+            if !shows { setCovered(false) }
             UIView.animate(withDuration: Theme.Motion.isAllowed ? Theme.Motion.standardDuration : 0, delay: 0,
-                           options: [.beginFromCurrentState, .allowUserInteraction]) { self.overview.alpha = shows ? 1 : 0 }
+                           options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.overview.alpha = shows ? 1 : 0
+            } completion: { _ in
+                if self.zoom < Self.overviewBelow { self.setCovered(true) }
+            }
         }
         // The overview's type is sized to read the same on screen whatever the zoom.
         if shows { setNeedsLayout() }
@@ -232,6 +246,33 @@ class CardView: UIView {
                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium))
         accessibilityLabel = "\(card.kind.label) card \(card.name)"
         accessibilityIdentifier = "card-\(card.id)"
+        speak()
+    }
+
+    /// What VoiceOver says after the card's name: what it is doing, whether it is waiting on the person,
+    /// where the run went, and anything wrong with how it is set up. The same things the badges, the tint
+    /// and the warning line say to the eye.
+    private func speak() {
+        var parts = spokenState
+        if context.mark.failed {
+            parts.append("The run stopped here")
+        } else if runCount > 0 {
+            parts.append(runCount == 1 ? "The run passed through once" : "The run passed through \(runCount) times")
+        }
+        if let warning = context.warning { parts.append(warning) }
+        accessibilityValue = parts.joined(separator: ". ")
+        accessibilityTraits = context.isSelected ? [.button, .selected] : .button
+    }
+
+    /// What the card is doing, and whether it is waiting on the person. Subclasses say more.
+    var spokenState: [String] { context.waiting.map { [$0.prefix(1).uppercased() + $0.dropFirst()] } ?? [] }
+
+    /// Selects the card, when VoiceOver's double tap lands on it. A finger's tap is the canvas's to work out.
+    var onActivate: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        onActivate?()
+        return onActivate != nil
     }
 
     private func rebuildPorts() {
@@ -501,6 +542,18 @@ final class AgentCardView: CardView {
 
     override var overviewText: String { stateText }
 
+    override var spokenState: [String] {
+        let state = context.sessionState
+        var parts = [stateText.prefix(1).uppercased() + stateText.dropFirst()]
+        if state == .needsYou { parts.append("Waiting for you in its terminal") }
+        if state == .notStarted || state == .exited { parts.append(hintLabel.text ?? "") }
+        if let cost = context.cost { parts.append("Cost \(cost)") }
+        return parts.filter { !$0.isEmpty }
+    }
+
+    /// Opens the terminal full screen, for VoiceOver, which can't reach the mark in the title's corner.
+    var onExpand: (() -> Void)?
+
     override init(card: Card) {
         super.init(card: card)
         titleBar.addSubview(stateBadge)
@@ -546,7 +599,10 @@ final class AgentCardView: CardView {
         terminal = view
         if let view { terminalHolder.addSubview(view) }
         expandIcon.isHidden = view == nil
-        accessibilityHint = view == nil ? nil : "Its terminal can be opened full screen from the corner of its title."
+        accessibilityCustomActions = view == nil ? nil : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
+            self?.onExpand?()
+            return self?.onExpand != nil
+        }]
         setNeedsLayout()
     }
 
@@ -569,6 +625,7 @@ final class AgentCardView: CardView {
         hintLabel.text = state == .exited ? "Restart it on your Mac" : "Start it on your Mac"
         super.update(card: new, context: context)
     }
+
 
     override func layoutContent() {
         terminalHolder.frame = content.bounds
