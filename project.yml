@@ -103,11 +103,49 @@ targets:
       base:
         PRODUCT_NAME: qb-remote-check
         SKIP_INSTALL: YES
+  QueenBeeMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Mobile
+      # The same icon as the Mac app.
+      - path: App/AppIcon.icon
+    # The bundle id, version and signing come from here, so a person's own team id never has to be in this file.
+    configFiles:
+      Debug: Mobile/Config.xcconfig
+      Release: Mobile/Config.xcconfig
+    dependencies:
+      - package: QueenBeeCore
+      - package: QueenBeeCore
+        product: QueenBeeLink
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_NAME: QueenBeeMobile
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Mobile/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Queen Bee
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        # The settings at the top of this file are the Mac's. The hardened runtime is a Mac thing.
+        ENABLE_HARDENED_RUNTIME: NO
 schemes:
   QueenBee:
     build:
       targets:
         QueenBee: all
         qb-remote-check: all
+    run:
+      config: Debug
+  QueenBeeMobile:
+    build:
+      targets:
+        QueenBeeMobile: all
     run:
       config: Debug

@@ -18,6 +18,17 @@ jobs:
         working-directory: Core
         run: xcodebuild -scheme QueenBeeCore-Package -destination 'generic/platform=iOS Simulator' build
 
+  mobile:
+    name: iPad and iPhone app builds
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      # For the Simulator, so no Apple account or signing details are needed.
+      - name: Build for the Simulator
+        run: ./scripts/build-mobile.sh
+
   clean:
     name: Nothing private in the repository
     runs-on: ubuntu-latest

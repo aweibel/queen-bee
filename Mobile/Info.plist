@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Finding the Mac: iOS asks the person once, and only lets the app look for these two services. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Queen Bee uses your local network to find your Mac and show the flows running on it.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_queenbee._tcp</string>
+		<string>_queenbee-pair._tcp</string>
+	</array>
+	<!-- Pairing: the code on the Mac's screen is scanned with the camera. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Queen Bee uses the camera to scan the pairing code shown on your Mac.</string>
+	<!-- An iPhone is not used upside down. An iPad is used any way up. -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

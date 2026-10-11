@@ -1,0 +1,12 @@
+// Settings for the iPad and iPhone app that are the same on every machine.
+PRODUCT_BUNDLE_IDENTIFIER = dev.queenbee.mobile
+// The version lives here and not in project.yml, where the release script expects to find only the Mac app's.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+// The Simulator needs no account. A real device does, and Xcode manages the rest once Local.xcconfig names a team.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+
+// Your own team and bundle id, if you have filled them in. This file is never committed, and it is fine for it not to exist.
+#include? "Local.xcconfig"

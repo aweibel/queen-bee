@@ -1,0 +1,9 @@
+// To install the app on your own iPad or iPhone, copy this file to Local.xcconfig (same folder),
+// remove the two slashes at the start of each line below, and fill them in.
+// Local.xcconfig stays on your machine: git ignores it.
+
+// Your Apple team id: ten letters and digits, shown in Xcode under Settings > Accounts, or at developer.apple.com under Membership.
+// DEVELOPMENT_TEAM = 
+
+// A bundle id nobody else uses, because Apple lets each one belong to a single team. Your own name in it is enough.
+// PRODUCT_BUNDLE_IDENTIFIER = dev.queenbee.mobile.yourname
