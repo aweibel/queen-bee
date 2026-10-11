@@ -217,5 +217,9 @@ while true {
         say(["type": "history", "runs": runs.count])
     case .terminal(_, let key, let chunk):
         say(["type": "terminal", "key": key, "reset": chunk.reset, "bytes": chunk.data.count, "cols": chunk.cols, "rows": chunk.rows])
+    case .answer(let id, let refusal):
+        say(["type": "answer", "id": id, "refusal": refusal ?? NSNull()])
+    case .control(let canControl):
+        say(["type": "control", "canControl": canControl])
     }
 }

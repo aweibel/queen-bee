@@ -98,6 +98,8 @@ final class RemoteSession {
             case .open(let flowID) where flowID == controller?.flow.id: break
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
+            // Nothing is obeyed yet, so every device is answered as one that may only watch.
+            case .command(let id, _): send(.answer(id: id, refusal: Remote.watchOnlyRefusal))
             }
         }
         close()

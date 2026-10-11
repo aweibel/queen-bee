@@ -8,8 +8,27 @@ public struct TerminalEvent: Equatable, Sendable {
     public init(key: String, chunk: TerminalChunk) { self.key = key; self.chunk = chunk }
 }
 
+/// A command the Mac turned down, with the Mac's reason.
+public struct RemoteRefusal: Equatable, Sendable {
+    public var id: Int
+    public var command: RemoteCommand
+    public var text: String
+
+    public init(id: Int, command: RemoteCommand, text: String) { self.id = id; self.command = command; self.text = text }
+}
+
 /// What a device knows about the Mac it is connected to, and how each message from the Mac changes it.
-/// It only ever follows the Mac: nothing here is sent back.
+/// It only ever follows the Mac. A command changes nothing here by being sent: what it did on the Mac comes
+/// back as the same updates a watching device gets.
+///
+/// Commands, for the views that send them:
+/// - `canControl` says whether to offer controls at all. It is a courtesy: the Mac checks every command itself.
+/// - `willSend(_:)` gives a command its id and records it as waiting. Send `.command(id:command:)` with that id.
+/// - While `isWaiting(for:)` is true for a command, its button should be disabled.
+/// - The Mac's `.answer` stops the wait. A refusal is kept in `lastRefusal` until `clearRefusal()` or the
+///   next refusal, for a short message in the Mac's words.
+/// - `dropWaiting()` is for when the link drops: those commands will never be answered. A new welcome does
+///   the same, because it starts a new connection.
 public struct RemoteMirror: Equatable, Sendable {
     public private(set) var library: RemoteLibrary?
     public private(set) var welcome: RemoteWelcome?
@@ -24,8 +43,34 @@ public struct RemoteMirror: Equatable, Sendable {
     /// True once the Mac's list has come without the open flow in it. The Mac stops sending that flow then, so
     /// one that comes back has to be asked for again. Cleared by asking, and by a fresh snapshot of it.
     public private(set) var openFlowWentAway = false
+    /// Whether the Mac lets this device do more than watch. False until the Mac says otherwise.
+    public private(set) var canControl = false
+    /// The commands sent and not yet answered, by id.
+    public private(set) var waiting: [Int: RemoteCommand] = [:]
+    /// The last command the Mac turned down, and why.
+    public private(set) var lastRefusal: RemoteRefusal?
+    private var lastCommandID = 0
 
     public init() {}
+
+    /// Call just before sending a command. Returns the id to send it with.
+    public mutating func willSend(_ command: RemoteCommand) -> Int {
+        lastCommandID += 1
+        waiting[lastCommandID] = command
+        return lastCommandID
+    }
+
+    /// Whether this very command has been sent and not yet answered.
+    public func isWaiting(for command: RemoteCommand) -> Bool { waiting.values.contains(command) }
+
+    /// The link dropped, so nothing that was waiting will be answered. Returns the ids that were.
+    @discardableResult
+    public mutating func dropWaiting() -> [Int] {
+        defer { waiting.removeAll() }
+        return waiting.keys.sorted()
+    }
+
+    public mutating func clearRefusal() { lastRefusal = nil }
 
     /// Call just before asking the Mac for a flow, or nil for none. What was on show goes at once,
     /// so the old flow is never drawn under the new one's name.
@@ -50,8 +95,18 @@ public struct RemoteMirror: Equatable, Sendable {
         case .welcome(let welcome):
             self.welcome = welcome
             refusal = nil
+            canControl = welcome.canControl
+            // A welcome starts a new connection, and answers to what the old one was sent will never come.
+            waiting.removeAll()
         case .refused(let text):
             refusal = text
+            canControl = false
+        case .control(let canControl):
+            self.canControl = canControl
+        case .answer(let id, let refusal):
+            // An answer to nothing that is waiting is one from before the link dropped.
+            guard let command = waiting.removeValue(forKey: id) else { break }
+            if let refusal { lastRefusal = RemoteRefusal(id: id, command: command, text: refusal) }
         case .library(let library):
             self.library = library
             if let openFlowID, !library.projects.contains(where: { $0.flows.contains { $0.id == openFlowID } }) {

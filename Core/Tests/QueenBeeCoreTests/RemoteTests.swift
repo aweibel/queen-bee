@@ -17,7 +17,7 @@ import Testing
         let snapshot = RemoteFlowSnapshot(flow: flow, run: run, log: [LogLine(date: Date(timeIntervalSince1970: 1), text: "x")],
                                           messages: [:], runs: [])
         let messages: [HostMessage] = [
-            .welcome(RemoteWelcome(version: 1, macName: "Mac", canControl: false)),
+            .welcome(RemoteWelcome(version: Remote.version, macName: "Mac", canControl: false)),
             .refused("no"),
             .library(RemoteLibrary(projects: [RemoteProject(id: "p", name: "proj", flows: [
                 RemoteFlowSummary(id: flow.id, name: "Demo", isSubflow: false, activity: .running)])])),
@@ -28,6 +28,9 @@ import Testing
             .messages(id: flow.id, link: "l", all: [LinkMessage(date: Date(timeIntervalSince1970: 2), from: "Alice", text: "hi")]),
             .history(id: flow.id, runs: []),
             .terminal(id: flow.id, key: "a", chunk: TerminalChunk(reset: true, cols: 80, rows: 24, data: Data([27, 91, 72]))),
+            .answer(id: 7, refusal: nil),
+            .answer(id: 8, refusal: "No run is going."),
+            .control(canControl: true),
         ]
         for message in messages { #expect(try roundTrip(message) == message) }
     }
@@ -36,7 +39,7 @@ import Testing
         let hello = DeviceMessage.hello(RemoteHello(version: Remote.version, deviceID: "d", deviceName: "iPad"))
         #expect(try roundTrip(hello) == hello)
         #expect(try roundTrip(DeviceMessage.open(flowID: nil)) == .open(flowID: nil))
-        let request = PairRequest(version: 1, deviceID: "d", deviceName: "iPad")
+        let request = PairRequest(version: Remote.version, deviceID: "d", deviceName: "iPad")
         #expect(try roundTrip(request) == request)
         let reply = PairReply.granted(PairGrant(key: Data([1, 2, 3]), deviceID: "d", macID: "m", macName: "Mac"))
         #expect(try roundTrip(reply) == reply)
@@ -45,6 +48,98 @@ import Testing
 
     @Test func junkDoesNotDecode() {
         #expect(throws: (any Error).self) { try Remote.decode(HostMessage.self, from: Data("{}".utf8)) }
+    }
+
+    @Test func bothSidesAreOnTheVersionThatHasCommands() {
+        #expect(Remote.version == 2)
+    }
+}
+
+@Suite struct RemoteCommandTests {
+    private let all: [RemoteCommand] = [
+        .openOnMac(flowID: "f"),
+        .run(flowID: "f", command: nil),
+        .run(flowID: "f", command: "go"),
+        .runFrom(flowID: "f", cardID: "c", text: "again"),
+        .stop(flowID: "f"),
+        .approve(flowID: "f", holdID: "h", text: "fine"),
+        .reject(flowID: "f", holdID: "h", note: ""),
+        .allowScript(flowID: "f", holdID: "h"),
+        .refuseScript(flowID: "f", holdID: "h"),
+        .startSession(flowID: "f", cardID: "c"),
+        .prompt(flowID: "f", key: Remote.orchestratorKey, text: "hello\nthere"),
+        .keys(flowID: "f", key: "c", data: Data([27, 3, 13])),
+    ]
+
+    @Test func everyCommandSurvivesEncoding() throws {
+        for (id, command) in all.enumerated() {
+            let message = DeviceMessage.command(id: id, command: command)
+            #expect(try Remote.decode(DeviceMessage.self, from: Remote.encode(message)) == message)
+        }
+    }
+
+    @Test func everyCommandNamesItsFlowAndIsFineAsItIs() {
+        for command in all {
+            #expect(command.flowID == "f")
+            #expect(command.problem == nil)
+        }
+    }
+
+    @Test func theEncodingNamesItsParts() throws {
+        let data = try Remote.encode(DeviceMessage.command(id: 3, command: .prompt(flowID: "f", key: "c", text: "hi")))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: [String: Any]])
+        let command = try #require(json["command"])
+        #expect(command["id"] as? Int == 3)
+        let prompt = try #require((command["command"] as? [String: [String: String]])?["prompt"])
+        #expect(prompt == ["flowID": "f", "key": "c", "text": "hi"])
+    }
+
+    @Test func aCommandTheMacDoesNotKnowDoesNotDecode() {
+        let unknown = #"{"command":{"id":1,"command":{"addProject":{"path":"/tmp"}}}}"#
+        #expect(throws: (any Error).self) { try Remote.decode(DeviceMessage.self, from: Data(unknown.utf8)) }
+        let partsMissing = #"{"command":{"id":1,"command":{"prompt":{"flowID":"f"}}}}"#
+        #expect(throws: (any Error).self) { try Remote.decode(DeviceMessage.self, from: Data(partsMissing.utf8)) }
+        let noID = #"{"command":{"command":{"stop":{"flowID":"f"}}}}"#
+        #expect(throws: (any Error).self) { try Remote.decode(DeviceMessage.self, from: Data(noID.utf8)) }
+    }
+
+    @Test func aPromptHasToSaySomethingAndFit() {
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: "").problem != nil)
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: " \n ").problem != nil)
+        let most = String(repeating: "a", count: Remote.promptLimit)
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: most).problem == nil)
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: most + "a").problem?.contains("too long") == true)
+    }
+
+    @Test func everyOtherTextHasTheSameLimit() {
+        let long = String(repeating: "a", count: Remote.promptLimit + 1)
+        #expect(RemoteCommand.run(flowID: "f", command: long).problem != nil)
+        #expect(RemoteCommand.runFrom(flowID: "f", cardID: "c", text: long).problem != nil)
+        #expect(RemoteCommand.approve(flowID: "f", holdID: "h", text: long).problem != nil)
+        #expect(RemoteCommand.reject(flowID: "f", holdID: "h", note: long).problem != nil)
+    }
+
+    @Test func keysHaveToBeSomeAndFit() {
+        #expect(RemoteCommand.keys(flowID: "f", key: "c", data: Data()).problem != nil)
+        #expect(RemoteCommand.keys(flowID: "f", key: "c", data: Data(count: Remote.keysLimit)).problem == nil)
+        #expect(RemoteCommand.keys(flowID: "f", key: "c", data: Data(count: Remote.keysLimit + 1)).problem != nil)
+    }
+
+    @Test func theBiggestCommandsFitInWhatTheMacTakesFromADevice() throws {
+        // The Mac takes no more than 64 KB in one message from a device.
+        let limit = 64 * 1024
+        let keys = DeviceMessage.command(id: 1, command: .keys(flowID: UUID().uuidString, key: UUID().uuidString, data: Data(count: Remote.keysLimit)))
+        #expect(try Remote.encode(keys).count < limit)
+        let prompt = DeviceMessage.command(id: 1, command: .prompt(flowID: UUID().uuidString, key: UUID().uuidString,
+                                                                   text: String(repeating: "a", count: Remote.promptLimit)))
+        #expect(try Remote.encode(prompt).count < limit)
+    }
+
+    @Test func aDevicesNameGoesInTheLogOnOneLine() {
+        #expect(Remote.oneLine("Keith's iPad") == "Keith's iPad")
+        #expect(Remote.oneLine("iPad\nRun finished") == "iPad Run finished")
+        #expect(Remote.oneLine("a\u{2028}b\u{1b}[2Jc\r\td") == "a b [2Jc d")
+        #expect(Remote.oneLine("\n\n") == "a device")
     }
 }
 

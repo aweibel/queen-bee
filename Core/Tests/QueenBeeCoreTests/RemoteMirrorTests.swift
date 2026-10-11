@@ -36,6 +36,71 @@ import Testing
         #expect(mirror.openFlowID == nil)
         #expect(mirror.snapshot == nil)
         #expect(mirror.revision == 0)
+        #expect(!mirror.canControl)
+        #expect(mirror.waiting.isEmpty)
+        #expect(mirror.lastRefusal == nil)
+    }
+
+    @Test func theMacSaysWhetherTheDeviceMayControlIt() {
+        var mirror = RemoteMirror()
+        _ = mirror.apply(.welcome(RemoteWelcome(version: Remote.version, macName: "Studio", canControl: true)))
+        #expect(mirror.canControl)
+        _ = mirror.apply(.control(canControl: false))
+        #expect(!mirror.canControl)
+        _ = mirror.apply(.control(canControl: true))
+        #expect(mirror.canControl)
+        _ = mirror.apply(.welcome(RemoteWelcome(version: Remote.version, macName: "Studio", canControl: false)))
+        #expect(!mirror.canControl)
+    }
+
+    @Test func aDeviceTurnedAwayNoLongerControls() {
+        var mirror = RemoteMirror()
+        _ = mirror.apply(.welcome(RemoteWelcome(version: Remote.version, macName: "Studio", canControl: true)))
+        _ = mirror.apply(.refused("No longer paired."))
+        #expect(!mirror.canControl)
+    }
+
+    @Test func aCommandWaitsUntilItIsAnswered() {
+        var mirror = RemoteMirror()
+        let stop = RemoteCommand.stop(flowID: "f"), run = RemoteCommand.run(flowID: "f", command: nil)
+        let first = mirror.willSend(stop), second = mirror.willSend(run)
+        #expect(first != second)
+        #expect(mirror.isWaiting(for: stop) && mirror.isWaiting(for: run))
+        #expect(!mirror.isWaiting(for: .stop(flowID: "other")))
+        #expect(mirror.apply(.answer(id: first, refusal: nil)).isEmpty)
+        #expect(!mirror.isWaiting(for: stop) && mirror.isWaiting(for: run))
+        #expect(mirror.lastRefusal == nil)
+    }
+
+    @Test func aRefusalIsKeptInTheMacsWordsUntilCleared() {
+        var mirror = RemoteMirror()
+        let run = RemoteCommand.run(flowID: "f", command: nil)
+        let id = mirror.willSend(run)
+        _ = mirror.apply(.answer(id: id, refusal: "A run is already going."))
+        #expect(mirror.waiting.isEmpty)
+        #expect(mirror.lastRefusal == RemoteRefusal(id: id, command: run, text: "A run is already going."))
+        mirror.clearRefusal()
+        #expect(mirror.lastRefusal == nil)
+    }
+
+    @Test func anAnswerToNothingChangesNothing() {
+        var mirror = RemoteMirror()
+        let id = mirror.willSend(.stop(flowID: "f"))
+        _ = mirror.apply(.answer(id: id + 5, refusal: "No."))
+        #expect(mirror.waiting.count == 1)
+        #expect(mirror.lastRefusal == nil)
+    }
+
+    @Test func nothingWaitsAcrossADroppedLink() {
+        var mirror = RemoteMirror()
+        let first = mirror.willSend(.stop(flowID: "f")), second = mirror.willSend(.openOnMac(flowID: "f"))
+        #expect(mirror.dropWaiting() == [first, second])
+        #expect(mirror.waiting.isEmpty)
+        let third = mirror.willSend(.stop(flowID: "f"))
+        // Ids are never used twice, so a late answer to an old command can't be taken for a new one's.
+        #expect(third > second)
+        _ = mirror.apply(.welcome(RemoteWelcome(version: Remote.version, macName: "Studio", canControl: true)))
+        #expect(mirror.waiting.isEmpty)
     }
 
     @Test func keepsTheWelcomeAndTheLibrary() {

@@ -3,7 +3,7 @@ import Foundation
 /// What the Mac app and a paired device say to each other. Each message is one frame of JSON.
 public enum Remote {
     /// Both sides must be on the same version, or the device is told to update.
-    public static let version = 1
+    public static let version = 2
     /// The Bonjour type of a paired device's listener, and of the listener that exists only while pairing.
     public static let service = "_queenbee._tcp"
     public static let pairingService = "_queenbee-pair._tcp"
@@ -18,6 +18,26 @@ public enum Remote {
         guard let device = record["device"], let mac = record["mac"] else { return false }
         // Ids are kept in lower case, and either side may hold its copy in capitals.
         return device.lowercased() == deviceID.lowercased() && mac.lowercased() == macID.lowercased()
+    }
+
+    /// The longest message a device may send for a session, or give a run or an approval, in characters.
+    public static let promptLimit = 16_000
+    /// The most key presses a device may send at once, in bytes.
+    public static let keysLimit = 4_096
+    /// The key of a flow's orchestrator among its sessions. Every other session goes by its card's id.
+    public static let orchestratorKey = "orchestrator"
+
+    /// What the Mac answers a command from a device that may only watch.
+    public static let watchOnlyRefusal = "This device can only watch. To let it control this Mac, turn on “Can control” for it in Settings on your Mac."
+
+    /// A name a device gave itself, made safe to put in a line of the Mac's log: on one line, with nothing
+    /// in it that a terminal or a text view would act on.
+    public static func oneLine(_ name: String) -> String {
+        let kept = name.unicodeScalars.map { scalar -> Character in
+            CharacterSet.controlCharacters.contains(scalar) || CharacterSet.newlines.contains(scalar) ? " " : Character(scalar)
+        }
+        let words = String(kept).split(separator: " ", omittingEmptySubsequences: true)
+        return words.isEmpty ? "a device" : words.joined(separator: " ")
     }
 
     public static func encode<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
@@ -138,6 +158,11 @@ public enum HostMessage: Codable, Equatable, Sendable {
     case messages(id: String, link: String, all: [LinkMessage])
     case history(id: String, runs: [RunRecord])
     case terminal(id: String, key: String, chunk: TerminalChunk)
+    /// What became of the command the device sent with that id. No refusal means it was done.
+    /// A refusal is in the Mac's words, and is shown to the person as it is.
+    case answer(id: Int, refusal: String?)
+    /// "Can control" was turned on or off for this device on the Mac, while it was connected.
+    case control(canControl: Bool)
 }
 
 /// Device to Mac.
@@ -145,6 +170,66 @@ public enum DeviceMessage: Codable, Equatable, Sendable {
     case hello(RemoteHello)
     /// The flow the device is looking at, or nil for none.
     case open(flowID: String?)
+    /// Something for the Mac to do. The device picks the id, and the Mac's answer carries it back.
+    case command(id: Int, command: RemoteCommand)
+}
+
+/// What a device that may control the Mac can ask of it. Each is one thing the Mac's own buttons or
+/// keyboard already do, and the Mac checks it the same way. State never comes back in the answer: what a
+/// command changed arrives with the updates the device already gets.
+public enum RemoteCommand: Codable, Equatable, Sendable {
+    /// What choosing the flow on the Mac does to its sessions: starts the ones that are missing.
+    /// The Mac's own window goes on showing whatever it showed.
+    case openOnMac(flowID: String)
+    /// Run, with a command to use in place of the Start card's own, or nil for the card's.
+    case run(flowID: String, command: String?)
+    /// "Run from here": `text` arrives at the card as if a link had brought it.
+    case runFrom(flowID: String, cardID: String, text: String)
+    case stop(flowID: String)
+    /// Approve a held message, as it was or edited.
+    case approve(flowID: String, holdID: String, text: String)
+    /// Turn a held message down, with a note saying why, which may be empty.
+    case reject(flowID: String, holdID: String, note: String)
+    /// Let a script's command run. The Mac remembers it for that card, as it does when allowed there.
+    case allowScript(flowID: String, holdID: String)
+    case refuseScript(flowID: String, holdID: String)
+    /// An agent card's "Start agent" or "Restart agent".
+    case startSession(flowID: String, cardID: String)
+    /// A message for a session, entered the way the Mac enters one: held until the session is idle, then
+    /// pasted whole and followed by Enter. `key` is a card's id, or `Remote.orchestratorKey`.
+    case prompt(flowID: String, key: String, text: String)
+    /// Key presses for a session's terminal, as the bytes the keys make.
+    case keys(flowID: String, key: String, data: Data)
+
+    public var flowID: String {
+        switch self {
+        case .openOnMac(let id), .run(let id, _), .runFrom(let id, _, _), .stop(let id), .approve(let id, _, _),
+             .reject(let id, _, _), .allowScript(let id, _), .refuseScript(let id, _), .startSession(let id, _),
+             .prompt(let id, _, _), .keys(let id, _, _): id
+        }
+    }
+
+    /// Why this command can't be obeyed whatever state the Mac is in: it carries too much, or nothing.
+    /// Nil when it is fine. A device can ask before sending. The Mac asks every time, whatever was sent.
+    public var problem: String? {
+        switch self {
+        case .prompt(_, _, let text):
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "There is nothing to send." }
+            return Self.tooLong(text)
+        case .keys(_, _, let data):
+            if data.isEmpty { return "There is nothing to send." }
+            return data.count > Remote.keysLimit ? "That is too much to type at once." : nil
+        case .run(_, let command): return command.flatMap(Self.tooLong)
+        case .runFrom(_, _, let text): return Self.tooLong(text)
+        case .approve(_, _, let text): return Self.tooLong(text)
+        case .reject(_, _, let note): return Self.tooLong(note)
+        case .openOnMac, .stop, .allowScript, .refuseScript, .startSession: return nil
+        }
+    }
+
+    private static func tooLong(_ text: String) -> String? {
+        text.count > Remote.promptLimit ? "That message is too long. The most a device can send is \(Remote.promptLimit) characters." : nil
+    }
 }
 
 /// What a device sends to the pairing listener.
