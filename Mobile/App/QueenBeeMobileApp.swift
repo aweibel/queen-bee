@@ -20,6 +20,8 @@ struct QueenBeeMobileApp: App {
                     DebugLaunch.showNamedPage(client)
                     DebugLaunch.viewNamedRun(client)
                     DebugLaunch.goToNamedWaiting(client)
+                    DebugLaunch.doNamedSteps(client)
+                    DebugLaunch.pressNamed(client)
                     #endif
                 }
                 // In the background nothing can be shown, so nothing is fetched. Only the background counts:

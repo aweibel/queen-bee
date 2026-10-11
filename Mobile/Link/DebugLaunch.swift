@@ -37,6 +37,18 @@ import UIKit
 ///                                       the person, as a tap on its line in the banner does
 ///   -qbCannedRun <n>                    no Mac at all: play the first n stages of a made-up run, for the
 ///                                       panels. See `DebugCannedRun`.
+///   -qbControl 1                        with a made-up run: the made-up Mac lets this device control it
+///   -qbDo <step>;<step>…                once the flow is open, do each step in turn, as its button does once
+///                                       any question it asks has been answered yes, and wait for the Mac's
+///                                       answer. A step is one of:
+///                                         run | stop | startAgents
+///                                         approve:<card>[:<text>] | reject:<card>[:<note>]
+///                                         allow:<card> | dontRun:<card> | start:<card>
+///                                         runFrom:<card>:<text>
+///                                       and, with a made-up run, control:on | control:off | away | pause.
+///                                       A step that names a card waits until that card has something to
+///                                       answer. One that starts with ~ isn't waited for.
+///   -qbPress <step>                     press one button as a finger does, so that what it asks first is on screen
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -183,6 +195,135 @@ enum DebugLaunch {
         return state
     }
 
+    // MARK: Controls
+
+    /// The press a test named, once the open flow has what it is about. Nil until then, or for a step that isn't a press.
+    private static func press(named step: String, in client: RemoteClient) -> (press: Press, note: String)? {
+        guard client.state == .connected, let snapshot = client.mirror.snapshot else { return nil }
+        let parts = step.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        let card = parts.count > 1 ? snapshot.flow.cards.first { $0.name == parts[1] } : nil
+        let said = parts.count > 2 ? parts[2] : nil
+        func hold(_ kind: CardKind) -> PendingHold? {
+            snapshot.run.holds.first { $0.cardID == card?.id && $0.kind == kind && (kind == .approval || $0.needsAllow) }
+        }
+        switch parts[0] {
+        case "run": return (.run, "")
+        case "stop": return (.stop, "")
+        case "startAgents": return (.startAgents, "")
+        case "approve": return hold(.approval).map { (.approve(holdID: $0.id, text: said ?? $0.text), "") }
+        case "reject": return hold(.approval).map { (.reject(holdID: $0.id), said ?? "") }
+        case "allow": return hold(.script).map { (.allow(holdID: $0.id), "") }
+        case "dontRun": return hold(.script).map { (.dontRun(holdID: $0.id), "") }
+        case "start": return card.map { (.startAgent(cardID: $0.id), "") }
+        default: return nil
+        }
+    }
+
+    private static var hasDone = false
+
+    /// Does what a test asked, a step at a time. Each press goes through `perform`, as its button's does.
+    static func doNamedSteps(_ client: RemoteClient) {
+        guard !hasDone, let steps = defaults.string(forKey: "qbDo") else { return }
+        hasDone = true
+        Task {
+            while client.state != .connected || client.mirror.snapshot == nil || (DebugCannedRun.isWanted && !DebugCannedRun.isPlayed) {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            for step in steps.split(separator: ";").map(String.init) {
+                let isWaitedFor = !step.hasPrefix("~"), step = step.hasPrefix("~") ? String(step.dropFirst()) : step
+                switch step {
+                case "control:on", "control:off": client.debugTake(.control(canControl: step == "control:on"))
+                case "away": client.debugLoseMac()
+                case "pause": try? await Task.sleep(for: .seconds(3))
+                default:
+                    let parts = step.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+                    let work: () async -> String?
+                    if parts[0] == "runFrom", parts.count == 3 {
+                        var cardID: String?
+                        while cardID == nil {
+                            cardID = client.mirror.snapshot?.flow.cards.first { $0.name == parts[1] }?.id
+                            if cardID == nil { try? await Task.sleep(for: .milliseconds(200)) }
+                        }
+                        let id = cardID ?? ""
+                        work = { await client.run(from: id, text: parts[2]) }
+                    } else {
+                        var found = press(named: step, in: client)
+                        while found == nil {
+                            try? await Task.sleep(for: .milliseconds(200))
+                            found = press(named: step, in: client)
+                        }
+                        guard let found else { continue }
+                        work = { await client.perform(found.press, note: found.note) }
+                    }
+                    if isWaitedFor {
+                        client.controls.debugNote(step, await work())
+                    } else {
+                        Task { client.controls.debugNote(step, await work()) }
+                    }
+                }
+            }
+        }
+    }
+
+    private static var hasPressed = false
+
+    /// Presses one button as a finger does, once what it is about is there.
+    static func pressNamed(_ client: RemoteClient) {
+        guard !hasPressed, let step = defaults.string(forKey: "qbPress") else { return }
+        hasPressed = true
+        Task {
+            var found = press(named: step, in: client)
+            while found == nil || (DebugCannedRun.isWanted && !DebugCannedRun.isPlayed) || client.canvas.shownRevision == 0 {
+                try? await Task.sleep(for: .milliseconds(200))
+                found = press(named: step, in: client)
+            }
+            // A moment, so the flow is on screen before something is put up over it.
+            try? await Task.sleep(for: .milliseconds(800))
+            if let found { client.press(found.press) }
+        }
+    }
+
+    /// What controls are on offer and what has become of what was pressed, worked out the way the views work it out.
+    static func controlsState(_ client: RemoteClient) -> [String: Any] {
+        let abilities = client.abilities
+        let cards = client.mirror.snapshot?.flow.cards ?? []
+        func titles(_ buttons: [PressButton]) -> [String] { buttons.map(\.title) }
+        func byName(_ all: [String: [PressButton]]) -> [String: [String]] {
+            Dictionary(cards.compactMap { card in all[card.id].map { (card.name, titles($0)) } }) { first, _ in first }
+        }
+        var details: [String] = []
+        if abilities.canAct, let id = client.canvas.selection.cardID, let card = client.mirror.snapshot?.flow.card(id) {
+            if abilities.runFrom.contains(id) { details.append("Run from here…") }
+            details += titles(card.kind == .agent || abilities.cards[id] != nil ? abilities.details[id] ?? [] : [])
+        }
+        let waitingCards = client.mirror.snapshot.map(WaitingCard.all) ?? []
+        let asking: Any = switch client.controls.asking {
+        case nil: NSNull()
+        case .stop: "stop"
+        case .restart(_, let name, _): "restart:\(name)"
+        case .allow(_, let name, let command): "allow:\(name):\(command)"
+        case .reject(_, let name, _, _): "reject:\(name)"
+        }
+        let all = abilities.bar + abilities.cards.values.joined() + abilities.details.values.joined()
+        return [
+            "canControl": client.mirror.canControl,
+            "canAct": abilities.canAct,
+            "hint": abilities.hint ?? NSNull(),
+            "bar": titles(abilities.bar),
+            "barNote": abilities.barNote ?? NSNull(),
+            "cards": byName(abilities.cards),
+            // The banner shows a waiting card's own buttons under its line.
+            "banner": Dictionary(waitingCards.compactMap { card in abilities.cards[card.id].map { (card.name, titles($0)) } }) { first, _ in first },
+            "details": details,
+            "answerLine": abilities.answerLine ?? NSNull(),
+            "disabled": Array(Set(all.filter { !$0.isEnabled }.map(\.title))).sorted(),
+            "waiting": client.mirror.waiting.keys.sorted().compactMap { client.mirror.waiting[$0] }.map { String(describing: $0).prefix(while: { $0 != "(" }) }.map(String.init),
+            "refusal": client.controls.refusal?.text ?? NSNull(),
+            "asking": asking,
+            "done": client.controls.debugDone.map { ["step": $0.step, "refusal": $0.refusal ?? NSNull()] as [String: Any] },
+        ]
+    }
+
     private static var hasExpanded = false
 
     /// Opens a session's terminal full screen, once, as soon as it has one.
@@ -287,6 +428,7 @@ enum DebugLaunch {
             fields["cannedStep"] = DebugCanned.step
             fields["cannedStage"] = DebugCannedRun.stage
             fields["panel"] = panelState(client)
+            fields["controls"] = controlsState(client)
         } onChange: {
             Task { @MainActor in report(client) }
         }

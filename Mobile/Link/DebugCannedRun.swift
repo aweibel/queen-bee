@@ -12,11 +12,20 @@ import QueenBeeCore
 ///   2  the run moves on, and stops at an approval
 ///   3  the run ends, and the Mac files it with the two before it
 ///   4  a fourth run begins
+///   5  that run is stopped on the Mac, and the agent's session has ended
+///   6  the flow's sessions are closed on the Mac, so none has been started
+///
+/// With `-qbControl 1` the made-up Mac lets the device control it, and answers each command roughly as a
+/// real one would: it changes the run, or refuses in the real Mac's words. With `-qbSilent 1` it never answers.
 enum DebugCannedRun {
     static var isWanted: Bool { wanted > 0 }
     private static var wanted: Int { UserDefaults.standard.integer(forKey: "qbCannedRun") }
     /// The last stage played, for the test to wait on.
     private(set) static var stage = 0
+    /// True once every stage that was asked for has played.
+    private(set) static var isPlayed = false
+    /// The run as the made-up Mac has it now, for it to answer commands from.
+    private static var current: RemoteRunState?
 
     static let flowID = "canned10"
     private static let start = "start001", writer = "writer01", style = "style001", both = "both0001"
@@ -136,7 +145,10 @@ enum DebugCannedRun {
             // Read by the state file, which is written again when the canvas says it has changed.
             client.canvas.didChangeWhatIsShown()
             try? await Task.sleep(for: .milliseconds(600))
-            if n >= wanted { DebugLaunch.afterCanned(client) }
+            if n >= wanted {
+                isPlayed = true
+                DebugLaunch.afterCanned(client)
+            }
             return n >= wanted
         }
         func tell(_ link: String) { client.debugTake(.messages(id: flowID, link: link, all: messages[link] ?? [])) }
@@ -145,7 +157,8 @@ enum DebugCannedRun {
         }
         let esc = "\u{1b}"
 
-        client.debugTake(.welcome(RemoteWelcome(version: Remote.version, macName: "Example Mac", canControl: false)))
+        client.debugOutbox = { id, command in answer(client, id, command) }
+        client.debugTake(.welcome(RemoteWelcome(version: Remote.version, macName: "Example Mac", canControl: UserDefaults.standard.bool(forKey: "qbControl"))))
         let summary = RemoteFlowSummary(id: flowID, name: flow.name, isSubflow: false, activity: .needsYou)
         // Others beside it, so the list of flows has every kind of row. Only the first can be opened.
         func other(_ n: Int, _ name: String, _ activity: FlowActivity = .quiet, isSubflow: Bool = false) -> RemoteFlowSummary {
@@ -158,6 +171,7 @@ enum DebugCannedRun {
         ])))
         client.open(flowID)
         client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, log: log, messages: messages, runs: [first, second])))
+        current = run
         terminal(writer, cols: 58, rows: 16, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"
             + "I'd like to save the draft.\r\n\r\n\(esc)[1mAllow writing to notes/welcome.md?\(esc)[0m\r\n\(esc)[7m 1. Yes \(esc)[0m\r\n 2. No\r\n")
         terminal(orchestrator, cols: 40, rows: 30, "\(esc)[1mOrchestrator\(esc)[0m\r\n\(esc)[2mRuns the flow called Welcome note.\(esc)[0m\r\n\r\n"
@@ -175,6 +189,7 @@ enum DebugCannedRun {
         run.handOffs = 5
         run.holds = [PendingHold(id: "hold0002", cardID: sign, kind: .approval, text: note, from: "Short enough?")]
         client.debugTake(.run(id: flowID, state: run))
+        current = run
         let more = lines(["Style guide → Pass", "Writer → Both ready", "Both ready → passed on 2 messages together", "Short enough? → Yes", "Sign off is waiting for you"], from: began - 30)
         log += more
         client.debugTake(.log(id: flowID, lines: more, reset: false))
@@ -196,6 +211,7 @@ enum DebugCannedRun {
         usage[writer] = Usage(cost: 0.87, input: 3_600, output: 2_450, cacheRead: 121_000, cacheWrite: 18_300)
         run.usage = usage
         client.debugTake(.run(id: flowID, state: run))
+        current = run
         let last = lines(["Sign off → Approved", "Sent got the final answer from Sign off"], from: 12)
         log += last
         client.debugTake(.log(id: flowID, lines: last, reset: false))
@@ -216,13 +232,74 @@ enum DebugCannedRun {
         run.results = [:]
         run.sessions[writer] = .working
         client.debugTake(.run(id: flowID, state: run))
+        current = run
         let again = lines(["Run started at Start", "Start → Writer", "Start → Style guide"], from: 0, every: 0)
         client.debugTake(.log(id: flowID, lines: again, reset: false))
         for link in messages.keys.sorted() {
             messages[link] = link == "l0" || link == "l1" ? [LinkMessage(date: now, from: "Start", text: command)] : nil
             tell(link)
         }
-        _ = await done(4)
+        if await done(4) { return }
+
+        // 5
+        run.isRunning = false
+        run.sessions[writer] = .exited
+        client.debugTake(.run(id: flowID, state: run))
+        current = run
+        if await done(5) { return }
+
+        // 6
+        run.sessions[writer] = .notStarted
+        run.sessions[orchestrator] = .notStarted
+        client.debugTake(.run(id: flowID, state: run))
+        current = run
+        _ = await done(6)
+    }
+
+    /// What the made-up Mac makes of a command: it changes the run and says done, or refuses as the real
+    /// one does in `App/Remote/RemoteCommands.swift`.
+    private static func answer(_ client: RemoteClient, _ id: Int, _ command: RemoteCommand) {
+        guard !UserDefaults.standard.bool(forKey: "qbSilent") else { return }
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard var run = current else { return }
+            var refusal: String?
+            let gone = "That is no longer waiting for an answer."
+            func held(_ id: String, _ kind: CardKind) -> Bool { run.holds.contains { $0.id == id && $0.kind == kind && (kind == .approval || $0.needsAllow) } }
+            if !client.mirror.canControl {
+                refusal = Remote.watchOnlyRefusal
+            } else {
+                switch command {
+                case .run, .runFrom:
+                    if run.isRunning { refusal = "A run is already going. Stop it before starting another." }
+                    run.isRunning = true
+                    run.marks = [:]
+                    run.linkPasses = [:]
+                    run.results = [:]
+                case .stop:
+                    if !run.isRunning { refusal = "No run is going." }
+                    run.isRunning = false
+                    run.holds = []
+                case .approve(_, let holdID, _), .reject(_, let holdID, _):
+                    if !held(holdID, .approval) { refusal = gone }
+                    run.holds.removeAll { $0.id == holdID }
+                case .allowScript(_, let holdID), .refuseScript(_, let holdID):
+                    if !held(holdID, .script) { refusal = gone }
+                    run.holds.removeAll { $0.id == holdID }
+                case .startSession(_, let cardID):
+                    run.sessions[cardID] = .starting
+                case .openOnMac:
+                    for key in [writer, orchestrator] where (run.sessions[key] ?? .notStarted) == .notStarted { run.sessions[key] = .starting }
+                case .prompt, .keys:
+                    refusal = "That session isn't running."
+                }
+            }
+            if refusal == nil {
+                current = run
+                client.debugTake(.run(id: flowID, state: run))
+            }
+            client.debugTake(.answer(id: id, refusal: refusal))
+        }
     }
 }
 #endif
