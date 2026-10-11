@@ -252,6 +252,16 @@ final class RemoteClient {
         if state == .connected { link?.send(.open(flowID: flowID)) }
     }
 
+    /// The open flow as the Mac lists it, with the project it is in. Nil when none is open, or the Mac no longer lists it.
+    typealias OpenFlow = (flow: RemoteFlowSummary, project: RemoteProject)
+    var openFlow: OpenFlow? {
+        guard let id = mirror.openFlowID else { return nil }
+        for project in mirror.library?.projects ?? [] {
+            if let flow = project.flows.first(where: { $0.id == id }) { return (flow, project) }
+        }
+        return nil
+    }
+
     // MARK: Pairing
 
     /// Asks the chosen Mac to pair, with the code scanned from its screen.

@@ -39,29 +39,29 @@ private struct IntroScreen: View {
     let next: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Queen Bee").font(.largeTitle.weight(.semibold))
-                    Text("Watch the flows running on your Mac. Pair this device with your Mac once, and it connects by itself from then on.")
-                        .foregroundStyle(.secondary)
-                }
+        PairingPage {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Text("Queen Bee")
+                    .dsMono(28, .medium)
+                    .foregroundStyle(Theme.ink.ui)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Watch the flows running on your Mac. Pair this device with your Mac once, and it connects by itself from then on.")
+                    .dsSans()
+                    .foregroundStyle(Theme.inkSecondary.ui)
+            }
+            VStack(alignment: .leading, spacing: 0) {
                 StepRow(number: 1, title: "On your Mac",
                         text: "Open Queen Bee and go to Settings. Under Remote, turn on “Let your iPad or iPhone connect”, then choose “Pair a device…”. A code appears.")
+                Hairline()
                 StepRow(number: 2, title: "On this device",
                         text: "Choose your Mac from the list, then point the camera at the code.")
-                Text("Both need to be on the same Wi-Fi. Nothing is sent over the internet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button(action: next) {
-                    Text("Continue").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
-            .padding(24)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
+            .floatingPanel()
+            Text("Both need to be on the same Wi-Fi. Nothing is sent over the internet.")
+                .dsSans(Theme.Touch.caption + 1)
+                .foregroundStyle(Theme.inkSecondary.ui)
+            Button("Continue", action: next)
+                .buttonStyle(.panel(.filled, wide: true))
         }
     }
 }
@@ -72,17 +72,21 @@ private struct StepRow: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .top, spacing: Theme.Space.m) {
             Text("\(number)")
-                .font(.headline)
+                .dsMono(Theme.Touch.body, .medium)
+                .foregroundStyle(Theme.ink.ui)
                 .frame(width: 28, height: 28)
-                .background(.tint.opacity(0.15), in: Circle())
+                .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.hairline.ui))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(text).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(title).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+                Text(text).dsSans().foregroundStyle(Theme.inkSecondary.ui)
             }
         }
+        .padding(Theme.Space.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Step \(number). \(title). \(text)")
     }
@@ -94,28 +98,45 @@ private struct MacListScreen: View {
     let choose: (FoundMac) -> Void
 
     var body: some View {
-        List {
+        PairingPage {
             if browser.isBlocked {
-                Section {
-                    Text("Queen Bee isn't allowed to look for your Mac. Turn on Local Network for Queen Bee in Settings, then come back.")
-                    Button("Open Settings") { openSettings() }
-                }
+                Text("Queen Bee isn't allowed to look for your Mac. Turn on Local Network for Queen Bee in Settings, then come back.")
+                    .dsSans()
+                    .foregroundStyle(Theme.ink.ui)
+                Button("Open Settings") { openSettings() }
+                    .buttonStyle(.panel(.filled, wide: true))
             } else {
-                Section {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(browser.macs) { mac in
                         Button { choose(mac) } label: {
-                            Label(mac.name, systemImage: "desktopcomputer")
+                            HStack(spacing: Theme.Space.m) {
+                                Image(systemName: "desktopcomputer").foregroundStyle(Theme.inkSecondary.ui)
+                                Text(mac.name).dsMono().foregroundStyle(Theme.ink.ui).lineLimit(1)
+                                Spacer(minLength: Theme.Space.s)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Theme.inkSecondary.ui)
+                            }
+                            .padding(.horizontal, Theme.Space.l)
+                            .frame(minHeight: 52)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        Hairline()
                     }
-                    if browser.macs.isEmpty {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                            Text("Looking for your Mac…").foregroundStyle(.secondary)
-                        }
+                    HStack(spacing: Theme.Space.m) {
+                        ProgressView().tint(Theme.inkSecondary.ui)
+                        Text(browser.macs.isEmpty ? "Looking for your Mac…" : "Looking for more…")
+                            .dsSans()
+                            .foregroundStyle(Theme.inkSecondary.ui)
                     }
-                } footer: {
-                    Text("A Mac is listed while it is showing a pairing code. If yours isn't here, choose “Pair a device…” in Queen Bee's settings on the Mac, and check that both are on the same Wi-Fi.")
+                    .padding(.horizontal, Theme.Space.l)
+                    .frame(minHeight: 52)
                 }
+                .floatingPanel()
+                Text("A Mac is listed while it is showing a pairing code. If yours isn't here, choose “Pair a device…” in Queen Bee's settings on the Mac, and check that both are on the same Wi-Fi.")
+                    .dsSans(Theme.Touch.caption + 1)
+                    .foregroundStyle(Theme.inkSecondary.ui)
             }
         }
         .navigationTitle("Choose your Mac")
@@ -138,27 +159,32 @@ private struct CodeScreen: View {
     private var isPairing: Bool { client.state == .pairing }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if isPairing {
-                    ProgressView("Pairing with \(mac.name)…").padding(.vertical, 60)
-                } else if pastes {
-                    paste
-                } else {
-                    scan
+        PairingPage {
+            if isPairing {
+                HStack(spacing: Theme.Space.m) {
+                    ProgressView().tint(Theme.inkSecondary.ui)
+                    Text("Pairing with \(mac.name)…").dsSans().foregroundStyle(Theme.ink.ui)
                 }
-                if !isPairing, let problem = client.pairingProblem {
-                    Label(problem, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if !isPairing, CodeScanner.isSupported {
-                    Button(pastes ? "Scan the code instead" : "Paste the code instead") { pastes.toggle() }
-                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 60)
+            } else if pastes {
+                paste
+            } else {
+                scan
             }
-            .padding(24)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
+            if !isPairing, let problem = client.pairingProblem {
+                Label(problem, systemImage: "exclamationmark.triangle")
+                    .dsSans()
+                    .foregroundStyle(Theme.failInk.ui)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.failTint.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+            }
+            if !isPairing, CodeScanner.isSupported {
+                Button(pastes ? "Scan the code instead" : "Paste the code instead") { pastes.toggle() }
+                    .buttonStyle(.panel(.quiet))
+                    .frame(maxWidth: .infinity)
+            }
         }
         .navigationTitle(mac.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -174,6 +200,8 @@ private struct CodeScreen: View {
         switch camera {
         case .authorized:
             Text("Point the camera at the code on your Mac's screen.")
+                .dsSans()
+                .foregroundStyle(Theme.ink.ui)
                 .frame(maxWidth: .infinity, alignment: .leading)
             CodeScanner { code in
                 // A code that didn't work is still in front of the camera, and would be tried again for ever.
@@ -182,42 +210,52 @@ private struct CodeScreen: View {
                 client.pair(with: code, at: mac.endpoint)
             }
                 .aspectRatio(1, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
                 .accessibilityLabel("Camera, looking for the pairing code")
         case .notDetermined:
-            ProgressView().padding(.vertical, 60)
+            ProgressView().tint(Theme.inkSecondary.ui).frame(maxWidth: .infinity).padding(.vertical, 60)
         default:
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 Text("Queen Bee isn't allowed to use the camera, so it can't scan the code. Turn on Camera for Queen Bee in Settings, or paste the code instead.")
-                Button("Open Settings") { openSettings() }.buttonStyle(.bordered)
+                    .dsSans()
+                    .foregroundStyle(Theme.ink.ui)
+                Button("Open Settings") { openSettings() }.buttonStyle(.panel())
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var paste: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text(CodeScanner.isSupported
                  ? "On your Mac, choose “Copy the code as text” under the code. Then paste it here."
                  : "This device has no camera to scan with. On your Mac, choose “Copy the code as text” under the code. Then paste it here.")
+                .dsSans()
+                .foregroundStyle(Theme.ink.ui)
             TextField("queenbee-pair:…", text: $typed, axis: .vertical)
                 .lineLimit(2...4)
-                .textFieldStyle(.roundedBorder)
-                .font(.body.monospaced())
+                .textFieldStyle(.plain)
+                .dsMono()
+                .foregroundStyle(Theme.ink.ui)
+                .frame(minHeight: 28)
+                .fieldBox()
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityLabel("Pairing code")
             if let typedProblem {
-                Text(typedProblem).font(.footnote).foregroundStyle(.red)
+                Text(typedProblem).dsSans(Theme.Touch.caption + 1).foregroundStyle(Theme.failInk.ui)
             }
             HStack {
                 PasteButton(payloadType: String.self) { strings in
                     typed = strings.first ?? ""
                     typedProblem = nil
                 }
+                .tint(Theme.ink.ui)
+                .buttonBorderShape(.roundedRectangle(radius: Theme.Radius.card))
                 Spacer()
                 Button("Pair") { pairWithTyped() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.panel(.filled))
                     .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -230,5 +268,20 @@ private struct CodeScreen: View {
         }
         typedProblem = nil
         client.pair(with: code, at: mac.endpoint)
+    }
+}
+
+/// One pairing screen: its parts in a column on the paper, kept to a width that reads well on an iPad.
+private struct PairingPage<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) { content }
+                .padding(Theme.Space.xl)
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity)
+        }
+        .background { Paper() }
     }
 }

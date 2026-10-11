@@ -2,6 +2,7 @@
 import Foundation
 import Network
 import Observation
+import QueenBeeCore
 import QueenBeeLink
 
 /// What a test tells the app as it launches it, and what the app tells the test back. None of this is in
@@ -11,6 +12,11 @@ import QueenBeeLink
 ///   -qbHost <address> -qbPairPort <n> -qbDevicePort <n>
 ///                                       with the code: pair and connect at these, without looking on the network
 ///   -qbShow macs|code                   open the pairing screens at the list of Macs, or at entering the code
+///   -qbShow settings                    once connected, open the settings
+///   -qbShow flows                       once connected, bring out the list of flows on an iPad held upright
+///   -qbShow update|pairAgain|localNetwork
+///                                       show that full-screen message and nothing else
+///   -qbOpen <flow name>                 once connected, open the flow with this name
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -40,6 +46,32 @@ enum DebugLaunch {
     }
 
     static var show: String? { defaults.string(forKey: "qbShow") }
+
+    /// A full-screen message a test wants to look at, with the words the Mac would send.
+    static var stoppedScreen: StoppedScreen.Reason? {
+        switch show {
+        case "update": .update("Update Queen Bee on this device, so both are on the same version.")
+        case "pairAgain": .pairAgain(Remote.unpairedRefusal)
+        case "localNetwork": .localNetwork("Example Mac")
+        default: nil
+        }
+    }
+
+    private static var hasOpenedNamedFlow = false
+
+    /// Opens the flow a test named, once, as soon as the Mac has listed it.
+    static func openNamedFlow(_ client: RemoteClient) {
+        guard !hasOpenedNamedFlow, let name = defaults.string(forKey: "qbOpen") else { return }
+        let flow = withObservationTracking {
+            client.state == .connected ? client.mirror.library?.projects.flatMap(\.flows).first { $0.name == name } : nil
+        } onChange: {
+            Task { @MainActor in openNamedFlow(client) }
+        }
+        if let flow {
+            hasOpenedNamedFlow = true
+            client.open(flow.id)
+        }
+    }
 
     static var savedDirect: Direct? {
         get {
@@ -78,6 +110,10 @@ enum DebugLaunch {
                 "macID": client.mac?.macID ?? NSNull(),
                 "device": DeviceIdentity.deviceID,
                 "macNotFound": client.macNotFound,
+                "localNetworkBlocked": client.localNetworkBlocked,
+                "openFlow": client.openFlow?.flow.name ?? NSNull(),
+                // The number of cards in the open flow once the Mac has sent it, which is how a test knows it arrived.
+                "openFlowCards": client.mirror.snapshot.map { $0.flow.cards.count } ?? NSNull(),
                 "pairingProblem": client.pairingProblem ?? NSNull(),
                 "flows": client.mirror.library?.projects.flatMap(\.flows).map(\.name) ?? [],
                 "hasKey": DeviceIdentity.key != nil,
