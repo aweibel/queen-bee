@@ -76,6 +76,13 @@ final class RemoteClient {
         }
     }
 
+    init() {
+        // The canvas puts each session's terminal in its card, and is told when one comes, goes or moves.
+        canvas.terminalSource = { [terminals] key in terminals.view(for: key) }
+        canvas.expandTerminal = { [terminals] key in terminals.expand(key) }
+        terminals.onChange = { [canvas] in canvas.terminalsChanged() }
+    }
+
     // MARK: Starting and stopping
 
     /// Runs once at launch. A second window asks too, and is told nothing new.
@@ -84,6 +91,10 @@ final class RemoteClient {
         hasStarted = true
         mac = DeviceIdentity.pairedMac
         #if DEBUG
+        if DebugCanned.isWanted {
+            Task { await DebugCanned.play(self) }
+            return
+        }
         if debugStart() { return }
         #endif
         guard mac != nil else {
@@ -334,6 +345,12 @@ final class RemoteClient {
     }
 
     #if DEBUG
+    /// Takes a message as if the Mac had just sent it, for a test that has no Mac. It goes the way a real one does.
+    func debugTake(_ message: HostMessage) {
+        mirror.apply(message).forEach(terminals.receive)
+        if case .welcome = message { state = .connected }
+    }
+
     /// A test launched the app with a pairing code: it starts from nothing and pairs by itself. True if it did.
     private func debugStart() -> Bool {
         guard let code = DebugLaunch.pairCode else { return false }

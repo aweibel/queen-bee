@@ -20,7 +20,13 @@ import UIKit
 ///   -qbOpen <flow name>                 once connected, open the flow with this name
 ///   -qbSelect <card name>|link:<n>      once that flow is on the canvas, select the card, or its nth link
 ///   -qbZoom <n>                         and set the canvas's zoom, where 1 is the Mac's own size
-///   -qbZoomCard <card name>             or zoom so that card fills the canvas
+///   -qbZoomCard <card name>             or zoom so that card fills the canvas; with -qbZoom too, the zoom
+///                                       is then set from there
+///   -qbShow orchestrator                once connected, turn the panel beside the canvas to the orchestrator
+///   -qbExpand <card name>|orchestrator  once that session has a terminal, open it full screen
+///   -qbScrollBack <n>                   and scroll it back n lines, as a finger would
+///   -qbCanned <n>                       no Mac at all: play the first n steps of a made-up flow and its
+///                                       terminals, as if a Mac had sent them. See `DebugCanned`.
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -77,6 +83,32 @@ enum DebugLaunch {
         }
     }
 
+    private static var hasExpanded = false
+
+    /// Opens a session's terminal full screen, once, as soon as it has one.
+    static func expandNamedTerminal(_ client: RemoteClient) {
+        guard !hasExpanded, let name = defaults.string(forKey: "qbExpand") else { return }
+        let key: String? = withObservationTracking {
+            let key = name == TerminalRegistry.orchestratorKey ? name : client.mirror.snapshot?.flow.cards.first { $0.name == name }?.id
+            // The flow has to be on screen first: a cover can't come up over nothing.
+            return key.flatMap { client.terminals.sizes[$0] != nil && client.canvas.shownRevision > 0 ? $0 : nil }
+        } onChange: {
+            Task { @MainActor in expandNamedTerminal(client) }
+        }
+        guard let key else { return }
+        hasExpanded = true
+        Task {
+            // A moment, so the terminal has been seen in its card before it leaves it.
+            try? await Task.sleep(for: .milliseconds(600))
+            client.terminals.expand(key)
+            let lines = defaults.integer(forKey: "qbScrollBack")
+            if lines > 0 {
+                try? await Task.sleep(for: .milliseconds(900))
+                client.terminals.debugScrollBack(key, lines: lines)
+            }
+        }
+    }
+
     private static var hasArranged = false
 
     /// Sets up the canvas the way a test asked, once, when the first flow has been put on it.
@@ -85,7 +117,9 @@ enum DebugLaunch {
         hasArranged = true
         if let name = defaults.string(forKey: "qbZoomCard"), let card = flow.cards.first(where: { $0.name == name }) {
             canvas.zoom(toCard: card.id, animated: false)
-        } else if defaults.object(forKey: "qbZoom") != nil {
+        }
+        // With a card named too, the zoom is set from where that left the canvas.
+        if defaults.object(forKey: "qbZoom") != nil {
             canvas.debugSetZoom(CGFloat(defaults.double(forKey: "qbZoom")))
         }
         guard let wanted = defaults.string(forKey: "qbSelect") else { return }
@@ -144,6 +178,11 @@ enum DebugLaunch {
             // What the canvas is drawing, written again whenever it changes.
             _ = client.canvas.shownRevision
             fields["canvas"] = client.canvas.view?.debugState ?? NSNull()
+            // What each terminal shows, and which is open full screen.
+            _ = client.terminals.debugRevision
+            fields["terminals"] = client.terminals.debugState
+            fields["expanded"] = client.terminals.expandedKey ?? NSNull()
+            fields["cannedStep"] = DebugCanned.step
         } onChange: {
             Task { @MainActor in report(client) }
         }

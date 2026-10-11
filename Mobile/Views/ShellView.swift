@@ -3,8 +3,18 @@ import SwiftUI
 /// The app once it has a Mac: the flows, the open flow's canvas, and the details panel. Three columns where
 /// there is room, as on an iPad; one screen after another where there isn't, as on an iPhone.
 struct ShellView: View {
+    @Environment(RemoteClient.self) private var client
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showsSettings = false
+
+    /// The session whose terminal is open full screen. Closing the cover gives the terminal back.
+    private var expanded: Binding<ExpandedTerminal?> {
+        Binding {
+            client.terminals.expandedKey.map(ExpandedTerminal.init)
+        } set: { new in
+            if new == nil { client.terminals.expand(nil) }
+        }
+    }
 
     var body: some View {
         Group {
@@ -15,10 +25,16 @@ struct ShellView: View {
             }
         }
         .sheet(isPresented: $showsSettings) { SettingsSheet() }
+        .fullScreenCover(item: expanded) { TerminalViewer(key: $0.id) }
         #if DEBUG
         .task { if DebugLaunch.show == "settings" { showsSettings = true } }
         #endif
     }
+}
+
+/// A session's key, as something a cover can be shown for.
+private struct ExpandedTerminal: Identifiable {
+    let id: String
 }
 
 /// The connection and the way to the settings, in one strip at the foot of the paper, where the Mac has its status line.

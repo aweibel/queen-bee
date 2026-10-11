@@ -16,6 +16,7 @@ struct QueenBeeMobileApp: App {
                     #if DEBUG
                     DebugLaunch.report(client)
                     DebugLaunch.openNamedFlow(client)
+                    DebugLaunch.expandNamedTerminal(client)
                     #endif
                 }
                 // In the background nothing can be shown, so nothing is fetched. Only the background counts:

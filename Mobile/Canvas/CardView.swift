@@ -262,7 +262,7 @@ class CardView: UIView {
         iconView.frame = CGRect(x: 9, y: 7, width: 14, height: 14)
 
         // Badges sit at the title's right, the run badge outermost; the name takes what is left.
-        var right = titleBar.bounds.width - 8
+        var right = titleBar.bounds.width - titleTrailing
         for badge in [runBadge] + titleAccessories where !badge.isHidden {
             badge.frame.origin = CGPoint(x: right - badge.bounds.width, y: (title - badge.bounds.height) / 2)
             right = badge.frame.minX - 5
@@ -306,6 +306,10 @@ class CardView: UIView {
 
     /// Extra badges a subclass shows in the title bar, right to left after the run badge.
     var titleAccessories: [BadgeLabel] { [] }
+
+    /// How far from the title bar's right edge the badges start. A subclass with something of its own in
+    /// that corner asks for more.
+    var titleTrailing: CGFloat { 8 }
 
     /// Subclasses lay out what sits under the title.
     func layoutContent() {}
@@ -489,6 +493,10 @@ final class AgentCardView: CardView {
     /// Stands where the Mac has its Start button, while no session is running.
     private let hintLabel = UILabel()
     private(set) weak var terminal: UIView?
+    /// The mark in the title bar's corner that opens the terminal full screen. Only this app has it: on
+    /// the Mac the terminal is read where it is.
+    private let expandIcon = UIImageView()
+    private static let expandSize: CGFloat = 14
     private var stateText = ""
 
     override var overviewText: String { stateText }
@@ -504,9 +512,26 @@ final class AgentCardView: CardView {
         hintLabel.textColor = Theme.terminalInk.withAlphaComponent(0.6)
         hintLabel.textAlignment = .center
         content.addSubview(hintLabel)
+        expandIcon.image = UIImage(systemName: "arrow.up.left.and.arrow.down.right",
+                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        expandIcon.contentMode = .center
+        expandIcon.tintColor = Theme.ink
+        expandIcon.isHidden = true
+        titleBar.addSubview(expandIcon)
     }
 
     override var titleAccessories: [BadgeLabel] { [stateBadge, costBadge] }
+    override var titleTrailing: CGFloat { expandIcon.isHidden ? 8 : 8 + Self.expandSize + 6 }
+
+    /// Where a tap opens the terminal full screen, in the canvas's own points, or nil when there is no
+    /// terminal to open. The mark is small and the card takes no touches, so the canvas asks for this and
+    /// gives it a finger's width on screen whatever the zoom.
+    func expandTarget(zoom: CGFloat) -> CGRect? {
+        guard terminal != nil, !isHidden, zoom >= Self.overviewBelow else { return nil }
+        let centre = CGPoint(x: card.x + card.width - 8 - Self.expandSize / 2, y: card.y + CanvasGeometry.titleHeight / 2)
+        let reach = max(Self.expandSize / 2, Theme.Touch.target / 2 / max(zoom, 0.01))
+        return CGRect(x: centre.x - reach, y: centre.y - reach, width: reach * 2, height: reach * 2)
+    }
 
     /// Where a terminal sits inside `terminalHolder`: a few points of padding so text doesn't touch the
     /// card's edge or its corner.
@@ -514,10 +539,14 @@ final class AgentCardView: CardView {
 
     /// Puts a session's terminal in the card, or takes it out. The view is given `terminalFrame` whenever the card is laid out.
     func attach(terminal view: UIView?) {
-        guard terminal !== view else { return }
-        terminal?.removeFromSuperview()
+        // The same view may have been away in the full-screen view and come back.
+        guard terminal !== view || view?.superview !== terminalHolder else { return }
+        // One that has already been taken elsewhere is left where it is.
+        if let old = terminal, old !== view, old.superview === terminalHolder { old.removeFromSuperview() }
         terminal = view
         if let view { terminalHolder.addSubview(view) }
+        expandIcon.isHidden = view == nil
+        accessibilityHint = view == nil ? nil : "Its terminal can be opened full screen from the corner of its title."
         setNeedsLayout()
     }
 
@@ -544,6 +573,8 @@ final class AgentCardView: CardView {
     override func layoutContent() {
         terminalHolder.frame = content.bounds
         terminal?.frame = terminalFrame
+        let size = Self.expandSize
+        expandIcon.frame = CGRect(x: titleBar.bounds.width - 8 - size, y: (CanvasGeometry.titleHeight - size) / 2, width: size, height: size)
         hintLabel.frame = content.bounds.insetBy(dx: 10, dy: 0)
     }
 }

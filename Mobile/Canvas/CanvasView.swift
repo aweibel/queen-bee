@@ -237,8 +237,28 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     /// Puts each session's terminal in its card, and takes out any that has gone.
     func attachTerminals() {
         for (id, view) in cardViews {
-            (view as? AgentCardView)?.attach(terminal: model.terminalSource?(id))
+            guard let view = view as? AgentCardView else { continue }
+            let terminal = model.terminalSource?(id)
+            view.attach(terminal: terminal)
+            // It may have come from the full-screen view, drawn for that view's zoom.
+            (terminal as? TerminalMount)?.magnification = sharpness
         }
+        #if DEBUG
+        model.didChangeWhatIsShown()
+        #endif
+    }
+
+    /// The agent card whose "open full screen" mark a tap at a canvas point is on, if any: the nearest,
+    /// when two cards' marks are both within reach.
+    private func expandTarget(at point: CGPoint) -> String? {
+        let zoom = scrollView.zoomScale
+        var nearest: (id: String, distance: CGFloat)?
+        for (id, view) in cardViews {
+            guard let target = (view as? AgentCardView)?.expandTarget(zoom: zoom), target.contains(point) else { continue }
+            let distance = hypot(target.midX - point.x, target.midY - point.y)
+            if distance < nearest?.distance ?? .greatestFiniteMagnitude { nearest = (id, distance) }
+        }
+        return nearest?.id
     }
 
     // MARK: Where the canvas is looking
@@ -440,6 +460,11 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         linkLayer.sharpness = wanted
         let scale = traitCollection.displayScale * wanted
         func draw(_ view: UIView) {
+            // A terminal looks after its own fineness: it is also shown outside the canvas.
+            if let mount = view as? TerminalMount {
+                mount.magnification = wanted
+                return
+            }
             if view.contentScaleFactor != scale { view.contentScaleFactor = scale }
             for case let shape as CAShapeLayer in view.layer.sublayers ?? [] { shape.contentsScale = scale }
             view.subviews.forEach(draw)
@@ -480,7 +505,12 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     // MARK: Taps
 
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
-        model.select(item(at: tap.location(in: document)))
+        let point = tap.location(in: document)
+        if let key = expandTarget(at: point) {
+            model.expandTerminal?(key)
+        } else {
+            model.select(item(at: point))
+        }
     }
 
     @objc private func doubleTapped(_ tap: UITapGestureRecognizer) {
@@ -489,7 +519,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
 
     /// A double tap is for bare paper. On a card or a link it would only hold up the tap that selects it.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        item(at: touch.location(in: document)) == .none
+        let point = touch.location(in: document)
+        return item(at: point) == .none && expandTarget(at: point) == nil
     }
 
     /// What a tap at a canvas point is on. Something the finger is squarely on wins: a card, then a group's
@@ -543,6 +574,18 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             entry["badges"] = view.badgeTexts
             entry["text"] = (view as? LogicCardView)?.summaryText ?? NSNull()
             entry["hasTerminalPlace"] = terminalContainer(for: card.id) != nil
+            if let agent = view as? AgentCardView {
+                entry["hasTerminal"] = agent.terminal != nil
+                // Where the card's terminal goes, on screen, to set against where the terminal is drawn.
+                // Before the card is first laid out there is no such place, and no number for it.
+                let place = agent.terminalFrame
+                if !place.isNull, !place.isEmpty { entry["terminalPlace"] = rect(agent.terminalHolder.convert(place, to: nil)) }
+                // The middle of the mark that opens the terminal full screen, on screen, for a test to tap.
+                if let target = agent.expandTarget(zoom: zoom) {
+                    let middle = document.convert(CGPoint(x: target.midX, y: target.midY), to: nil)
+                    entry["expandAt"] = ["x": middle.x, "y": middle.y]
+                }
+            }
             return entry
         }
         let selected: Any = switch model.selection {

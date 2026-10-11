@@ -40,6 +40,8 @@ final class CanvasModel {
     /// Gives the terminal for a session, by its key: a card's id. Nil until there are terminals to give.
     /// When a terminal comes or goes, `terminalsChanged` puts the right one in each card.
     @ObservationIgnored var terminalSource: ((_ key: String) -> UIView?)?
+    /// Opens a session's terminal full screen. The canvas calls it when the mark on an agent's card is tapped.
+    @ObservationIgnored var expandTerminal: ((_ key: String) -> Void)?
     #if DEBUG
     /// Goes up whenever what the canvas shows has changed, so the state a test reads is written again.
     private(set) var shownRevision = 0
