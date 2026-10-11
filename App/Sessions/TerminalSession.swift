@@ -123,6 +123,12 @@ final class TerminalSession: NSObject {
         flushSoon()
     }
 
+    /// Key presses from a paired device, written to the process as the terminal writes the Mac's own.
+    func type(_ keys: Data) {
+        guard isLive else { return }
+        view.send(source: view, data: [UInt8](keys)[...])
+    }
+
     private func processExited(_ exitCode: Int32?) {
         state = .exited
         waiting.removeAll()

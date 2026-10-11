@@ -180,6 +180,14 @@ final class RemoteHost {
         sessions.removeAll { $0.device.id == id }
     }
 
+    /// Turns "Can control" on or off for a device. One that is connected is told at once, and its very next
+    /// command is judged by the new setting.
+    func setCanControl(_ on: Bool, for id: String) {
+        guard devices.canControl(id) != on else { return }
+        devices.setCanControl(on, for: id)
+        for session in sessions where session.device.id == id { session.controlChanged(on) }
+    }
+
     /// Unpairs a device: its listener stops, its connection closes and its key is deleted.
     func remove(_ id: String) {
         // Told first, if it is connected. Otherwise all it would see is the Mac going quiet, and it would

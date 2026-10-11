@@ -1140,9 +1140,20 @@ final class FlowController: ToolHost {
 
     // MARK: Runs
 
+    /// What asking for a run came to: whether one began, and the line that says so or says why not.
+    struct RunStart {
+        var began: Bool
+        var status: String
+    }
+
     @discardableResult
     func run(command: String? = nil, startCardID: String? = nil, levelsLeft given: Int? = nil) async -> String {
-        guard let engine = readyEngine() else { return services.problem ?? "Claude Code isn't ready yet." }
+        await start(command: command, startCardID: startCardID, levelsLeft: given).status
+    }
+
+    /// `note` is a line for the run's log saying who started it, when that wasn't the person at this Mac.
+    func start(command: String? = nil, startCardID: String? = nil, levelsLeft given: Int? = nil, note: String? = nil) async -> RunStart {
+        guard let engine = readyEngine() else { return RunStart(began: false, status: services.problem ?? "Claude Code isn't ready yet.") }
         isClosed = false
         // Run directly, a flow goes by its own place under the flow at the top. Run by a Flow
         // card, it is handed what is left of the run's allowance.
@@ -1152,22 +1163,29 @@ final class FlowController: ToolHost {
         if startCardID == nil, case .card(let id) = selection, flow.card(id)?.kind == .start { startCardID = id }
         let output = await engine.start(flow: flow, startCardID: startCardID, command: command)
         // Only a run that actually began clears the last one off the canvas.
+        var began = false
         if let id = output.runID, !isRunning {
+            began = true
             clearForRun()
             let first = command ?? (startCardID.flatMap { flow.card($0) } ?? flow.cards.first { $0.kind == .start })?.command ?? ""
             currentRun = (id, Date(), String(first.prefix(200)))
+            if let note { append(note) }
         }
         absorb(output, sender: nil)
-        return output.log.last ?? (output.runID.map { "Run \($0) started" } ?? "Nothing to run")
+        return RunStart(began: began, status: output.log.last ?? (output.runID.map { "Run \($0) started" } ?? "Nothing to run"))
     }
 
     /// Starts a run part-way through: `message` arrives at the card as if a link had brought it.
     @discardableResult
     func run(from cardID: String, message: String, sender: String = "You") async -> String {
-        guard let engine = readyEngine() else { return services.problem ?? "Claude Code isn't ready yet." }
+        await start(from: cardID, message: message, sender: sender).status
+    }
+
+    func start(from cardID: String, message: String, sender: String = "You", note: String? = nil) async -> RunStart {
+        guard let engine = readyEngine() else { return RunStart(began: false, status: services.problem ?? "Claude Code isn't ready yet.") }
         guard !isRunning else {
             banner = "A run is already going. Stop it before starting another."
-            return banner ?? ""
+            return RunStart(began: false, status: banner ?? "")
         }
         isClosed = false
         runLevelsLeft = levelsLeft
@@ -1175,9 +1193,10 @@ final class FlowController: ToolHost {
         if let id = output.runID {
             clearForRun()
             currentRun = (id, Date(), "From \(flow.card(cardID)?.name ?? "a card"): \(message.prefix(160))")
+            if let note { append(note) }
         }
         absorb(output, sender: nil)
-        return output.log.last ?? "Nothing to run"
+        return RunStart(began: output.runID != nil, status: output.log.last ?? "Nothing to run")
     }
 
     /// Tries the card a run stopped at again, with the message it was given.
@@ -1597,6 +1616,9 @@ final class FlowController: ToolHost {
         }
         orchestrator.send(text)
     }
+
+    /// Adds a line to the log about something a paired device did, so the Mac shows what was done from elsewhere.
+    func noteFromDevice(_ text: String) { append(text) }
 
     private func append(_ text: String) {
         log.append(LogLine(date: Date(), text: text))

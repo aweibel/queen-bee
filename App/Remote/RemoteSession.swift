@@ -6,7 +6,9 @@ import QueenBeeLink
 /// One connected device: what it is sent, and the flow it has open.
 final class RemoteSession {
     let connection: LinkConnection
-    let device: PairedDevice
+    /// The device as it was when it connected, kept up to date for what the Mac shows of it. Whether it may
+    /// control the Mac is never taken from here: each command asks the list of devices afresh.
+    private(set) var device: PairedDevice
     /// One message, already encoded, with how much terminal output it carries that counts towards the flood limit.
     private typealias Queued = (frame: Data, terminalBytes: Int)
     private let outbox: AsyncStream<Queued>.Continuation
@@ -98,11 +100,16 @@ final class RemoteSession {
             case .open(let flowID) where flowID == controller?.flow.id: break
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
-            // Nothing is obeyed yet, so every device is answered as one that may only watch.
-            case .command(let id, _): send(.answer(id: id, refusal: Remote.watchOnlyRefusal))
+            case .command(let id, let command): send(.answer(id: id, refusal: await RemoteCommands.obey(command, from: device.id)))
             }
         }
         close()
+    }
+
+    /// "Can control" was changed in Settings while the device was connected.
+    func controlChanged(_ on: Bool) {
+        device.canControl = on
+        send(.control(canControl: on))
     }
 
     func close() {

@@ -101,6 +101,15 @@ final class RemoteDevices {
         return true
     }
 
+    /// Whether a device may do more than watch, read from the list as it is now.
+    func canControl(_ id: String) -> Bool { devices.first { $0.id == id }?.canControl ?? false }
+
+    func setCanControl(_ on: Bool, for id: String) {
+        guard let index = devices.firstIndex(where: { $0.id == id }), devices[index].canControl != on else { return }
+        devices[index].canControl = on
+        save()
+    }
+
     func remove(_ id: String) {
         KeyVault.delete(Self.account(id))
         devices.removeAll { $0.id == id }
