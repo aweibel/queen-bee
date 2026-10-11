@@ -20,6 +20,8 @@ final class RemoteSession {
 
     /// The flow the device is looking at, what it was last told about it, and how many times the graph has changed.
     private var controller: FlowController?
+    /// The name of the flow the device has open, for a test to check.
+    var openFlowName: String? { controller?.flow.name }
     private var last: RemoteFlowSnapshot?
     private var revision = 0
     private var flushTask: Task<Void, Never>?

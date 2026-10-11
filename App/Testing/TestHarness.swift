@@ -62,6 +62,7 @@ enum TestHarness {
         case "remote-state":
             return ["on": .bool(host.isOn), "devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
                     "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
+                    "open": .array(host.sessions.compactMap(\.openFlowName).map(JSONValue.string)),
                     "problem": host.problem.map(JSONValue.string) ?? .null]
         case "remote-vault":
             // Makes keeping a key fail, the way a locked or broken Keychain would.
