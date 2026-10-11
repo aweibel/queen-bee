@@ -136,6 +136,7 @@ enum DebugCannedRun {
             // Read by the state file, which is written again when the canvas says it has changed.
             client.canvas.didChangeWhatIsShown()
             try? await Task.sleep(for: .milliseconds(600))
+            if n >= wanted { DebugLaunch.afterCanned(client) }
             return n >= wanted
         }
         func tell(_ link: String) { client.debugTake(.messages(id: flowID, link: link, all: messages[link] ?? [])) }
@@ -146,7 +147,15 @@ enum DebugCannedRun {
 
         client.debugTake(.welcome(RemoteWelcome(version: Remote.version, macName: "Example Mac", canControl: false)))
         let summary = RemoteFlowSummary(id: flowID, name: flow.name, isSubflow: false, activity: .needsYou)
-        client.debugTake(.library(RemoteLibrary(projects: [RemoteProject(id: "p", name: "Book club", flows: [summary])])))
+        // Others beside it, so the list of flows has every kind of row. Only the first can be opened.
+        func other(_ n: Int, _ name: String, _ activity: FlowActivity = .quiet, isSubflow: Bool = false) -> RemoteFlowSummary {
+            RemoteFlowSummary(id: "other00\(n)", name: name, isSubflow: isSubflow, activity: activity)
+        }
+        client.debugTake(.library(RemoteLibrary(projects: [
+            RemoteProject(id: "p", name: "Book club", flows: [summary, other(1, "Monthly newsletter", .running), other(2, "Reading list", .failed),
+                                                             other(3, "Thank the speakers"), other(4, "Check the spelling", isSubflow: true)]),
+            RemoteProject(id: "q", name: "Allotment society", flows: [other(5, "Seed order with a long name that runs on"), other(6, "Rota")]),
+        ])))
         client.open(flowID)
         client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, log: log, messages: messages, runs: [first, second])))
         terminal(writer, cols: 58, rows: 16, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"

@@ -14,6 +14,9 @@ import UIKit
 ///                                       with the code: pair and connect at these, without looking on the network
 ///   -qbShow macs|code                   open the pairing screens at the list of Macs, or at entering the code
 ///   -qbShow settings                    once connected, open the settings
+///   -qbShow list                        once a made-up run has played, go back to the list of flows, as the
+///                                       back arrow does on an iPhone
+///   -qbAway 1                           once a made-up run has played, lose the Mac and fail to find it again
 ///   -qbShow flows                       once connected, bring out the list of flows on an iPad held upright
 ///   -qbShow update|pairAgain|localNetwork
 ///                                       show that full-screen message and nothing else
@@ -72,6 +75,12 @@ enum DebugLaunch {
         case "localNetwork": .localNetwork("Example Mac")
         default: nil
         }
+    }
+
+    /// What a test asked for once the made-up run has played as far as it was told to.
+    static func afterCanned(_ client: RemoteClient) {
+        if show == "list" { client.open(nil) }
+        if defaults.bool(forKey: "qbAway") { client.debugLoseMac() }
     }
 
     private static var hasOpenedNamedFlow = false

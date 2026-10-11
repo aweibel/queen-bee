@@ -16,7 +16,7 @@ struct CanvasArea: View {
         Group {
             if let open = client.openFlow {
                 // The canvas draws its own paper, so the dots scroll and zoom with the cards as on the Mac.
-                CanvasRepresentable(client: client, top: top, foot: Self.foot)
+                CanvasRepresentable(client: client, top: top, foot: max(Self.foot, client.panel.cover))
                     .ignoresSafeArea()
                     .overlay {
                         // Asked for and not sent yet.

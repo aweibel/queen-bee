@@ -950,8 +950,15 @@ def scenario_terminals():
         t = terminal(s)
         check("the terminal opens full screen", s.get("expanded") == agent and t.get("shown") is True, str(s.get("expanded")))
         check("where it scrolls back through earlier output", screen(t) == rows(first + more, t, back=40), f"{screen(t)[:2]} … {screen(t)[-2:]}")
-        check("at least as large as on the Mac, and within the screen", t.get("onScreen", {}).get("width", 0) >= t.get("natural", {}).get("width", 1) - 1
-              and t.get("onScreen", {}).get("x", -1) >= 0, str(t.get("onScreen")))
+        on, natural, canvas = t.get("onScreen", {}), t.get("natural", {}).get("width", 1), s.get("canvas") or {}
+        # The canvas is still there underneath, and what it can see across is the width of the screen.
+        across = canvas.get("visible", {}).get("width", 0) * canvas.get("zoom", 0)
+        if natural + 24 <= across:
+            check("at least as large as on the Mac, and within the screen", on.get("width", 0) >= natural - 1 and on.get("x", -1) >= 0, str(on))
+        else:
+            # An iPhone held upright is narrower than the Mac's terminal, so there it can't be life size and whole.
+            check("on a screen narrower than the Mac's terminal, it fills the width with every column in view",
+                  abs(on.get("width", 0) - (across - 24)) < 1 and on.get("x", -1) >= 0, f"{on} of {across:.0f} across, {natural:.0f} on the Mac")
         check("and still takes no typing", t.get("isFirstResponder") is False)
         check("its card goes without it meanwhile", shown_card(s, "Agent").get("hasTerminal") is False, str(shown_card(s, "Agent").get("hasTerminal")))
         mobile.shot("terminals-6-full-screen-scrolled-back")
@@ -1071,8 +1078,11 @@ def scenario_panels():
         s = play(3, "-qbShow", "runs")
         p = panel(s)
         check("the panel can be turned to a page by name", (p.get("page"), p.get("tab")) == ("runs", "history"), f"{p.get('page')} {p.get('tab')}")
-        check("when nothing is waiting the banner goes, and the canvas has its room back", p.get("needsYou") == [] and room(s) > with_banner + 100,
-              f"{room(s):.0f} points clear, {with_banner:.0f} with the banner")
+        # Measured as the room with the banner was: with the panel left alone. On an iPhone the panel is a
+        # sheet that comes up over the canvas's foot, and asking for a page of it brings it up.
+        without_banner = room(play(3))
+        check("when nothing is waiting the banner goes, and the canvas has its room back", p.get("needsYou") == [] and without_banner > with_banner + 100,
+              f"{without_banner:.0f} points clear, {with_banner:.0f} with the banner")
         check("the run that ended is listed first, and is the one on show",
               [(r["id"], r["outcome"], r["cost"], r["onShow"]) for r in p.get("runs", [])][:1] == [("run00003", "finished", "$0.37", True)]
               and [r["id"] for r in p.get("runs", [])] == ["run00003", "run00002", "run00001"] and p.get("viewedRun") is None, str(p.get("runs")))

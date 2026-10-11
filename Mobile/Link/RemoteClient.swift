@@ -357,6 +357,12 @@ final class RemoteClient {
         if case .welcome = message { state = .connected }
     }
 
+    /// As if the connection had dropped and the Mac had then been looked for and not found.
+    func debugLoseMac() {
+        state = .lookingForMac
+        macNotFound = true
+    }
+
     /// A test launched the app with a pairing code: it starts from nothing and pairs by itself. True if it did.
     private func debugStart() -> Bool {
         guard let code = DebugLaunch.pairCode else { return false }

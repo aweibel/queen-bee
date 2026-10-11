@@ -123,6 +123,13 @@ private struct StackShell: View {
     @Environment(RemoteClient.self) private var client
     let showSettings: () -> Void
     @State private var showsDetails = false
+    /// Where on the screen the top of the details' sheet is, and where the foot of this view is.
+    @State private var sheetTop: CGFloat = 0
+    @State private var foot: CGFloat = 0
+
+    /// How much of the canvas's foot the details cover. No more than two thirds: pulled up to full height
+    /// they cover the canvas whole, and there is nothing left to fit the flow into.
+    private var cover: CGFloat { showsDetails && sheetTop > 0 ? min(max(0, foot - sheetTop), foot * 2 / 3) : 0 }
 
     /// The canvas is on screen exactly when a flow is open, so going back closes the flow.
     private var path: Binding<[String]> {
@@ -154,10 +161,37 @@ private struct StackShell: View {
                                 Button { showsDetails = true } label: { Label("Details", systemImage: "info.circle") }
                             }
                         }
-                        .inspector(isPresented: $showsDetails) {
-                            InspectorPanel().presentationDetents([.medium, .large])
-                        }
                 }
         }
+        // A sheet of its own, and not the system's inspector, which in a screen this narrow never came up.
+        // At half height the canvas above it still takes taps, so a card can be picked with its details open.
+        .sheet(isPresented: $showsDetails) {
+            InspectorPanel()
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
+                .presentationDetents([.medium, .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .presentationContentInteraction(.scrolls)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { foot = $0 }
+        // With the details up, the canvas fits the flow into what shows above them. It is told through the
+        // panel's model: a screen that has been pushed isn't drawn again when this one's own state changes.
+        .onChange(of: cover, initial: true) { client.panel.cover = cover }
+        .onDisappear { client.panel.cover = 0 }
+        // The details belong to the open flow, and go when it does.
+        .onChange(of: client.mirror.openFlowID) { _, open in
+            if open == nil { showsDetails = false }
+        }
+        // A terminal opens over everything. The sheet steps aside first: two things can't be put up at once.
+        .onChange(of: client.terminals.expandedKey) { _, key in
+            if key != nil { showsDetails = false }
+        }
+        #if DEBUG
+        // A test that names a page of the panel wants to see it, and here the panel is a sheet nothing has brought up.
+        .task {
+            guard DebugLaunch.show.flatMap(PanelPage.init(rawValue:)) != nil else { return }
+            while client.mirror.snapshot == nil { try? await Task.sleep(for: .milliseconds(200)) }
+            showsDetails = true
+        }
+        #endif
     }
 }

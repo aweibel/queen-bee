@@ -1,3 +1,4 @@
+import CoreGraphics
 import Observation
 
 /// One page of the panel beside the canvas.
@@ -52,6 +53,9 @@ enum PanelTab: String, CaseIterable, Identifiable {
 @Observable
 final class PanelModel {
     private(set) var page = PanelPage.details
+    /// How much of the canvas's foot the panel covers, when it is a sheet that comes up over the canvas as
+    /// on an iPhone. Nothing when it is beside the canvas, or put away. The canvas fits the flow into what is left.
+    var cover: CGFloat = 0
     /// The page each tab was last left on, so going back to a tab goes back to that page.
     @ObservationIgnored private var left: [PanelTab: PanelPage] = [:]
 
