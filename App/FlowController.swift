@@ -114,7 +114,7 @@ final class FlowController: ToolHost {
     @ObservationIgnored private var engine: Engine?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var historyTask: Task<Void, Never>?
-    @ObservationIgnored private var isOpen = false
+    @ObservationIgnored private(set) var isOpen = false
     /// Set when the flow's sessions are shut down. Work still in flight then, such as a script
     /// finishing or a session's last hook, must not start writing again.
     @ObservationIgnored private var isClosed = false

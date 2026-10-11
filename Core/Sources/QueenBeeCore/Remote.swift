@@ -40,6 +40,26 @@ public enum Remote {
         return words.isEmpty ? "a device" : words.joined(separator: " ")
     }
 
+    /// Text a device sent, made safe to enter into a terminal as one paste: nothing is left in it that a
+    /// terminal acts on, such as the Esc that would end the paste and turn the rest into key presses. New
+    /// lines and tabs are kept, and every other control character is dropped.
+    public static func plainText(_ text: String) -> String {
+        var kept = String.UnicodeScalarView()
+        var lastWasReturn = false
+        for scalar in text.unicodeScalars {
+            defer { lastWasReturn = scalar == "\r" }
+            switch scalar.value {
+            case 0x0A: if !lastWasReturn { kept.append("\n") }
+            // A return is a new line, however the device's keyboard wrote it.
+            case 0x0D: kept.append("\n")
+            case 0x09: kept.append(scalar)
+            case 0x00...0x1F, 0x7F...0x9F: break
+            default: kept.append(scalar)
+            }
+        }
+        return String(kept)
+    }
+
     public static func encode<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
 }
@@ -206,6 +226,28 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
         case .openOnMac(let id), .run(let id, _), .runFrom(let id, _, _), .stop(let id), .approve(let id, _, _),
              .reject(let id, _, _), .allowScript(let id, _), .refuseScript(let id, _), .startSession(let id, _),
              .prompt(let id, _, _), .keys(let id, _, _): id
+        }
+    }
+
+    /// The same command with its text made safe to enter into a terminal. See `Remote.plainText`. The Mac
+    /// does this to every command before anything else. Key presses are left as they are: they are keys.
+    public var cleaned: RemoteCommand {
+        switch self {
+        case .run(let id, let command): .run(flowID: id, command: command.map(Remote.plainText))
+        case .runFrom(let id, let cardID, let text): .runFrom(flowID: id, cardID: cardID, text: Remote.plainText(text))
+        case .approve(let id, let holdID, let text): .approve(flowID: id, holdID: holdID, text: Remote.plainText(text))
+        case .reject(let id, let holdID, let note): .reject(flowID: id, holdID: holdID, note: Remote.plainText(note))
+        case .prompt(let id, let key, let text): .prompt(flowID: id, key: key, text: Remote.plainText(text))
+        case .openOnMac, .stop, .allowScript, .refuseScript, .startSession, .keys: self
+        }
+    }
+
+    /// Whether the Mac may be a while doing this: starting a run can wait on a condition being judged, and
+    /// stopping one waits its turn behind that. The Mac goes on reading what else the device sends meanwhile.
+    public var canTakeTime: Bool {
+        switch self {
+        case .run, .runFrom, .stop: true
+        default: false
         }
     }
 

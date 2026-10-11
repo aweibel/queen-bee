@@ -141,6 +141,42 @@ import Testing
         #expect(Remote.oneLine("a\u{2028}b\u{1b}[2Jc\r\td") == "a b [2Jc d")
         #expect(Remote.oneLine("\n\n") == "a device")
     }
+
+    @Test func textFromADeviceCanNotEndThePasteItIsEnteredIn() {
+        #expect(Remote.plainText("Fix the login page") == "Fix the login page")
+        #expect(Remote.plainText("one\n\ttwo") == "one\n\ttwo")
+        // The end of a bracketed paste, and whatever would follow it as keys.
+        #expect(Remote.plainText("hi\u{1b}[201~\u{3}rm -rf\r") == "hi[201~rm -rf\n")
+        #expect(Remote.plainText("a\u{0}b\u{7}c\u{8}d\u{7f}e\u{9b}f") == "abcdef")
+        #expect(Remote.plainText("one\r\ntwo\rthree") == "one\ntwo\nthree")
+        #expect(Remote.plainText("caf\u{e9} \u{1F41D} \u{4f60}") == "caf\u{e9} \u{1F41D} \u{4f60}")
+        #expect(Remote.plainText("\u{1b}\u{1b}") == "")
+    }
+
+    @Test func aCommandIsCleanedOfWhatATerminalWouldActOn() {
+        let bad = "go\u{1b}[201~"
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: bad).cleaned == .prompt(flowID: "f", key: "c", text: "go[201~"))
+        #expect(RemoteCommand.run(flowID: "f", command: bad).cleaned == .run(flowID: "f", command: "go[201~"))
+        #expect(RemoteCommand.run(flowID: "f", command: nil).cleaned == .run(flowID: "f", command: nil))
+        #expect(RemoteCommand.runFrom(flowID: "f", cardID: "c", text: bad).cleaned == .runFrom(flowID: "f", cardID: "c", text: "go[201~"))
+        #expect(RemoteCommand.approve(flowID: "f", holdID: "h", text: bad).cleaned == .approve(flowID: "f", holdID: "h", text: "go[201~"))
+        #expect(RemoteCommand.reject(flowID: "f", holdID: "h", note: bad).cleaned == .reject(flowID: "f", holdID: "h", note: "go[201~"))
+        // Keys are keys: Esc is one of them.
+        let keys = RemoteCommand.keys(flowID: "f", key: "c", data: Data([27, 3]))
+        #expect(keys.cleaned == keys)
+        // Text that was nothing but control characters is nothing to send.
+        #expect(RemoteCommand.prompt(flowID: "f", key: "c", text: "\u{1b}\u{7}").cleaned.problem != nil)
+    }
+
+    @Test func onlyStartingAndStoppingARunCanTakeTime() {
+        #expect(RemoteCommand.run(flowID: "f", command: nil).canTakeTime)
+        #expect(RemoteCommand.runFrom(flowID: "f", cardID: "c", text: "x").canTakeTime)
+        #expect(RemoteCommand.stop(flowID: "f").canTakeTime)
+        #expect(!RemoteCommand.prompt(flowID: "f", key: "c", text: "x").canTakeTime)
+        #expect(!RemoteCommand.keys(flowID: "f", key: "c", data: Data([1])).canTakeTime)
+        #expect(!RemoteCommand.approve(flowID: "f", holdID: "h", text: "x").canTakeTime)
+        #expect(!RemoteCommand.openOnMac(flowID: "f").canTakeTime)
+    }
 }
 
 @Suite struct RemoteListenerRecordTests {

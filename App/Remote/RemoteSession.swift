@@ -46,6 +46,10 @@ final class RemoteSession {
     private var isFlooded = false
     private static let terminalBacklogLimit = 2_000_000
 
+    /// The commands that can take time and haven't finished, by flow: the last one of each, which the next waits for.
+    private var slow: [String: (turn: Int, task: Task<Void, Never>)] = [:]
+    private var turn = 0
+
     init(connection: LinkConnection, device: PairedDevice) {
         self.connection = connection
         self.device = device
@@ -100,10 +104,30 @@ final class RemoteSession {
             case .open(let flowID) where flowID == controller?.flow.id: break
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
+            case .command(let id, let command) where command.canTakeTime: obeyInTurn(id, command)
+            // Answered before the next message is read, so what is typed arrives in the order it was typed.
             case .command(let id, let command): send(.answer(id: id, refusal: await RemoteCommands.obey(command, from: device.id)))
             }
         }
         close()
+    }
+
+    /// Starts or stops a run without making the device wait to be heard: starting can take as long as judging
+    /// a condition does, and Stop, keys and everything else it sends meanwhile are still read and obeyed.
+    /// Those for one flow are done in the order they came, so a Stop sent after a Run stops that run.
+    /// Whether the device may control the Mac is asked when each one's turn comes, not when it arrived.
+    private func obeyInTurn(_ id: Int, _ command: RemoteCommand) {
+        let flowID = command.flowID, deviceID = device.id
+        turn += 1
+        let mine = turn
+        slow[flowID] = (mine, Task { [weak self, earlier = slow[flowID]?.task] in
+            await earlier?.value
+            let refusal = await RemoteCommands.obey(command, from: deviceID)
+            guard let self else { return }
+            if self.slow[flowID]?.turn == mine { self.slow[flowID] = nil }
+            // A connection that has closed since is told nothing: `send` drops it.
+            self.send(.answer(id: id, refusal: refusal))
+        })
     }
 
     /// "Can control" was changed in Settings while the device was connected.
