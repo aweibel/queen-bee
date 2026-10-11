@@ -21,6 +21,11 @@ private final class Waiting: @unchecked Sendable {
     var reason: String?
 }
 
+private extension NWError {
+    /// The only thing the two ends settle while securing a connection is the key, so an error from there means the key.
+    var isTLS: Bool { if case .tls = self { true } else { false } }
+}
+
 /// One encrypted connection carrying frames: a four-byte big-endian length, then that many bytes.
 public final class LinkConnection: @unchecked Sendable {
     /// Far above any real message, and low enough that a garbled length fails fast.
@@ -51,9 +56,10 @@ public final class LinkConnection: @unchecked Sendable {
                 connection.stateUpdateHandler = { state in
                     switch state {
                     case .ready: once.run { continuation.resume() }
-                    case .failed(let error): once.run { continuation.resume(throwing: LinkError("\(error)")) }
+                    case .failed(let error): once.run { continuation.resume(throwing: LinkError("\(error)", keyRefused: error.isTLS)) }
                     // The other end holds a different key. Waiting would not change that, so say so at once.
-                    case .waiting(.tls(let status)): once.run { continuation.resume(throwing: LinkError("\(NWError.tls(status))")) }
+                    case .waiting(.tls(let status)):
+                        once.run { continuation.resume(throwing: LinkError("\(NWError.tls(status))", keyRefused: true)) }
                     // Any other wait isn't the end: on a device the first connection waits here while it asks to use
                     // the local network, and a network that is down may come back. The timeout is what gives up.
                     case .waiting(let error): waiting.reason = "\(error)"
@@ -132,11 +138,13 @@ public final class LinkListener: @unchecked Sendable {
 
     /// `service` advertises the listener on the local network. `localOnly` keeps it to this machine, for tests.
     /// `largestInbound` is the largest frame taken from an end that connects.
-    public init(key: Data, service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame) throws {
+    /// `port` is for a test that has to know the port before the listener exists. Left out, the system picks one.
+    public init(key: Data, service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame,
+                port: UInt16? = nil) throws {
         self.largestInbound = largestInbound
         let parameters = LinkSecurity.parameters(key: key)
         if localOnly { parameters.requiredInterfaceType = .loopback }
-        listener = try NWListener(using: parameters)
+        listener = try NWListener(using: parameters, on: port.flatMap(NWEndpoint.Port.init(rawValue:)) ?? .any)
         listener.service = service
     }
 

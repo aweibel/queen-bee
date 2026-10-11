@@ -47,3 +47,28 @@ import Testing
         #expect(throws: (any Error).self) { try Remote.decode(HostMessage.self, from: Data("{}".utf8)) }
     }
 }
+
+@Suite struct RemoteListenerRecordTests {
+    private let record = ["mac": "aaaa-1111", "device": "bbbb-2222", "name": "Studio"]
+
+    @Test func aDeviceFindsItsOwnListenerOnItsOwnMac() {
+        #expect(Remote.isListener(record, forDevice: "bbbb-2222", ofMac: "aaaa-1111"))
+    }
+
+    @Test func capitalsDoNotMatter() {
+        #expect(Remote.isListener(record, forDevice: "BBBB-2222", ofMac: "AAAA-1111"))
+    }
+
+    @Test func anotherDevicesListenerIsNotIts() {
+        #expect(!Remote.isListener(record, forDevice: "cccc-3333", ofMac: "aaaa-1111"))
+    }
+
+    @Test func anotherMacIsNotIts() {
+        #expect(!Remote.isListener(record, forDevice: "bbbb-2222", ofMac: "dddd-4444"))
+    }
+
+    @Test func aRecordWithPartsMissingMatchesNothing() {
+        #expect(!Remote.isListener([:], forDevice: "", ofMac: ""))
+        #expect(!Remote.isListener(["mac": "aaaa-1111"], forDevice: "bbbb-2222", ofMac: "aaaa-1111"))
+    }
+}

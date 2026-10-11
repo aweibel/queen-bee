@@ -43,9 +43,14 @@ enum TestHarness {
         }
         switch payload["op"]?.stringValue {
         case "remote-on":
-            host.setOn(true)
+            // Off and on again is what a device sees when the Mac goes away and comes back.
+            host.setOn(payload["on"]?.boolValue ?? true)
             return ["on": .bool(host.isOn)]
         case "remote-pair":
+            #if DEBUG
+            // A test that drives the iPad app has to tell it the ports before either listener exists.
+            host.testPorts = (payload["pairPort"]?.doubleValue.flatMap(UInt16.init(exactly:)), payload["devicePort"]?.doubleValue.flatMap(UInt16.init(exactly:)))
+            #endif
             host.beginPairing()
             guard host.pairing != nil else { return ["error": "pairing didn't start"] }
             guard let port = await soon({ host.pairingPort }), let code = host.pairing?.code.text else { return ["error": "pairing didn't start"] }

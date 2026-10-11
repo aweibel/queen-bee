@@ -50,6 +50,8 @@ final class RemoteSession {
                 do { try await connection.send(queued.frame) } catch { connection.close(); return }
                 self?.sent(queued)
             }
+            // Everything queued has gone and nothing more will be. Closing a connection that is already closed does nothing.
+            connection.close()
         }
     }
 
@@ -100,6 +102,21 @@ final class RemoteSession {
         isClosed = true
         outbox.finish()
         connection.close()
+    }
+
+    /// Closes after telling the device why, in words it shows the person. Whatever was already queued goes
+    /// first, then the reason, then the connection closes.
+    func turnAway(_ reason: String) {
+        guard !isClosed else { return }
+        open(nil)
+        send(.refused(reason))
+        isClosed = true
+        outbox.finish()
+        // A device that has stopped reading would hold the connection open for ever.
+        Task { [connection] in
+            try? await Task.sleep(for: .seconds(2))
+            connection.close()
+        }
     }
 
     // MARK: The open flow

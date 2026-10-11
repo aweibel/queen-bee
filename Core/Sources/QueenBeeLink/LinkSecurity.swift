@@ -4,7 +4,10 @@ import Security
 
 public struct LinkError: Error, Equatable, CustomStringConvertible {
     public let description: String
-    public init(_ description: String) { self.description = description }
+    /// True when the other end was there and the two didn't hold the same key. Nothing listening, a timeout
+    /// and a dropped connection are all false: the key was never put to the test.
+    public let keyRefused: Bool
+    public init(_ description: String, keyRefused: Bool = false) { self.description = description; self.keyRefused = keyRefused }
 }
 
 public enum LinkSecurity {

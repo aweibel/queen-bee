@@ -8,6 +8,18 @@ public enum Remote {
     public static let service = "_queenbee._tcp"
     public static let pairingService = "_queenbee-pair._tcp"
 
+    /// What the Mac says to a device it no longer knows. The device goes by these exact words to tell "pair
+    /// again" from "update", so the Mac must send them as they are.
+    public static let unpairedRefusal = "This device is no longer paired with this Mac. Pair it again from Settings on the Mac."
+
+    /// Whether a listener's Bonjour record says it is the one this Mac keeps for this device. The Mac has one
+    /// listener for each paired device, and other Macs nearby have their own.
+    public static func isListener(_ record: [String: String], forDevice deviceID: String, ofMac macID: String) -> Bool {
+        guard let device = record["device"], let mac = record["mac"] else { return false }
+        // Ids are kept in lower case, and either side may hold its copy in capitals.
+        return device.lowercased() == deviceID.lowercased() && mac.lowercased() == macID.lowercased()
+    }
+
     public static func encode<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
 }

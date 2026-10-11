@@ -46,6 +46,24 @@ final class RemoteHost {
     /// Goes up each time Remote is turned on or off, so a watcher from an earlier turn knows to stop.
     @ObservationIgnored private var watch = 0
 
+    #if DEBUG
+    /// Ports a test asked for, because the app it drives has to be told where to connect before it is
+    /// launched: one for the next pairing listener, and one for the listener of the device that pairs there.
+    @ObservationIgnored var testPorts: (pairing: UInt16?, device: UInt16?) = (nil, nil)
+    /// The port each device paired that way is listened for on.
+    @ObservationIgnored private var testDevicePorts: [String: UInt16] = [:]
+    #endif
+
+    /// The port a test fixed for the pairing listener, or for a device's. Nil, always, outside a test copy.
+    private func fixedPort(for deviceID: String?) -> UInt16? {
+        #if DEBUG
+        guard TestHarness.isEnabled else { return nil }
+        return deviceID.map { testDevicePorts[$0] } ?? testPorts.pairing
+        #else
+        return nil
+        #endif
+    }
+
     /// A test copy stays on this machine and is never advertised.
     private var localOnly: Bool { TestHarness.isEnabled }
     private var macName: String { Host.current().localizedName ?? "Mac" }
@@ -96,7 +114,8 @@ final class RemoteHost {
             let service = localOnly ? nil : NWListener.Service(
                 name: "\(macName) \(id.prefix(4))", type: Remote.service,
                 txtRecord: NWTXTRecord(["mac": devices.macID, "device": id, "name": macName]))
-            let listener = try LinkListener(key: key, service: service, localOnly: localOnly, largestInbound: Self.largestFromDevice)
+            let listener = try LinkListener(key: key, service: service, localOnly: localOnly, largestInbound: Self.largestFromDevice,
+                                            port: fixedPort(for: id))
             listeners[id] = listener
             Task {
                 do {
@@ -163,8 +182,15 @@ final class RemoteHost {
 
     /// Unpairs a device: its listener stops, its connection closes and its key is deleted.
     func remove(_ id: String) {
+        // Told first, if it is connected. Otherwise all it would see is the Mac going quiet, and it would
+        // look for the Mac for ever instead of asking to be paired again.
+        for session in sessions where session.device.id == id { session.turnAway(Remote.unpairedRefusal) }
+        sessions.removeAll { $0.device.id == id }
         stopListening(id)
         devices.remove(id)
+        #if DEBUG
+        testDevicePorts[id] = nil
+        #endif
     }
 
     /// Starts a connection and returns the first thing it sends. One that says nothing in time is closed, so
@@ -198,7 +224,7 @@ final class RemoteHost {
             // Ids are kept in lower case, and a device may send its own in either.
             guard isOn, hello.deviceID.lowercased() == deviceID, let device = devices.devices.first(where: { $0.id == deviceID }) else {
                 // Told, so the device can say so instead of trying again for ever as if the link had dropped.
-                try await connection.send(HostMessage.refused("This device is no longer paired with this Mac. Pair it again from Settings on the Mac."))
+                try await connection.send(HostMessage.refused(Remote.unpairedRefusal))
                 connection.close()
                 return
             }
@@ -256,7 +282,7 @@ final class RemoteHost {
         do {
             let service = localOnly ? nil : NWListener.Service(name: macName, type: Remote.pairingService)
             let listener = try LinkListener(key: offer.code.secret, service: service, localOnly: localOnly,
-                                            largestInbound: Self.largestFromDevice)
+                                            largestInbound: Self.largestFromDevice, port: fixedPort(for: nil))
             pairingListener = listener
             Task {
                 do {
@@ -309,6 +335,9 @@ final class RemoteHost {
             }
             cancelPairing()
             let id = request.deviceID.lowercased()
+            #if DEBUG
+            if TestHarness.isEnabled { testDevicePorts[id] = testPorts.device }
+            #endif
             let name = String(request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
             // A device being paired again keeps working with its old key until it has been given the new one.
             let before = devices.devices.first { $0.id == id }
