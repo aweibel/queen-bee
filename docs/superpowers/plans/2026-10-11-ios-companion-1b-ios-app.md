@@ -176,3 +176,57 @@ Read `App/Views/InspectorView.swift`, `SidePanel.swift` and `CanvasOverlays.swif
 ## Not in this plan
 
 Running, stopping, approving and typing from the device (stage 2). Editing the canvas (stage 3). Connecting from outside the local network.
+
+## Result
+
+**What was built.** The `QueenBeeMobile` target in `Mobile/`, for iPad and iPhone on iOS 26, and `RemoteMirror` in
+Core. The app pairs with the Mac by a scanned or pasted code, finds its own listener, and reconnects by itself. It
+shows the Mac's projects and flows with their states; the open flow's canvas drawn with UIKit as the Mac draws it,
+updated card by card; each agent's terminal in its card, the orchestrator's beside the canvas, and any of them
+full screen with scroll-back; and the panels: a card's or link's details, the run log, End cards' answers, earlier
+runs, cost, and a banner of what is waiting on you. An iPad gets three columns. An iPhone gets a list, then the
+canvas, with the details in a sheet at half height. Everything is watch-only. What the build settled on that the
+design did not have is listed at the top of the spec.
+
+**What Task 7 changed.** On an iPhone the details panel never came up: it was the system's inspector, and it is now
+a sheet of the app's own, with the flow fitted into what shows above it. A card zoomed out to its overview no
+longer draws what is under the overview, which showed through when the canvas was faded with the Mac away.
+VoiceOver is told each card's kind, name, state, whether it is waiting and where the run went; links and groups
+can be found and selected; tabs say they are tabs. Text written straight on the paper uses ink, because the
+lighter ink is below 4.5 to 1 there. In a Debug build the file the tests read is written only in the Simulator.
+`scripts/check-clean.sh` refuses any team named in `project.yml` or `Mobile/Config.xcconfig`.
+
+**How it was checked.**
+
+| What | How | Result |
+|---|---|---|
+| Core, including `RemoteMirror` | `cd Core && swift test` | 242 tests pass |
+| Both apps build | `./scripts/build.sh`, `./scripts/build-mobile.sh`, each also with `Release` | all four succeed |
+| No test hooks in a release | `nm` and `strings` on both Release binaries for the test types and launch arguments, with the Debug builds as the control | none in Release; hundreds in Debug |
+| Terminals and panels, with no Mac | `./scripts/e2e.py terminals panels` on an iPad Pro 11-inch and on an iPhone 17 simulator | 47 checks pass on each |
+| Against the Mac's test copy, with real sessions | `./scripts/e2e.py guard settings remote mirror mobile` on the iPad simulator | 106 of 110 at first. The four were the script's: `mirror` left a card narrower than the flow was written with, and `mobile` checked it against the file. `mirror` now puts the card back, and `mirror mobile` then passed 69 of 69 |
+| Every screen at phone width | Screenshots on the iPhone 17 simulator in light and dark, and again at a large text size, of a made-up run | looked at one by one |
+| iPad on its side | A copy of the built app with its `Info.plist` changed to allow only landscape, in the simulator | the three columns, the banner, a zoomed card, the panels and a full-screen terminal were looked at in light and dark |
+| Contrast | Worked out for every pair of tokens the app uses | see below |
+
+Contrast: ink on every background is 8.7 to 1 or better, and every tinted badge is 5.8 to 1 or better. The lighter
+ink is 5.0 on the white surface and 4.6 on a bar, but in light mode it is 4.1 on the paper and on the orange and red
+tints, 4.2 on a bar under a finger and 4.3 on the green tint, where 4.5 is wanted. The app's own screens no longer
+put it on the paper. The canvas still does, in a group's second line and in the second line of a zoomed-out card,
+because it copies the Mac, whose tokens these are. The orange outline is 2.8
+against white, under the 3 wanted for a line that carries meaning. Both are the Mac's to change first.
+
+**What is left for the owner, on a real iPad or iPhone.** None of this can be done in a simulator.
+
+1. Install it by the README's steps with a free Apple ID, and say whether each step reads right. Xcode's own menu
+   names were written from memory of Xcode, not checked on screen.
+2. Allow the local network when asked, and pair by scanning the code with the camera. Then turn Local Network off
+   in Settings and see the message that asks for it back.
+3. Open a flow and run it on the Mac while watching the device, on real Wi-Fi: how quickly the canvas and the
+   terminals keep up, and what happens when the Mac sleeps or the device leaves the network and comes back.
+4. Turn the device on its side and back, with a flow open, a sheet up and a terminal full screen. In the landscape
+   copy the full-screen terminal's heading sat close under the status bar; see whether it does on a real iPad.
+5. Listen to it with VoiceOver: the flow list, a card, a link, the banner and the panel's tabs.
+6. Pinch, pan and tap with fingers. Every tap in the checks above was made by a launch argument.
+7. Split View and Slide Over on an iPad, where the app gets the iPhone's layout.
+8. Leave it installed for 7 days and see that Run in Xcode brings it back still paired.

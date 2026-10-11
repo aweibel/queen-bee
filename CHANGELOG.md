@@ -8,7 +8,8 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ### Added
 
-- Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi. This release has the Mac side only; the companion app is still being built.
+- Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi, with no server and no account.
+- A companion app for iPad and iPhone, built from source and installed on your own device. It watches: every flow with its state, the open flow's canvas live, each agent's terminal with scroll-back, the run log, End cards' answers, earlier runs, cost, and which cards are waiting on you. It can't yet run, stop, approve, type or edit. The README has the steps to install it with a free Apple ID.
 
 ## [0.3.3] - 2026-10-11
 

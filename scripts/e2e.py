@@ -1268,6 +1268,8 @@ def scenario_mirror(app):
     c = same("it shows the same after the card is made narrower", also=lambda c: c["real"]["cols"] < cols)
     print(f"        after narrowing the mirror has {c['mirror']['scrollback']} lines of history against {c['real']['scrollback']}", flush=True)
     app.op(fid, "mirror-close")
+    # Back to the size it was written with. `mobile` runs on the same flow, and checks each card against that.
+    app.op(fid, "resize", card="Alice", width=480, height=300)
 
 
 def scenario_pan(app):

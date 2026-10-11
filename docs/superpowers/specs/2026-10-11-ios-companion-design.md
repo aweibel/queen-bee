@@ -1,7 +1,49 @@
 # Queen Bee for iPad and iPhone: design
 
 Date: 2026-10-11
-Status: agreed, not yet built
+Status: stage 1 of 3 is built. Stages 2 and 3 are not started.
+
+## Where it stands
+
+Stage 1, "Link and mirror", is built: the Mac side by the plan in
+`docs/superpowers/plans/2026-10-11-ios-companion-1a-mac-link.md`, the app by
+`docs/superpowers/plans/2026-10-11-ios-companion-1b-ios-app.md`. Each plan ends with what was built and how it was
+checked. The rest of this document is the design as it was agreed. Where the build settled on something else, it
+is listed here, and this list wins.
+
+What stage 1 delivered:
+
+- Pairing by a one-time code, scanned or pasted, and a connection that comes back by itself.
+- The Mac's projects and flows with their states, and the open flow's canvas drawn as the Mac draws it, live.
+- Each agent's terminal in its card and full screen with scroll-back, and the orchestrator's beside the canvas.
+- The card and link details, the run log, End cards' answers, earlier runs, cost, and what is waiting on you.
+- An iPad layout in three columns and an iPhone layout as a stack with the details in a sheet.
+
+It is watch-only. The device sends the Mac nothing but which flow it has open.
+
+What the build settled on. Some of it has already been written into the sections below, and some of them still
+describe the first idea:
+
+- **One listener and one key for each device.** Not one listener for all of them: the Mac opens a listener of
+  its own for each paired device, encrypted with that device's key, and advertises it
+  with the device's id. A device looks for its own. Pairing has a separate listener that exists only while a code
+  is on screen.
+- **Terminal history is kept by replaying recent output.** The Mac keeps about the last 512 KB each session
+  printed and sends it when a device opens the flow, so the device's terminal has the same screen and can scroll
+  back. When a card is made narrower on the Mac that kept output is emptied, and the device's history starts again
+  from there. History from before any resize can differ from the Mac's by a few lines.
+- **Looking at an earlier run happens on the device only.** The device does not ask the Mac to show one. The
+  Mac sends the runs it has kept with the flow, and the device puts one on its own canvas and
+  panels. The Mac is not told and does not change. When a new run starts, the device goes back to the latest.
+- **Sub-flows are listed, not nested.** The device is told which flows are sub-flows but not which flow uses
+  each, so they are listed together under their project and not tucked under a parent as on the Mac.
+- **Some things the Mac shows are not sent yet**, so the device does not show them: saved roles; whether a Start
+  card's schedule is on, and when it next runs; the "restart to apply" badge on an agent whose settings changed;
+  what a sub-flow's sessions cost, in its parent's figures; and the cost of a run while it is going, which appears
+  when the run ends.
+- **The canvas and terminals do not follow the device's text size.** They are the Mac's picture, zoomed with two
+  fingers. Everything else follows it.
+- **The iPhone layout was run and fixed, but only upright.** Neither device has been looked at held sideways.
 
 ## Goal
 

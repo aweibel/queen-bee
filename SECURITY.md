@@ -57,6 +57,29 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   Bee does not connect to any server for this, and nothing is reachable from outside your network unless your
   network makes it so.
 
+## What the iPad and iPhone app does
+
+The companion app shows what a paired Mac sends it and nothing else. It has no account and talks to no server.
+
+- **What it stores.** In its own settings: an id for the device, and the name and id of the Mac it is paired with.
+  In the device's Keychain: the key it shares with that Mac. The key is kept so that it can be read only on that
+  device: it is not copied to another device by a backup, a transfer or iCloud Keychain. Flows, logs, messages and terminal output
+  are held in memory while the app is open and are not written to the device.
+- **What it sends the Mac.** When pairing: the device's id and its name, which is what the Mac lists it as. On
+  each connection: its id, its name and the version of the link it speaks. After that, only which flow it has open. It sends no taps, no keys and no
+  commands. The app has no way to send any, and the Mac's side does not accept any.
+- **Terminals give nothing back.** A terminal on the device is drawn from the output of the session on the Mac.
+  That output holds the questions a program asks its terminal, and the terminal on the device answers them, as
+  any terminal would. Every answer is dropped on the device. So is anything else the terminal would send: there is
+  no keyboard, taps are not passed on, and a program on the Mac cannot read or set the device's clipboard.
+- **Looking at an earlier run changes only the device.** The Mac is not told, and what it shows does not change.
+- **Forget this Mac.** In the app's settings, this deletes the key from the Keychain and the Mac's name and id
+  from the app. The device then has to be paired again. The Mac still lists the device until you remove it there,
+  but with its key gone the device can no longer connect. Deleting the app also deletes its settings; to be
+  sure the key is gone too, use Forget this Mac first.
+- **The camera and the local network.** The camera is used only on the pairing screen, to read the code on the
+  Mac's screen, and no picture is kept. The local network is used only to find and reach Queen Bee on your Mac.
+
 ## Known limits
 
 - The session plugin is copied to Application Support at launch, where another program running as you could change it.
@@ -65,3 +88,10 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   for each connection. So someone who recorded the Wi-Fi traffic while a device was being paired, and who also saw
   the code that pairing used, could work out that device's key and read what it is sent. The code is on screen for
   two minutes at most. Treat it like a password: don't share your screen or photograph it while it shows.
+- Anyone holding a paired, unlocked iPad or iPhone can read everything that device is sent: instructions, messages
+  between agents, and whatever is on each terminal. The app has no lock of its own. Remove the device in the Mac's
+  settings if it is lost.
+- A build of the iPad and iPhone app from source in the Debug configuration, which is what Run in Xcode makes,
+  includes launch arguments for tests that can point the app at a made-up Mac. In the Simulator that build also
+  writes what it is showing to a file in the app's own folder, for the tests to read. None of this is in a Release
+  build, and the file is never written on a real device.

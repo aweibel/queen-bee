@@ -247,8 +247,10 @@ enum DebugLaunch {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("qb-state.json")
     }
 
-    /// Writes the state now and again every time any of it changes.
+    /// Writes the state now and again every time any of it changes. Only in the Simulator, where the test
+    /// is: a build run on a real device from Xcode has DEBUG set too, and what the Mac sent stays off its disk.
     static func report(_ client: RemoteClient) {
+        #if targetEnvironment(simulator)
         var fields: [String: Any] = [:]
         withObservationTracking {
             let (name, text): (String, String?) = switch client.state {
@@ -291,6 +293,7 @@ enum DebugLaunch {
         if let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) {
             try? data.write(to: stateFile, options: .atomic)
         }
+        #endif
     }
 }
 #endif

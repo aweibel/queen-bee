@@ -82,23 +82,106 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - When the app is in the background, a notification tells you that a card needs you or a run has ended. **Settings** turns this off.
 - A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
 - **View → Appearance** switches between light, dark and following the system.
-- **Remote (in progress).** The Mac side of an iPad and iPhone companion that works over local Wi-Fi with no server. **Settings → Remote** turns it on and pairs a device; the companion app is still being built. [SECURITY.md](SECURITY.md) says what a paired device can see.
+- **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
+
+## On your iPad or iPhone
+
+There is a companion app for iPad and iPhone. It pairs with Queen Bee on your Mac over your local Wi-Fi, with no server and no account, and shows what the Mac is doing.
+
+For now it only watches. It shows:
+
+- every project and its flows, with the same "needs you", "running" and "stopped" badges as the Mac's sidebar;
+- the open flow's canvas as the Mac draws it, live: cards, links, groups, run marks and counts;
+- each agent's terminal in its card, and full screen, where you can scroll back through earlier output;
+- the run log, the answers the End cards collected, earlier runs, and what the flow has cost;
+- which cards are waiting on you.
+
+It can't yet run or stop a flow, approve or reject, type into a terminal, or edit anything. You do those on the Mac.
+
+The app isn't on the App Store. You build it yourself and put it on your own device, which a free Apple ID is enough for. The device needs iOS or iPadOS 26 or later.
+
+### Install it on your own device
+
+You need Xcode 27 and xcodegen, as for building the Mac app.
+
+1. Sign in to Xcode with your Apple ID: **Xcode → Settings… → Accounts**, then **+**. On the same pane choose **Manage Certificates…**, then **+**, then **Apple Development**.
+2. Find your team id. It is ten letters and digits. In a terminal:
+
+   ```sh
+   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   ```
+
+   The team id is the part after `OU=`.
+3. Make your own settings file and fill in its two lines:
+
+   ```sh
+   cp Mobile/Local.example.xcconfig Mobile/Local.xcconfig
+   ```
+
+   Open `Mobile/Local.xcconfig`, remove the two slashes at the start of the `DEVELOPMENT_TEAM` and `PRODUCT_BUNDLE_IDENTIFIER` lines, put your team id after the first `=`, and change `yourname` in the second to something nobody else would pick. Git ignores this file. Never commit it.
+4. Generate the project and open it:
+
+   ```sh
+   xcodegen generate
+   open QueenBee.xcodeproj
+   ```
+
+5. Plug in the iPad or iPhone. In Xcode's toolbar pick the **QueenBeeMobile** scheme and your device.
+6. On the device, turn on **Settings → Privacy & Security → Developer Mode**, and restart it when asked. The switch only appears once the device has been connected to Xcode.
+7. Press **Run** in Xcode.
+8. The first time, the app won't open until you trust yourself as its developer: on the device, **Settings → General → VPN & Device Management**, tap your Apple ID, then **Trust**. Open Queen Bee again.
+
+An app installed with a free Apple ID stops opening after 7 days. Press **Run** in Xcode again to install it afresh. It stays paired.
+
+### Pair it with your Mac
+
+Both need to be on the same Wi-Fi.
+
+1. On the Mac, open Queen Bee's **Settings** and find **Remote**. Turn on **Let your iPad or iPhone connect**, then click **Pair a device…**. A code appears. It works once, for two minutes.
+2. On the device, open Queen Bee and tap **Continue**. The first time, iOS asks whether Queen Bee may find devices on your local network. Allow it.
+3. Choose your Mac from the list, then point the camera at the code.
+
+From then on the device connects by itself whenever both apps are open on the same Wi-Fi. To stop a device connecting, click **Remove** beside it in the Mac's settings, or tap the gear on the device and choose **Forget this Mac**. [SECURITY.md](SECURITY.md) says what a paired device can see and what each side stores.
+
+### Run it in the Simulator
+
+No Apple ID is needed for this.
+
+```sh
+./scripts/build-mobile.sh
+xcrun simctl boot "iPad Pro 11-inch (M5)"
+open -a Simulator
+xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/QueenBeeMobile.app
+xcrun simctl launch booted dev.queenbee.mobile
+```
+
+Use the name of any iPad or iPhone simulator you have (`xcrun simctl list devices` lists them). The Simulator has no camera, so the app asks for the code as text: on the Mac click **Copy the code as text** under the code, then paste it into the app.
 
 ## How it works
 
 - `Core/` is a Swift package with no UI: the flow model, the file store, the routing engine, the orchestrator's tools and the socket messages. `cd Core && swift test` runs its tests.
 - `App/` is the SwiftUI and AppKit app. The canvas is an `NSScrollView` with magnification, and each terminal is a SwiftTerm view inside a card. `App/Design/Tokens.swift` holds every colour, type size, spacing step and timing the views use.
 - `Helper/` builds `qb`, a small binary inside the app bundle. Claude Code hooks, the plugin and the orchestrator's tool server all run it, and it talks to the app over a unix socket in `~/Library/Application Support/QueenBee/`.
+- `Mobile/` is the iPad and iPhone app. It links the same `Core/` package for the messages, the flow model and the link routes, draws the canvas with UIKit and the panels with SwiftUI, and feeds each terminal the output the Mac sends. `Mobile/Design/Tokens.swift` mirrors the Mac's tokens value for value.
 - `Plugin/qb-link/` is the plugin the app loads into every session. When an agent's turn ends it asks the app where the reply goes and sends it there as a Claude Code session message.
 
 ## Tests
 
 ```sh
-cd Core && swift test        # 194 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools and the Remote link
+cd Core && swift test        # 242 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link and what a device makes of it
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
 The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`.
+
+The iPad and iPhone app is checked in the iOS Simulator by three scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
+
+```sh
+./scripts/e2e.py terminals panels   # the app alone, fed a made-up flow and run: no Mac app, no Claude Code
+./scripts/e2e.py mobile             # the app paired with the test copy of the Mac app, with real sessions
+```
+
+`QB_E2E_SIMULATOR="iPhone 17"` picks the simulator, and `QB_E2E_SHOTS=<folder>` says where the screenshots go.
 
 ## Launch flags
 
