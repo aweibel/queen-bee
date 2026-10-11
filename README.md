@@ -108,10 +108,10 @@ You need Xcode 27 and xcodegen, as for building the Mac app.
 2. Find your team id. It is ten letters and digits. In a terminal:
 
    ```sh
-   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   security find-certificate -a -c "Apple Development" -p | awk '/BEGIN/{c=""} {c=c $0 "\n"} /END CERT/{cmd="openssl x509 -noout -checkend 0 -subject"; printf "%s", c | cmd; close(cmd)}' | grep -B1 "will not expire" | grep -o "OU *= *[A-Z0-9]*" | sort -u
    ```
 
-   The team id is the part after `OU=`.
+   The team id is the part after `OU=`. The command looks only at certificates that are still good, because a Mac that has been signed in to Xcode before can hold expired ones from another account.
 3. Make your own settings file and fill in its two lines:
 
    ```sh
