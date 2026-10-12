@@ -93,7 +93,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 ## Tests
 
 ```sh
-cd Core && swift test        # 174 unit tests on the model, store, engine, link router, snapping, layout, triggers and tools
+cd Core && swift test        # 190 unit tests on the model, store, engine, link router, snapping, layout, triggers and tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
@@ -125,4 +125,4 @@ The script's header lists the certificate, notarization profile and update key i
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The licenses of the packages the app is built with are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and a copy ships inside the app.
