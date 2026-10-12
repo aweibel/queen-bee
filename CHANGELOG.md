@@ -6,6 +6,11 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The README's screenshots are retaken at twice the size, on a fuller flow with a sub-flow, a script check and an approval, and there is a new one of a run waiting at an Approval card.
+- `--open` can be given more than once, to open several project folders at launch.
+
 ## [0.3.4] - 2026-10-12
 
 These come from an outside security review of 0.3.3.

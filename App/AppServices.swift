@@ -219,12 +219,13 @@ final class AppServices {
                 addProject(URL(fileURLWithPath: path), select: false)
             }
         }
-        if let path = LaunchArguments.takeFolder(), confirmTrust(URL(fileURLWithPath: path)) {
-            let project = addProject(URL(fileURLWithPath: path), select: true)
-            if project.controllers.isEmpty { project.newFlow() }
-        } else if selectedFlowID == nil {
-            selectedFlowID = allFlows.first?.flow.id
+        var shown = false
+        for path in LaunchArguments.takeFolders() where confirmTrust(URL(fileURLWithPath: path)) {
+            let project = addProject(URL(fileURLWithPath: path), select: !shown)
+            if project.controllers.isEmpty, !shown { project.newFlow() }
+            shown = true
         }
+        if !shown, selectedFlowID == nil { selectedFlowID = allFlows.first?.flow.id }
     }
 
     @discardableResult

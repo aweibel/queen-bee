@@ -6,9 +6,9 @@ Queen Bee is a work in progress. It is open source, and [contributions are welco
 
 Each agent is a live `claude` session in a terminal that sits on the canvas. You can click into any of them and type. Logic cards (If / Else, Switch, And, Or, Prompt, Loop until, Approval, Script, Flow, End) route each agent's finished reply to the next cards. Every flow also has an orchestrator, a Claude Code session docked beside the canvas that can edit the flow, run it and talk to the agents.
 
-![A finished run: cards the run passed through carry a check and a count, and travelled links are green](docs/queen-bee-flight-plan-light.jpg)
+![A finished run of a flow with three agents, a sub-flow, a script check and an approval: cards the run passed through carry a check and a count, and travelled links are green](docs/queen-bee-flight-plan-light.png)
 
-The app follows light and dark. [The same run in dark](docs/queen-bee-flight-plan-dark.jpg).
+The app follows light and dark. [The same run in dark](docs/queen-bee-flight-plan-dark.png).
 
 ## Install
 
@@ -59,11 +59,14 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - **Add Project Folder…** at the foot of the sidebar adds a folder. Each folder lists its flows, and **+** beside its name makes a new one.
 - The first time you open the app, a short walk-through explains agents, logic cards and the orchestrator. **Help → Welcome to Queen Bee** shows it again.
 
-  ![The walk-through's second step: every agent is a live terminal](docs/queen-bee-first-run.jpg)
+  ![The walk-through's second step: every agent is a live Claude Code](docs/queen-bee-first-run.png)
 
 - An empty flow shows a note pointing at the orchestrator: describe the flow you want there and it builds it. Close the note to build by hand.
 - The **palette** at the canvas's top-left holds the card types. Click one to add it, or drag it to where you want it. Rest the pointer on one to read what it does. Each agent card starts its own Claude Code session.
 - An **Approval** card stops a run until you approve, edit or reject the message. A **Script** card runs a shell command and goes out Pass or Fail; a command you didn't type yourself asks before it first runs. A **Flow** card runs another flow as one step: double-click it to open that flow, or to make a new sub-flow with an Input and an Output, and use the names in the title bar to go back. Sub-flows can hold Flow cards of their own, three levels deep unless you change the limit in the top flow's settings (the sliders button in the toolbar).
+
+  ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
+
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
 - An agent's settings can be saved as a **role**, which then sits under Agent in the palette for any flow.
@@ -101,7 +104,7 @@ The end-to-end script starts a separate test copy of the app with its own suppor
 
 ## Launch flags
 
-- `--open <folder>` opens that project folder in the first window.
+- `--open <folder>` opens that project folder in the first window. Give it more than once to open several.
 - `--float` keeps the window above others without taking focus. Terminals stop painting in a hidden window, so a check that looks at the window needs it.
 - `--welcome` shows the first-run walk-through in a test copy, which otherwise skips it.
 - `--testing` turns on the test harness and lets a second copy of the app run. `QB_SUPPORT_DIR` in the environment moves that copy's socket and plugin.
