@@ -13,6 +13,13 @@ set -eu
 
 REPO="bamboozledkitty/queen-bee"
 TEAM="M76T8VT55M"
+BUNDLE_ID="dev.queenbee.app"
+# What the app's signature has to prove: a Developer ID certificate that Apple issued to that team, for
+# this app. The team name a signature prints is not enough. A signature made with any other kind of
+# certificate can carry the same name, so the certificate chain itself is checked, up to Apple's root.
+REQUIREMENT="=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists \
+and certificate leaf[field.1.2.840.113635.100.6.1.13] exists \
+and certificate leaf[subject.OU] = \"$TEAM\" and identifier \"$BUNDLE_ID\""
 DEST_DIR="${QB_INSTALL_DIR:-/Applications}"
 DEST="$DEST_DIR/QueenBee.app"
 
@@ -49,8 +56,8 @@ hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$WORK/QueenBee.d
 
 echo "Checking the signature..."
 codesign --verify --deep --strict "$MOUNT/QueenBee.app" 2>/dev/null || fail "the app's signature is broken. Nothing was installed."
-SIGNER=$(codesign -dv "$MOUNT/QueenBee.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
-[ "$SIGNER" = "$TEAM" ] || fail "the app is signed by someone else ($SIGNER). Nothing was installed."
+codesign --verify --deep --strict -R "$REQUIREMENT" "$MOUNT/QueenBee.app" 2>/dev/null \
+  || fail "the app isn't signed with the Queen Bee developer's Developer ID certificate. Nothing was installed."
 
 echo "Installing to $DEST..."
 rm -rf "$DEST.new"
