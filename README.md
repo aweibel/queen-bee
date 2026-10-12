@@ -218,7 +218,7 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 347 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to and the keys it sends
+cd Core && swift test        # 357 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to and the keys it sends
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
