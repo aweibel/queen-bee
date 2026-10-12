@@ -67,18 +67,21 @@ final class ProjectModel {
         return controller
     }
 
+    /// A new flow with its Start card. With no name it is called "Flow" and the next number. `select` puts it
+    /// on the canvas, which is what the person at this Mac wants and what a paired device must not do.
     @discardableResult
-    func newFlow() -> FlowController? {
+    func newFlow(named wanted: String? = nil, select: Bool = true) -> FlowController? {
         var n = controllers.count + 1
         var name = "Flow \(n)"
         while controllers.contains(where: { $0.flow.name == name }) { n += 1; name = "Flow \(n)" }
+        if let wanted = wanted?.trimmingCharacters(in: .whitespacesAndNewlines), !wanted.isEmpty { name = wanted }
         var flow = Flow(name: name)
         _ = try? flow.addCard(kind: .start, x: 240, y: 120)
         guard let url = try? store.save(flow, to: nil) else { return nil }
         let controller = FlowController(flow: flow, fileURL: url, project: self)
         controllers.append(controller)
         AppServices.shared.register(controller)
-        AppServices.shared.selectedFlowID = flow.id
+        if select { AppServices.shared.selectedFlowID = flow.id }
         return controller
     }
 

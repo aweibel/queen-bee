@@ -140,6 +140,8 @@ final class FlowController: ToolHost {
     @ObservationIgnored private var lastUndo: (key: String, at: Date)?
     /// The flow as it was when a drag began. While set, the drag's steps don't each get an undo.
     @ObservationIgnored private var gestureStart: Flow?
+    /// True while a paired device's Undo or Redo is being done.
+    @ObservationIgnored private var undoingForDevice = false
 
     private var services: AppServices { AppServices.shared }
     var warnings: [String: String] { QueenBeeCore.warnings(for: flow) }
@@ -184,6 +186,9 @@ final class FlowController: ToolHost {
 
     /// When the clock next starts a run from each Start card whose schedule is on, by card id.
     private(set) var nextFires: [String: Date] = [:]
+    /// Bumped whenever the schedules are worked out again. Which of them are on is kept in the app's settings,
+    /// which nothing watches, so this is how a paired device's copy of the flow learns that one went on or off.
+    private(set) var schedulesRevision = 0
     @ObservationIgnored private var scheduleTask: Task<Void, Never>?
     /// The schedule each due time in `nextFires` was worked out from.
     @ObservationIgnored private var scheduledFor: [String: Trigger] = [:]
@@ -209,6 +214,7 @@ final class FlowController: ToolHost {
 
     /// Works out what fires next and waits for it. Called whenever a schedule changes.
     private func reschedule() {
+        schedulesRevision += 1
         scheduleTask?.cancel()
         let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
         var fires: [String: Date] = [:]
@@ -551,16 +557,20 @@ final class FlowController: ToolHost {
         }
         banner = nil
         let old = flow
-        // A pasted or restored Flow card that would make a circle, or go too deep, is kept but no longer runs anything.
-        let nesting = Nesting(flows: project.controllers.map { $0 === self ? copy : $0.flow })
-        for index in copy.cards.indices where copy.cards[index].kind == .flow && copy.cards[index].flowRef != old.card(copy.cards[index].id)?.flowRef {
-            if let inner = Nesting.resolve(copy.cards[index].flowRef, in: project.controllers.map(\.flow), excluding: flow.id),
-               nesting.problem(placing: inner, in: flow.id) != nil { copy.cards[index].flowRef = nil }
-        }
+        cutLooseFlowCardsThatCannotNest(in: &copy)
         flow = copy
         if undoable { registerUndo(from: old, name, key: key) }
         reconcile()
         return true
+    }
+
+    /// A pasted, copied or restored Flow card that would make a circle, or go too deep, is kept but no longer runs anything.
+    private func cutLooseFlowCardsThatCannotNest(in copy: inout Flow) {
+        let nesting = Nesting(flows: project.controllers.map { $0 === self ? copy : $0.flow })
+        for index in copy.cards.indices where copy.cards[index].kind == .flow && copy.cards[index].flowRef != flow.card(copy.cards[index].id)?.flowRef {
+            if let inner = Nesting.resolve(copy.cards[index].flowRef, in: project.controllers.map(\.flow), excluding: flow.id),
+               nesting.problem(placing: inner, in: flow.id) != nil { copy.cards[index].flowRef = nil }
+        }
     }
 
     // MARK: Undo
@@ -612,7 +622,10 @@ final class FlowController: ToolHost {
         var back = old
         back.orchestratorSessionID = current.orchestratorSessionID
         for i in back.cards.indices {
-            if let now = current.card(back.cards[i].id) { back.cards[i].sessionID = now.sessionID }
+            guard let now = current.card(back.cards[i].id) else { continue }
+            back.cards[i].sessionID = now.sessionID
+            // An agent's folder is never changed from a device, by Undo either: it stays as it is now.
+            if undoingForDevice { back.cards[i].cwd = now.cwd }
         }
         lastUndo = nil
         flow = back
@@ -825,8 +838,7 @@ final class FlowController: ToolHost {
         let size = Card.make(kind: kind, name: "x", x: 0, y: 0)
         var spot: CGRect
         if let point {
-            spot = CGRect(x: max(20, point.x - size.width / 2), y: max(20, point.y - CanvasGeometry.titleHeight / 2),
-                          width: size.width, height: size.height)
+            spot = CGRect(origin: Self.dropSpot(for: kind, at: point), size: CGSize(width: size.width, height: size.height))
         } else {
             let center = canvas?.visibleCenter ?? CGPoint(x: 400, y: 300)
             spot = CGRect(x: max(20, center.x - size.width / 2), y: max(20, center.y - size.height / 2),
@@ -839,14 +851,26 @@ final class FlowController: ToolHost {
                 tries += 1
             }
         }
-        var patch = CardPatch()
-        if kind == .agent, let model = UserDefaults.standard.string(forKey: "defaultModel"), !model.isEmpty { patch.model = model }
+        var patch = Self.newCardPatch(for: kind)
         if let role { patch = role.patch }
         perform("Add \(role?.name ?? kind.label)") {
             made = try $0.addCard(kind: kind, name: role.map { [flow] in flow.uniqueName($0.name) }, x: spot.minX, y: spot.minY, patch: patch)
             if let role, let made, let index = $0.cards.firstIndex(where: { $0.id == made.id }) { $0.cards[index].role = role.id }
         }
         if let made { selection = .card(made.id) }
+    }
+
+    /// Where a new card's corner goes when the card is dropped at a point: the middle of its title bar lands there.
+    static func dropSpot(for kind: CardKind, at point: CGPoint) -> CGPoint {
+        let size = Card.make(kind: kind, name: "x", x: 0, y: 0)
+        return CGPoint(x: max(20, point.x - size.width / 2), y: max(20, point.y - CanvasGeometry.titleHeight / 2))
+    }
+
+    /// What a new card of this kind starts with besides its kind's own defaults: an agent gets the model chosen in Settings.
+    static func newCardPatch(for kind: CardKind) -> CardPatch {
+        var patch = CardPatch()
+        if kind == .agent, let model = UserDefaults.standard.string(forKey: "defaultModel"), !model.isEmpty { patch.model = model }
+        return patch
     }
 
     func link(from: String, port: String, to: String) {
@@ -1652,13 +1676,27 @@ final class FlowController: ToolHost {
         var copy = flow
         let value = try body(&copy)
         try checkNesting(of: copy)
+        // The orchestrator builds a flow in a burst of calls. They undo together.
+        takeUnseen(copy, from: nil, undo: "Orchestrator's Changes", key: "orchestrator", within: 8)
+        return value
+    }
+
+    /// Takes a change to the flow that the person at this Mac was not seen to make: one from the orchestrator's
+    /// tools, or from a paired device, which is named. Both go through here, so both are held to the same two
+    /// rules. A Script card's command is only "typed on this Mac" when the settings panel wrote it, which
+    /// this never is, so a run stops and asks before running one that came this way. And a change to what a
+    /// scheduled flow does turns its schedules off.
+    private func takeUnseen(_ copy: Flow, from device: String?, undo name: String, key: String?, within window: TimeInterval = 1.5) {
         let old = flow
         flow = copy
-        disarmSchedules(changedFrom: old)
-        // The orchestrator builds a flow in a burst of calls. They undo together.
-        registerUndo(from: old, "Orchestrator's Changes", key: "orchestrator", within: 8)
+        withdrawConsents(changedFrom: old, by: device)
+        registerUndo(from: old, name, key: key, within: window)
         reconcile()
-        return value
+    }
+
+    private func withdrawConsents(changedFrom old: Flow, by device: String?) {
+        if device != nil { forgetAllowedScripts(changedFrom: old) }
+        disarmSchedules(changedFrom: old, by: device)
     }
 
     /// The orchestrator may work in the sub-flows below its own flow, and nowhere else.
@@ -1710,18 +1748,50 @@ final class FlowController: ToolHost {
     /// An armed schedule runs with nobody watching, so it is tied to what the person agreed to.
     /// When the orchestrator changes a Start card's command, or an agent's brief, folder or
     /// permissions, every schedule in the flow goes off until the person turns it on again.
-    private func disarmSchedules(changedFrom old: Flow) {
-        let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
-        guard !armed.isEmpty else { return }
-        let agentsChanged = flow.cards.contains { card in
+    ///
+    /// The same goes for a change from a paired device, which is named here, and a device is held to more.
+    /// A schedule is on when the card's command and schedule are the ones the person agreed to, so the
+    /// orchestrator putting a command back as it was puts the schedule back on. From a device nothing does:
+    /// a change to a scheduled Start card's command or schedule forgets what was agreed, and no change from
+    /// a device leaves a schedule on that was off before it.
+    private func disarmSchedules(changedFrom old: Flow, by device: String? = nil) {
+        var armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
+        var startsChanged = false
+        if device != nil {
+            let before = old.cards.filter { $0.kind == .start && isArmed($0) }
+            let wereOn = Set(before.map(\.id))
+            // Turned on by this very change: it was made to match something agreed to earlier.
+            for card in armed where !wereOn.contains(card.id) { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
+            armed.removeAll { !wereOn.contains($0.id) }
+            startsChanged = before.contains { was in
+                guard let card = flow.card(was.id) else { return false }
+                return card.command != was.command || card.trigger != was.trigger
+            }
+            // A card whose own command or schedule changed is no longer on, and still has to be forgotten.
+            if startsChanged { armed = before.filter { flow.card($0.id) != nil } }
+        }
+        let agentsChanged = !armed.isEmpty && flow.cards.contains { card in
             guard card.kind == .agent, let was = old.card(card.id) else { return card.kind == .agent }
             return card.instructions != was.instructions || card.cwd != was.cwd || card.permissionMode != was.permissionMode
         }
-        guard agentsChanged else { return }
+        guard !armed.isEmpty, agentsChanged || startsChanged else {
+            // What was agreed to may have been forgotten above, so nobody is shown a time for a schedule that is off.
+            if device != nil { reschedule() }
+            return
+        }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
-        append("The orchestrator changed what the flow does, so its schedule is off until you turn it on again")
-        banner = "The schedule is off: the orchestrator changed what the flow does. Turn it on again in the Start card's settings."
+        append("\(device ?? "The orchestrator") changed what the flow does, so its schedule is off until you turn it on again")
+        banner = "The schedule is off: \(device ?? "the orchestrator") changed what the flow does. Turn it on again in the Start card's settings."
         reschedule()
+    }
+
+    /// One command is remembered as allowed for each Script card: the latest the person typed or allowed.
+    /// A device changing the command, even back to that one, is not the person typing it at this Mac, so
+    /// what was remembered is forgotten and the next run asks. So is a card a device made or brought back.
+    private func forgetAllowedScripts(changedFrom old: Flow) {
+        for card in flow.cards where card.kind == .script && old.card(card.id)?.command != card.command {
+            ConsentStore.scripts.grant(nil, scope: allowScope, cardID: card.id)
+        }
     }
 
     /// Warnings about Flow cards that are past the limit, or point at a flow that would be.
