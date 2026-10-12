@@ -15,6 +15,12 @@
 //                    The rest are whichever of "card", "hold", "key", "text" and "hex" (key presses, as
 //                    hexadecimal) that command takes. Nothing is checked here: the Mac has to do that.
 //                    The Mac's answer is printed as {"type": "answer", "id": 1, "refusal": null or its reason}.
+//                    The commands that edit a flow take whichever of these they need: "kind", "x", "y",
+//                    "moves" ({card id: [x, y]}), "frame" ([x, y, width, height]), "final", "cards" and
+//                    "links" (lists of ids), "from", "port", "to", "link", "passes", "group", "name", "folded",
+//                    "patch" (a card's settings, named as RemoteCardPatch names them), "limit" or "notify"
+//                    (a flow's own settings) and "project".
+//   {"raw": {...}}   send that JSON as it is, as a device with an app of its own making could.
 // It never prints a key.
 import Foundation
 import Network
@@ -161,6 +167,9 @@ Task {
 /// The command a line of JSON on standard input describes, or nil if it describes none.
 @Sendable func command(from fields: [String: Any]) -> RemoteCommand? {
     func text(_ name: String) -> String { fields[name] as? String ?? "" }
+    func number(_ name: String) -> Double { fields[name] as? Double ?? 0 }
+    func flag(_ name: String) -> Bool { fields[name] as? Bool ?? false }
+    func list(_ name: String) -> [String] { fields[name] as? [String] ?? [] }
     let flow = text("flow")
     switch fields["do"] as? String {
     case "openOnMac": return .openOnMac(flowID: flow)
@@ -177,30 +186,75 @@ Task {
         let hex = Array(text("hex"))
         let bytes = stride(from: 0, to: hex.count - 1, by: 2).compactMap { UInt8(String(hex[$0...$0 + 1]), radix: 16) }
         return .keys(flowID: flow, key: text("key"), data: Data(bytes))
+    case "addCard":
+        guard let kind = CardKind(rawValue: text("kind")) else { return nil }
+        return .addCard(flowID: flow, kind: kind, x: number("x"), y: number("y"))
+    case "moveCards":
+        let moves = (fields["moves"] as? [String: [Double]] ?? [:]).filter { $0.value.count == 2 }.mapValues { RemotePoint(x: $0[0], y: $0[1]) }
+        return .moveCards(flowID: flow, moves: moves, final: flag("final"))
+    case "resizeCard":
+        guard let frame = fields["frame"] as? [Double], frame.count == 4 else { return nil }
+        return .resizeCard(flowID: flow, cardID: text("card"), frame: RemoteFrame(x: frame[0], y: frame[1], width: frame[2], height: frame[3]),
+                           final: flag("final"))
+    case "deleteItems": return .deleteItems(flowID: flow, cardIDs: list("cards"), linkIDs: list("links"))
+    case "addLink": return .addLink(flowID: flow, from: text("from"), port: text("port"), to: text("to"))
+    case "setLinkLimit": return .setLinkLimit(flowID: flow, linkID: text("link"), maxPasses: Int(number("passes")))
+    case "duplicate": return .duplicate(flowID: flow, cardIDs: list("cards"))
+    case "tidy": return .tidy(flowID: flow)
+    case "group": return .group(flowID: flow, cardIDs: list("cards"), name: text("name"))
+    case "ungroup": return .ungroup(flowID: flow, groupID: text("group"))
+    case "renameGroup": return .renameGroup(flowID: flow, groupID: text("group"), name: text("name"))
+    case "foldGroup": return .foldGroup(flowID: flow, groupID: text("group"), folded: flag("folded"))
+    case "patchCard":
+        guard let settings = fields["patch"], let data = try? JSONSerialization.data(withJSONObject: settings),
+              let patch = try? Remote.decode(RemoteCardPatch.self, from: data) else { return nil }
+        return .patchCard(flowID: flow, cardID: text("card"), patch: patch)
+    case "setFlowOption":
+        if let on = fields["notify"] as? Bool { return .setFlowOption(flowID: flow, option: .notifyOrchestrator(on: on)) }
+        return .setFlowOption(flowID: flow, option: .subflowLimit(levels: Int(number("limit"))))
+    case "newFlow": return .newFlow(projectID: text("project"), name: text("name"))
+    case "renameFlow": return .renameFlow(flowID: flow, name: text("name"))
+    case "deleteFlow": return .deleteFlow(flowID: flow)
+    case "undo": return .undo(flowID: flow)
+    case "redo": return .redo(flowID: flow)
     default: return nil
+    }
+}
+
+// What standard input asks to be sent leaves through here, one message at a time, so the Mac gets it in the
+// order it was asked for: the steps of a drag before its last, and a drag before the flow is left.
+let (outgoing, outbox) = AsyncStream.makeStream(of: (id: Int?, frame: Data).self)
+Task {
+    for await next in outgoing {
+        do { try await shared.link.send(next.frame) } catch {
+            if let id = next.id { say(["type": "command-failed", "id": id, "error": "\(error)"]) }
+        }
     }
 }
 
 Thread.detachNewThread { [deviceID] in
     while let line = readLine() {
         if line.hasPrefix("{") {
+            if let raw = ((try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any])?["raw"],
+               let frame = try? JSONSerialization.data(withJSONObject: raw) {
+                // Sent as written, with whatever a device's own app would never put in it.
+                outbox.yield((nil, frame))
+                continue
+            }
             guard let fields = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
-                  let id = fields["id"] as? Int, let command = command(from: fields) else {
+                  let id = fields["id"] as? Int, let command = command(from: fields),
+                  let frame = try? Remote.encode(DeviceMessage.command(id: id, command: command)) else {
                 say(["type": "unknown", "line": String(line.prefix(200))])
                 continue
             }
-            Task {
-                do { try await shared.link.send(DeviceMessage.command(id: id, command: command)) } catch {
-                    say(["type": "command-failed", "id": id, "error": "\(error)"])
-                }
-            }
+            outbox.yield((id, frame))
             continue
         }
         let words = line.split(separator: " ").map(String.init)
         switch words.first {
         case "open" where words.count == 2:
             shared.flowID = words[1]
-            Task { try? await shared.link.send(DeviceMessage.open(flowID: words[1])) }
+            if let frame = try? Remote.encode(DeviceMessage.open(flowID: words[1])) { outbox.yield((nil, frame)) }
         case "reconnect":
             Task {
                 let next = LinkConnection(to: local(port), key: key)
@@ -241,14 +295,21 @@ while true {
     case .refused(let reason):
         say(["type": "refused", "reason": reason])
     case .library(let library):
-        say(["type": "library", "flows": library.projects.flatMap(\.flows).map(\.name)])
+        say(["type": "library", "flows": library.projects.flatMap(\.flows).map(\.name), "projects": library.projects.map(\.id),
+             "flowIDs": Dictionary(library.projects.flatMap(\.flows).map { ($0.name, $0.id) }) { first, _ in first },
+             "roles": library.roles.map(\.name)])
         try? await connection.send(DeviceMessage.open(flowID: shared.flowID))
     case .opened(let snapshot):
         say(["type": "opened", "name": snapshot.flow.name, "cards": snapshot.flow.cards.count,
              "cardIDs": Dictionary(snapshot.flow.cards.map { ($0.name, $0.id) }) { first, _ in first },
+             "undo": snapshot.edit.undo ?? NSNull(), "redo": snapshot.edit.redo ?? NSNull(), "armed": snapshot.edit.armed,
              "sessions": snapshot.run.sessions.mapValues(\.rawValue)])
     case .flow(_, let revision, let flow):
-        say(["type": "flow", "revision": revision, "efforts": flow.cards.map { $0.effort ?? "" }])
+        say(["type": "flow", "revision": revision, "efforts": flow.cards.map { $0.effort ?? "" }, "cards": flow.cards.count,
+             "links": flow.links.count])
+    case .edit(let id, let state):
+        say(["type": "edit", "flow": id, "undo": state.undo ?? NSNull(), "redo": state.redo ?? NSNull(), "armed": state.armed,
+             "nextFires": state.nextFires.count])
     case .run(let id, let state):
         say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue),
              "holds": state.holds.map { ["id": $0.id, "card": $0.cardID, "kind": $0.kind.rawValue, "needsAllow": $0.needsAllow] as [String: Any] }])

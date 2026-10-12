@@ -31,6 +31,29 @@ import Testing
         #expect(RemoteSnapshot.updates(from: old, to: new, revision: 1) == [.run(id: old.flow.id, state: new.run)])
     }
 
+    @Test func undoAndSchedulesAreSentAloneAndSmall() throws {
+        let old = try base()
+        var new = old
+        new.edit.undo = "Undo Move"
+        #expect(RemoteSnapshot.updates(from: old, to: new, revision: 1) == [.edit(id: old.flow.id, state: new.edit)])
+        var later = new
+        later.edit.armed = [old.flow.cards[0].id]
+        later.edit.nextFires = [old.flow.cards[0].id: Date(timeIntervalSince1970: 60)]
+        #expect(RemoteSnapshot.updates(from: new, to: later, revision: 1) == [.edit(id: old.flow.id, state: later.edit)])
+        // Neither the flow nor the run's state is sent again for it.
+        let sent = try Remote.encode(HostMessage.edit(id: old.flow.id, state: later.edit))
+        #expect(sent.count < 200)
+    }
+
+    @Test func anEditSendsTheFlowAndThenItsUndo() throws {
+        let old = try base()
+        var new = old
+        new.flow.cards[0].x = 99
+        new.edit.undo = "Undo Move"
+        #expect(RemoteSnapshot.updates(from: old, to: new, revision: 2)
+                == [.flow(id: old.flow.id, revision: 2, flow: new.flow), .edit(id: old.flow.id, state: new.edit)])
+    }
+
     @Test func newLogLinesAreSentAlone() throws {
         let old = try base()
         var new = old

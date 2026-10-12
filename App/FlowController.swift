@@ -140,6 +140,8 @@ final class FlowController: ToolHost {
     @ObservationIgnored private var lastUndo: (key: String, at: Date)?
     /// The flow as it was when a drag began. While set, the drag's steps don't each get an undo.
     @ObservationIgnored private var gestureStart: Flow?
+    /// The flow as it was when each paired device's drag began, by device id.
+    @ObservationIgnored private var deviceDrags: [String: Flow] = [:]
     /// True while a paired device's Undo or Redo is being done.
     @ObservationIgnored private var undoingForDevice = false
 
@@ -1792,6 +1794,83 @@ final class FlowController: ToolHost {
         for card in flow.cards where card.kind == .script && old.card(card.id)?.command != card.command {
             ConsentStore.scripts.grant(nil, scope: allowScope, cardID: card.id)
         }
+    }
+
+    // MARK: Edits from a paired device
+
+    /// Makes an edit a paired device asked for, by the rules every edit is held to, and then by the rules for
+    /// a change the person at this Mac was not seen to make. `device` is the device's name, for the log.
+    /// Returns nil when it was done, or why not, in words the device shows the person. Nothing on this Mac's
+    /// own window is touched: what is selected stays selected, and no message is put up here for a refusal.
+    func edit(from device: String, _ name: String, key: String? = nil, _ body: (inout Flow) throws -> Void) -> String? {
+        var copy = flow
+        do {
+            try body(&copy)
+        } catch {
+            return String(describing: error)
+        }
+        // A flow that is already bigger, made on this Mac, may be changed from a device. It may not be grown.
+        if copy.cards.count > max(flow.cards.count, Remote.cardLimit) {
+            return "A flow can have \(Remote.cardLimit) cards at most when it is added to from a device. Add more on your Mac."
+        }
+        if copy.links.count > max(flow.links.count, Remote.linkLimit) {
+            return "A flow can have \(Remote.linkLimit) links at most when it is added to from a device. Add more on your Mac."
+        }
+        cutLooseFlowCardsThatCannotNest(in: &copy)
+        takeUnseen(copy, from: device, undo: name, key: key)
+        return nil
+    }
+
+    /// The first step of a device's drag: everything it moves until `endDrag` is one undo step.
+    func beginDrag(from deviceID: String) {
+        if deviceDrags[deviceID] == nil { deviceDrags[deviceID] = flow }
+    }
+
+    func endDrag(from deviceID: String, _ name: String) {
+        guard let start = deviceDrags.removeValue(forKey: deviceID) else { return }
+        registerUndo(from: start, name)
+    }
+
+    /// A step of a device's drag: puts each card where it was dragged to. Part of a drag, so it is undone with the drag.
+    func move(to places: [String: CGPoint]) -> String? {
+        guard places.keys.allSatisfy({ flow.card($0) != nil }) else { return "That card is no longer in the flow." }
+        guard let left = places.values.map(\.x).min(), let top = places.values.map(\.y).min() else { return nil }
+        // The whole set stops at the canvas's edge together, so it keeps its shape, as a drag on this Mac does.
+        let dx = max(0, CardView.farLeft - left), dy = max(0, CardView.farLeft - top)
+        var copy = flow
+        for i in copy.cards.indices {
+            guard let place = places[copy.cards[i].id] else { continue }
+            copy.cards[i].x = place.x + dx
+            copy.cards[i].y = place.y + dy
+        }
+        if copy != flow { flow = copy }
+        return nil
+    }
+
+    /// A step of a device's drag of a card's corner. A card is never made smaller than its kind allows.
+    func resize(_ id: String, to frame: CGRect) -> String? {
+        var patch = CardPatch()
+        patch.x = max(frame.minX, CardView.farLeft)
+        patch.y = max(frame.minY, CardView.farLeft)
+        patch.width = frame.width
+        patch.height = frame.height
+        var copy = flow
+        guard copy.card(id) != nil, (try? copy.updateCard(id, patch: patch)) != nil else { return "That card is no longer in the flow." }
+        if copy != flow { flow = copy }
+        return nil
+    }
+
+    /// Undo or Redo for a device: the flow's own, never that of a text box someone at this Mac is typing in.
+    /// What it brings back was not chosen just now by the person at this Mac, so it is held to the rules for
+    /// any other change from a device.
+    func undo(from device: String, redo: Bool = false) -> String? {
+        guard redo ? undoManager.canRedo : undoManager.canUndo else { return redo ? "There is nothing to redo." : "There is nothing to undo." }
+        let old = flow
+        undoingForDevice = true
+        if redo { undoManager.redo() } else { undoManager.undo() }
+        undoingForDevice = false
+        withdrawConsents(changedFrom: old, by: device)
+        return nil
     }
 
     /// Warnings about Flow cards that are past the limit, or point at a flow that would be.

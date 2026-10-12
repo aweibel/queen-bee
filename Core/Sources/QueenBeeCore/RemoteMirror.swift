@@ -24,6 +24,7 @@ public struct RemoteRefusal: Equatable, Sendable {
 /// Commands, for the views that send them:
 /// - `canControl` says whether to offer controls at all. It is a courtesy: the Mac checks every command itself.
 /// - `willSend(_:)` gives a command its id and records it as waiting. Send `.command(id:command:)` with that id.
+///   A step of a drag that isn't the last is never answered, so it is given an id and not waited for.
 /// - While `isWaiting(for:)` is true for a command, its button should be disabled.
 /// - The Mac's `.answer` stops the wait. A refusal is kept in `lastRefusal` until `clearRefusal()` or the
 ///   next refusal, for a short message in the Mac's words.
@@ -57,7 +58,8 @@ public struct RemoteMirror: Equatable, Sendable {
     /// Call just before sending a command. Returns the id to send it with.
     public mutating func willSend(_ command: RemoteCommand) -> Int {
         lastCommandID += 1
-        waiting[lastCommandID] = command
+        // The Mac sends no answer to a step of a drag, so waiting for one would never end.
+        if command.isAnswered { waiting[lastCommandID] = command }
         return lastCommandID
     }
 
@@ -133,6 +135,9 @@ public struct RemoteMirror: Equatable, Sendable {
         case .run(let id, let state):
             guard isShowing(id) else { break }
             snapshot?.run = state
+        case .edit(let id, let state):
+            guard isShowing(id) else { break }
+            snapshot?.edit = state
         case .log(let id, let lines, let reset):
             guard isShowing(id) else { break }
             if reset { snapshot?.log = lines } else { snapshot?.log += lines }

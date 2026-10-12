@@ -19,6 +19,8 @@ final class RemoteSession {
     /// costs less than the Mac holding everything it missed.
     private static let backlogLimit = 32 * 1024 * 1024
     private var isClosed = false
+    /// True once this connection has been closed from here, and the drag it may have left going ended.
+    private var hasGone = false
 
     /// The flow the device is looking at, what it was last told about it, and how many times the graph has changed.
     private var controller: FlowController?
@@ -105,19 +107,30 @@ final class RemoteSession {
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
             case .command(let id, let command) where command.canTakeTime: obeyInTurn(id, command)
-            // Answered before the next message is read, so what is typed arrives in the order it was typed.
-            case .command(let id, let command): send(.answer(id: id, refusal: await RemoteCommands.obey(command, from: device.id)))
+            // An edit sent after a Run that hasn't begun yet waits its turn behind it, so the run starts with
+            // the flow as it was when Run was pressed. Keys and answers don't wait: a run can be starting for a while.
+            case .command(let id, let command) where command.isEdit && command.flowID.map({ slow[$0] != nil }) == true: obeyInTurn(id, command)
+            // Done before the next message is read, so edits are made, and what is typed arrives, in the order sent.
+            case .command(let id, let command): answer(id, command, await RemoteCommands.obey(command, from: device.id))
             }
         }
         close()
     }
 
+    /// Tells the device what became of a command. A step of a drag that isn't the last is never answered:
+    /// there are twenty a second, and the last one says how the drag went.
+    private func answer(_ id: Int, _ command: RemoteCommand, _ refusal: String?) {
+        if command.isAnswered { send(.answer(id: id, refusal: refusal)) }
+    }
+
     /// Starts or stops a run without making the device wait to be heard: starting can take as long as judging
     /// a condition does, and Stop, keys and everything else it sends meanwhile are still read and obeyed.
-    /// Those for one flow are done in the order they came, so a Stop sent after a Run stops that run.
+    /// Those for one flow are done in the order they came, so a Stop sent after a Run stops that run, and so
+    /// are the edits to that flow that arrive while any of them is still waiting.
     /// Whether the device may control the Mac is asked when each one's turn comes, not when it arrived.
     private func obeyInTurn(_ id: Int, _ command: RemoteCommand) {
-        let flowID = command.flowID, deviceID = device.id
+        guard let flowID = command.flowID else { return }
+        let deviceID = device.id
         turn += 1
         let mine = turn
         slow[flowID] = (mine, Task { [weak self, earlier = slow[flowID]?.task] in
@@ -126,18 +139,21 @@ final class RemoteSession {
             guard let self else { return }
             if self.slow[flowID]?.turn == mine { self.slow[flowID] = nil }
             // A connection that has closed since is told nothing: `send` drops it.
-            self.send(.answer(id: id, refusal: refusal))
+            self.answer(id, command, refusal)
         })
     }
 
     /// "Can control" was changed in Settings while the device was connected.
     func controlChanged(_ on: Bool) {
+        // A drag it had going ends here, not at whatever it sends next.
+        if !on { RemoteCommands.endDrag(of: device.id) }
         device.canControl = on
         send(.control(canControl: on))
     }
 
     func close() {
         open(nil)
+        hasGone = true
         isClosed = true
         outbox.finish()
         connection.close()
@@ -148,6 +164,7 @@ final class RemoteSession {
     func turnAway(_ reason: String) {
         guard !isClosed else { return }
         open(nil)
+        hasGone = true
         send(.refused(reason))
         isClosed = true
         outbox.finish()
@@ -161,6 +178,9 @@ final class RemoteSession {
     // MARK: The open flow
 
     private func open(_ new: FlowController?) {
+        // Looking at another flow, or at none, or going altogether, ends a drag the device left going. A
+        // connection that has already closed has none: the device may be dragging again on its next one.
+        if !hasGone { RemoteCommands.endDrag(of: device.id) }
         flushTask?.cancel()
         flushTask = nil
         unfollowTerminals()
@@ -188,7 +208,14 @@ final class RemoteSession {
             liveLinkIDs: controller.liveLinkIDs.sorted(), handOffs: controller.handOffs, holds: controller.holds,
             results: controller.results, usage: controller.usage, sessions: controller.sessions.mapValues(\.state),
             awaitingAnswer: controller.awaitingAnswer.sorted(), banner: controller.banner)
-        return RemoteFlowSnapshot(flow: controller.flow, run: run, log: controller.log, messages: controller.messages,
+        // Read so that a schedule turned on or off at the Mac counts as a change: which are on is not in the flow.
+        _ = controller.schedulesRevision
+        let armed = controller.flow.cards.filter { $0.kind == .start && controller.isArmed($0) }.map(\.id)
+        let manager = controller.undoManager
+        // The titles read the count that goes up whenever the undo stack changes, so that counts as a change too.
+        let edit = RemoteEditState(undo: manager.canUndo ? controller.undoTitle : nil, redo: manager.canRedo ? controller.redoTitle : nil,
+                                   armed: armed, nextFires: controller.nextFires.filter { armed.contains($0.key) })
+        return RemoteFlowSnapshot(flow: controller.flow, run: run, edit: edit, log: controller.log, messages: controller.messages,
                                   runs: controller.runs)
     }
 

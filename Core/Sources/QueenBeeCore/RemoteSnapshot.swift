@@ -7,6 +7,7 @@ public enum RemoteSnapshot {
         var out: [HostMessage] = []
         if new.flow != old.flow { out.append(.flow(id: id, revision: revision, flow: new.flow)) }
         if new.run != old.run { out.append(.run(id: id, state: new.run)) }
+        if new.edit != old.edit { out.append(.edit(id: id, state: new.edit)) }
         if new.log != old.log {
             // Lines are only ever added to the end, until the log is cleared or an earlier run is put on show.
             let grew = new.log.count >= old.log.count && Array(new.log.prefix(old.log.count)) == old.log

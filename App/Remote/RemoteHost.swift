@@ -258,10 +258,11 @@ final class RemoteHost {
             RemoteProject(id: project.root.path, name: project.name, flows: project.controllers.map {
                 RemoteFlowSummary(id: $0.flow.id, name: $0.flow.name, isSubflow: $0.flow.isSubflow == true, activity: $0.activity)
             })
-        })
+        // A role's name and id, for a device to offer. What a role holds is never sent.
+        }, roles: AppServices.shared.roles.map { RemoteRole(id: $0.id, name: $0.name) })
     }
 
-    /// Sends the flow list to every device whenever a project, a flow's name or what a flow needs changes.
+    /// Sends the flow list to every device whenever a project, a flow's name, what a flow needs or a saved role changes.
     private func watchLibrary(_ generation: Int) {
         // Off and on again starts a new watcher. Without this check the old one would carry on beside it.
         guard isOn, generation == watch else { return }

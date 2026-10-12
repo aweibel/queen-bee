@@ -115,6 +115,45 @@ import Testing
         #expect(mirror.waiting == [stop: .stop(flowID: "f")])
     }
 
+    @Test func aStepOfADragIsSentAndNotWaitedFor() {
+        var mirror = RemoteMirror()
+        let step = RemoteCommand.moveCards(flowID: "f", moves: ["a": RemotePoint(x: 1, y: 2)], final: false)
+        // Twenty a second for as long as a finger is down: none of them may pile up.
+        let ids = (0..<200).map { _ in mirror.willSend(step) }
+        #expect(Set(ids).count == 200)
+        #expect(mirror.waiting.isEmpty)
+        #expect(!mirror.isWaiting(for: step))
+        let last = RemoteCommand.moveCards(flowID: "f", moves: ["a": RemotePoint(x: 1, y: 2)], final: true)
+        let id = mirror.willSend(last)
+        #expect(id > ids.max() ?? 0)
+        #expect(mirror.waiting == [id: last])
+        _ = mirror.apply(.answer(id: id, refusal: "That card is no longer in the flow."))
+        #expect(mirror.waiting.isEmpty)
+        #expect(mirror.lastRefusal?.command == last)
+    }
+
+    @Test func undoAndSchedulesFollowTheMac() throws {
+        let start = try base()
+        #expect(start.edit == RemoteEditState())
+        var mirror = mirror(holding: start)
+        let state = RemoteEditState(undo: "Undo Add Note", redo: nil, armed: ["s"], nextFires: ["s": Date(timeIntervalSince1970: 60)])
+        _ = mirror.apply(.edit(id: start.flow.id, state: state))
+        #expect(mirror.snapshot?.edit == state)
+        // Only the open flow's.
+        _ = mirror.apply(.edit(id: "other", state: RemoteEditState(undo: "Undo Tidy Up")))
+        #expect(mirror.snapshot?.edit == state)
+        // And the rest of what was on show is untouched.
+        #expect(mirror.snapshot?.flow == start.flow)
+        #expect(mirror.snapshot?.run == start.run)
+        #expect(mirror.revision == 0)
+    }
+
+    @Test func theRolesComeWithTheFlowList() {
+        var mirror = RemoteMirror()
+        _ = mirror.apply(.library(RemoteLibrary(projects: [], roles: [RemoteRole(id: "r", name: "Reviewer")])))
+        #expect(mirror.library?.roles == [RemoteRole(id: "r", name: "Reviewer")])
+    }
+
     @Test func keepsTheWelcomeAndTheLibrary() {
         var mirror = RemoteMirror()
         let welcome = RemoteWelcome(version: Remote.version, macName: "Studio", canControl: false)
@@ -334,6 +373,16 @@ import Testing
             $0.runs.append(record("r3"))
             $0.flow.name = "Demo 2"
         }
+        // An edit, with what it does to Undo, and a schedule turned on at the Mac.
+        step {
+            $0.flow.cards[0].y = 300
+            $0.edit.undo = "Undo Move"
+        }
+        step {
+            $0.edit.armed = [$0.flow.cards[0].id]
+            $0.edit.nextFires = [$0.flow.cards[0].id: Date(timeIntervalSince1970: 600)]
+        }
+        step { $0.edit = RemoteEditState(undo: nil, redo: "Redo Move") }
         // Nothing changed.
         step { _ in }
 

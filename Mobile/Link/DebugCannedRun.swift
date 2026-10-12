@@ -300,6 +300,9 @@ enum DebugCannedRun {
                     // Only plain text is printed back: a real program decides for itself what any other key shows.
                     let isText = data.allSatisfy { $0 >= 0x20 && $0 != 0x7F }
                     if isRunning(key, in: run) { echo(client, key, isText ? String(decoding: data, as: UTF8.self) : "") } else { refusal = notRunning }
+                default:
+                    // The made-up Mac makes no edits yet. Nothing on the device sends one yet either.
+                    refusal = "This made-up Mac can't change a flow."
                 }
             }
             if refusal == nil {
