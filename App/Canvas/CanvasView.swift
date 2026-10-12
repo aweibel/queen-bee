@@ -806,6 +806,27 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
 
     #if DEBUG
 
+    /// A click at a point in a card's browser half and then some typing, sent as the events a mouse and
+    /// keyboard would send.
+    func testBrowserInput(cardID: String, at point: CGPoint?, typing text: String) -> Bool {
+        guard let page = (cardViews[cardID] as? AgentCardView)?.browserPane?.page, let window else { return false }
+        let spot = page.convert(point ?? .zero, to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] where point != nil {
+            guard let event = NSEvent.mouseEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
+            if type == .leftMouseDown { page.mouseDown(with: event) } else { page.mouseUp(with: event) }
+        }
+        for character in text {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                guard let event = NSEvent.keyEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                   windowNumber: window.windowNumber, context: nil, characters: String(character),
+                                                   charactersIgnoringModifiers: String(character), isARepeat: false, keyCode: 0) else { return false }
+                if type == .keyDown { page.keyDown(with: event) } else { page.keyUp(with: event) }
+            }
+        }
+        return window.firstResponder === page
+    }
+
     func testFocus(cardID: String?) {
         if let cardID, let terminal = controller?.sessions[cardID]?.view {
             window?.makeFirstResponder(terminal)

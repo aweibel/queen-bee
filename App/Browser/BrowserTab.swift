@@ -316,6 +316,11 @@ final class BrowserTab: BrowserToolHost {
            let parts = try? JSONValue.parse(Data(both.utf8)).arrayValue, parts.count == 2 {
             name = parts[0].stringValue ?? name
             address = parts[1].stringValue ?? address
+            // A page can rename itself at any time, and this is a moment the app hears about it.
+            if name != title {
+                title = name
+                onChange?()
+            }
         }
         if address.isEmpty || address == "about:blank" { return "a blank page" }
         return name.isEmpty ? address : "\"\(name)\" at \(address)"

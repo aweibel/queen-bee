@@ -14,7 +14,7 @@ final class AgentCardView: CardView {
     private weak var terminal: NSView?
     private var stateText = ""
     /// The card's browser half, while its Browser switch is on.
-    private var browserPane: BrowserPaneView?
+    private(set) var browserPane: BrowserPaneView?
     private let browserRule = NSView()
 
     override var overviewText: String { stateText }

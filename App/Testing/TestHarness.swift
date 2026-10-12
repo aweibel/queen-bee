@@ -91,6 +91,13 @@ enum TestHarness {
             tab.mouse("mousePressed", at: point, button: "left", buttons: 1, clicks: 1)
             tab.mouse("mouseReleased", at: point, button: "left", clicks: 1)
             return [:]
+        case "browserInput":
+            // The same, as mouse and key events arriving at the card's view.
+            guard let cardID else { return ["error": "browserInput needs card"] }
+            // Without a point it only types, as a person does once they have clicked where they want to.
+            let point = payload["x"]?.doubleValue.map { CGPoint(x: $0, y: payload["y"]?.doubleValue ?? 0) }
+            let focused = controller.canvas?.testBrowserInput(cardID: cardID, at: point, typing: payload["text"]?.stringValue ?? "")
+            return ["focused": focused.map(JSONValue.bool) ?? .null, "focusedCard": controller.focusedCardID.map(JSONValue.string) ?? .null]
         case "browserKill":
             // What a browser crash looks like from outside.
             guard let pid = controller.project.browser.testProcessID else { return ["error": "no browser is running"] }
