@@ -375,13 +375,13 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
     public var problem: String? {
         if isEmpty { return "There is nothing to change." }
         for short in [name, model, effort, permissionMode, role, flowRef] + (branches ?? []) {
-            if let short, short.count > Remote.nameLimit { return RemoteCommand.nameTooLong }
+            if let short, !Remote.fitsName(short) { return RemoteCommand.nameTooLong }
         }
         for long in [instructions, command, value, template, text] {
-            if let long, long.count > Remote.textLimit { return RemoteCommand.textTooLong }
+            if let long, !Remote.fitsText(long) { return RemoteCommand.textTooLong }
         }
         for path in [saveTo, trigger?.path] {
-            if let path, path.count > Remote.pathLimit { return "That file path is too long. The most a device can send is \(Remote.pathLimit) characters." }
+            if let path, !Remote.fitsPath(path) { return "That file path is too long. The most a device can send is \(Remote.pathLimit) characters." }
         }
         if let branches, branches.count > Remote.branchLimit { return "That is too many branches. The most a device can give a card is \(Remote.branchLimit)." }
         if let effort, !effort.isEmpty, !Card.effortLevels.contains(effort) {
@@ -597,25 +597,25 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
             if cardIDs.isEmpty, linkIDs.isEmpty { return "There is nothing to delete." }
             return cardIDs.count > Remote.cardLimit || linkIDs.count > Remote.linkLimit ? Self.tooMany : nil
         case .addLink(_, _, let port, _):
-            return port.count > Remote.nameLimit ? Self.nameTooLong : nil
+            return Remote.fitsName(port) ? nil : Self.nameTooLong
         case .duplicate(_, let cardIDs):
             if cardIDs.isEmpty { return "There is nothing to duplicate." }
             return cardIDs.count > Remote.cardLimit ? Self.tooMany : nil
         case .group(_, let cardIDs, let name):
             if cardIDs.count > Remote.cardLimit { return Self.tooMany }
-            return name.count > Remote.nameLimit ? Self.nameTooLong : nil
+            return Remote.fitsName(name) ? nil : Self.nameTooLong
         case .renameGroup(_, _, let name), .newFlow(_, let name):
-            return name.count > Remote.nameLimit ? Self.nameTooLong : nil
+            return Remote.fitsName(name) ? nil : Self.nameTooLong
         case .renameFlow(_, let name):
             if name.isEmpty { return "A flow needs a name." }
-            return name.count > Remote.nameLimit ? Self.nameTooLong : nil
+            return Remote.fitsName(name) ? nil : Self.nameTooLong
         case .patchCard(_, _, let patch): return patch.problem
         case .setLinkLimit, .tidy, .ungroup, .foldGroup, .setFlowOption, .deleteFlow, .undo, .redo: return nil
         }
     }
 
     private static func tooLong(_ text: String) -> String? {
-        text.count > Remote.promptLimit ? "That message is too long. The most a device can send is \(Remote.promptLimit) characters." : nil
+        Remote.fitsText(text, characters: Remote.promptLimit) ? nil : "That message is too long. The most a device can send is \(Remote.promptLimit) characters."
     }
 
     static let nameTooLong = "That name is too long. The most a device can send is \(Remote.nameLimit) characters."
