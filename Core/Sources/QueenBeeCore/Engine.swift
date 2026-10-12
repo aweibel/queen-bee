@@ -131,6 +131,9 @@ public actor Engine {
         let id: String
         /// Agents handed a message and not heard from since.
         var pending: Set<String> = []
+        /// How many hand-offs each agent has had and not answered. `pending` ends the run and holds
+        /// one entry however many there are; this is what says a reply was asked for.
+        var owed: [String: Int] = [:]
         /// Agents whose last turn ended on a question of their own, not on their reply.
         var asking: Set<String> = []
         /// Whether the app has been told the run hangs on those agents.
@@ -237,9 +240,20 @@ public actor Engine {
             settle(state, &output)
             return output
         }
+        let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Only a reply to a hand-off of this run goes on. An agent's turn can end for other reasons:
+        // the person typed to it, or it is finishing work from a run that was stopped. Passing that
+        // on would carry the run past cards it hasn't reached, an unanswered Approval among them.
+        guard let owed = state.owed[cardID], owed > 0 else {
+            if !reply.isEmpty, let card = flow.card(cardID) {
+                output.log.append("\(card.name) finished a turn, but nothing in this run was waiting on it, so its reply was not passed on")
+            }
+            settle(state, &output)
+            return output
+        }
+        state.owed[cardID] = owed - 1
         state.asking.remove(cardID)
         state.pending.remove(cardID)
-        let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let card = flow.card(cardID) {
             if reply.isEmpty || reply.caseInsensitiveCompare("[no reply]") == .orderedSame {
                 output.log.append("\(card.name) had nothing to pass on")
@@ -396,6 +410,7 @@ public actor Engine {
             output.deliveries.append(Delivery(toCardID: card.id, text: tag + "\n" + message.text, fromName: message.fromName))
             output.log.append("\(message.fromName) → \(card.name)")
             state.pending.insert(card.id)
+            state.owed[card.id, default: 0] += 1
             if state.deliveries >= Self.maxDeliveries {
                 output.log.append("Run stopped: agents had passed \(Self.maxDeliveries) messages, which is the most one run allows")
                 state.hitLimit = true

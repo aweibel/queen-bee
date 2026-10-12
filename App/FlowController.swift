@@ -113,7 +113,7 @@ nonisolated struct RunHistory: Codable, Sendable {
 // Named as main-actor here because conforming to a Sendable protocol would otherwise opt the class out of the app's default.
 @MainActor @Observable
 final class FlowController: ToolHost {
-    static let orchestratorKey = "orchestrator"
+    static let orchestratorKey = Flow.orchestratorKey
 
     var flow: Flow {
         didSet {

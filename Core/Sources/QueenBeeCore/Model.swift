@@ -180,6 +180,18 @@ public struct Flow: Codable, Identifiable, Equatable, Sendable {
         String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
     }
 
+    /// What the app calls a flow's orchestrator session where a card's id would go. No card may have it.
+    public static let orchestratorKey = "orchestrator"
+
+    /// Whether the ids are ones the app could have made. Each session is known to the app as
+    /// "<flow id>/<card id>", with the orchestrator's as "<flow id>/orchestrator", and what a session
+    /// may do follows from that name. A file that calls a card "orchestrator", or puts a slash in
+    /// an id, would get an agent's session treated as some other one.
+    public var hasSafeIDs: Bool {
+        func plain(_ id: String) -> Bool { !id.isEmpty && !id.contains("/") }
+        return plain(id) && cards.allSatisfy { plain($0.id) && $0.id != Self.orchestratorKey }
+    }
+
     public func card(_ id: String) -> Card? { cards.first { $0.id == id } }
     public func links(from id: String, port: String? = nil) -> [Link] {
         links.filter { $0.from == id && (port == nil || $0.port == port) }
