@@ -1054,6 +1054,8 @@ def scenario_nobrowser(project):
     try:
         fid = BROWSER["id"]
         app.open_flow(BROWSER)
+        # The browser scenario may have left the switch off in the flow's file.
+        app.op(fid, "edit", card="Surfer", browser=True)
         refused = app.op(fid, "browserTool", card="Surfer", name="open", arguments={"url": "https://example.com"})
         check("the agent is told there is no browser yet", refused["isError"] and "download" in refused["text"], refused["text"][:200])
         s = app.state(fid)["sessions"]["Surfer"]["browser"]
