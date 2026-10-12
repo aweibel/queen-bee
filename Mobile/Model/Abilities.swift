@@ -349,6 +349,9 @@ final class ControlsModel {
     }
     /// Shown near the run bar until it is dismissed or the next command is done.
     var refusal: ControlRefusal?
+    /// A card whose details are to ask for the message a run starts there with, as their "Run from here…"
+    /// does. Set by the card's menu on the canvas, and taken by the details when they show that card.
+    var runFrom: String?
     #if DEBUG
     /// What a test's presses came to, in order: what was pressed, and the refusal or nil.
     private(set) var debugDone: [(step: String, refusal: String?)] = []
@@ -358,6 +361,7 @@ final class ControlsModel {
     func clear() {
         asking = nil
         refusal = nil
+        runFrom = nil
     }
 }
 
@@ -416,19 +420,19 @@ extension RemoteClient {
     @discardableResult
     func perform(_ press: Press, note: String = "", in flowID: String? = nil) async -> String? {
         guard let flowID = flowID ?? mirror.openFlowID else { return Self.notConnected }
-        return await perform(press.command(flowID: flowID, note: note))
+        return await perform(command: press.command(flowID: flowID, note: note))
     }
 
     /// "Run from here": starts a run at a card, with a message for it.
     @discardableResult
     func run(from cardID: String, text: String) async -> String? {
         guard let flowID = mirror.openFlowID else { return Self.notConnected }
-        return await perform(.runFrom(flowID: flowID, cardID: cardID, text: text))
+        return await perform(command: .runFrom(flowID: flowID, cardID: cardID, text: text))
     }
 
-    /// Every control's command goes through here, so what the Mac turned down is shown in one place, and
-    /// goes away when the next thing works.
-    private func perform(_ command: RemoteCommand) async -> String? {
+    /// Every control's command goes through here, and every edit's, so what the Mac turned down is shown in
+    /// one place, and goes away when the next thing works.
+    func perform(command: RemoteCommand) async -> String? {
         let refusal = await send(command)
         controls.refusal = refusal.map { ControlRefusal(command: command, text: $0) }
         return refusal

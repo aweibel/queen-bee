@@ -1,8 +1,8 @@
 import QueenBeeCore
 import UIKit
 
-/// Draws every link as a right-angled route under the cards, as the Mac's `LinkLayerView` does. It never
-/// takes a touch: the canvas asks it which link a point is on.
+/// Draws every link as a right-angled route under the cards, as the Mac's `LinkLayerView` does, and the
+/// link that is being dragged out of a card. It never takes a touch: the canvas asks it which link a point is on.
 ///
 /// Links at rest are drawn in ink. A link the run has travelled is green and carries its pass count. A link
 /// a message is travelling right now gets orange dashes that march toward the card it is headed for.
@@ -37,14 +37,30 @@ final class LinkLayerView: UIView {
     private var spoken: [String: LinkElement] = [:]
     /// Selects a link, when VoiceOver's double tap lands on it.
     var onActivate: ((_ id: String) -> Void)?
+    /// The flow is being edited from here, so VoiceOver can delete a link. Set before `update`.
+    var isEditing = false
+    var onEdit: ((EditAction) -> Void)?
+    /// A link that is being dragged out of a card and hasn't landed: the route it would take. The Mac's
+    /// dashes, in the colour of what is selected.
+    var pending: [CGPoint]? { didSet { if pending != oldValue { drawPending() } } }
+    private let pendingLine = CAShapeLayer()
     /// How finely the layers are drawn, which the canvas raises when it is zoomed in so lines stay sharp.
     var sharpness: CGFloat = 1 { didSet { if sharpness != oldValue { strands.values.forEach(sharpen) } } }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        pendingLine.fillColor = nil
+        pendingLine.lineWidth = Theme.Stroke.link
+        pendingLine.lineDashPattern = [5, 4]
+        pendingLine.lineJoin = .round
+        // Over every link, whenever those are added.
+        pendingLine.zPosition = 1
+        pendingLine.isHidden = true
+        layer.addSublayer(pendingLine)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: LinkLayerView, _) in
             view.strands.values.forEach { view.restyle($0) }
+            view.drawPending()
         }
         // The dashes stop when the app leaves the screen, and nothing restarts them by itself. Asked for by
         // name, and not with a block: this way the asking ends with the view, and an iPhone makes a new canvas
@@ -59,6 +75,16 @@ final class LinkLayerView: UIView {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     var count: Int { order.count }
+
+    private func drawPending() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pendingLine.isHidden = pending == nil
+        pendingLine.path = pending.map { LinkRouter.path(through: $0) }
+        pendingLine.strokeColor = Theme.select.cg(in: self)
+        pendingLine.contentsScale = traitCollection.displayScale * sharpness
+        CATransaction.commit()
+    }
 
     /// Brings the layers in line with the links. A link whose look hasn't changed is left alone.
     func update(_ links: [(id: String, look: LinkLook)]) {
@@ -101,12 +127,21 @@ final class LinkLayerView: UIView {
                 : look.count == 1 ? "Carried 1 message in the run on show" : look.count > 1 ? "Carried \(look.count) messages in the run on show" : nil
             element.accessibilityTraits = look.isSelected ? [.button, .selected] : .button
             element.accessibilityHint = "Shows what it carried."
+            element.accessibilityCustomActions = !isEditing ? nil : [UIAccessibilityCustomAction(name: "Delete Link") { [weak self] _ in
+                self?.onEdit?(.delete(cards: [], links: [id]))
+                return self?.onEdit != nil
+            }]
             // Room for a finger around a route that runs dead straight.
             element.accessibilityFrameInContainerSpace = (strands[id]?.path.boundingBoxOfPath ?? .zero).insetBy(dx: -12, dy: -12)
             kept[id] = element
         }
         spoken = kept
     }
+
+    #if DEBUG
+    /// What VoiceOver can do on each link, in the links' order, for a test to read.
+    var debugActions: [[String]] { order.map { (spoken[$0]?.accessibilityCustomActions ?? []).map(\.name) } }
+    #endif
 
     override var isAccessibilityElement: Bool { get { false } set {} }
     override var accessibilityElements: [Any]? {

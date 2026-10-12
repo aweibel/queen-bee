@@ -48,6 +48,8 @@ struct CanvasArea: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { foot = $0 + Theme.Space.m * 2 }
                 .padding(Theme.Space.m)
         }
+        // Over everything on the canvas, the bars included: a menu is the one thing being done while it is up.
+        .overlay { EditMenuLayer(foot: foot) }
     }
 
     @ViewBuilder private var flowsButton: some View {

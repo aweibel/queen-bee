@@ -27,6 +27,7 @@ struct ShellView: View {
         .sheet(isPresented: $showsSettings) { SettingsSheet() }
         .fullScreenCover(item: expanded) { TerminalViewer(key: $0.id) }
         .asksBeforeActing()
+        .asksBeforeEditing()
         #if DEBUG
         .task { if DebugLaunch.show == "settings" { showsSettings = true } }
         #endif
@@ -109,6 +110,10 @@ private struct SplitShell: View {
         .inspector(isPresented: $showsDetails) {
             InspectorPanel().edgeRule(.leading).inspectorColumnWidth(min: 280, ideal: 340, max: 440)
         }
+        // A card's menu on the canvas asks for the message a run starts with, which is asked in its details.
+        .onChange(of: client.controls.runFrom) { _, cardID in
+            if cardID != nil { showsDetails = true }
+        }
         #if DEBUG
         // Upright, an iPad starts with the list of flows tucked away, and a test can't tap to bring it out.
         .task { if DebugLaunch.show == "flows" { columns = .all } }
@@ -177,6 +182,9 @@ private struct StackShell: View {
         .onDisappear {
             client.panel.cover = 0
             client.panel.isSheetUp = false
+        }
+        .onChange(of: client.controls.runFrom) { _, cardID in
+            if cardID != nil { showsDetails = true }
         }
         // The details belong to the open flow, and go when it does.
         .onChange(of: client.mirror.openFlowID) { _, open in

@@ -6,8 +6,9 @@ import UIKit
 /// The zoomable canvas of the open flow, drawn to match the Mac's `CanvasView`: the same paper, the same
 /// cards in the same places, the same links. A scroll view holds one large surface; cards are its subviews.
 ///
-/// Nothing on it can be moved or changed from here. A finger pans, two fingers zoom, a tap selects, and a
-/// double tap on bare paper shows the whole flow. A tap on a button drawn on a card presses it.
+/// A finger pans, two fingers zoom, a tap selects, and a double tap on bare paper shows the whole flow. A
+/// tap on a button drawn on a card presses it. Nothing on it is moved or changed by any of those. Changing
+/// the flow is a mode, turned on with Edit: see `CanvasEditing.swift`.
 final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     /// As far out and as far in as a pinch goes. The Mac's limits.
     static let minZoom: CGFloat = 0.2
@@ -15,18 +16,30 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     /// As far out as fitting a flow goes, so a wide one still fits whole.
     private static let fitFloor: CGFloat = 0.05
 
-    private let client: RemoteClient
-    private var model: CanvasModel { client.canvas }
+    let client: RemoteClient
+    var model: CanvasModel { client.canvas }
     private let paper = PaperView()
     let scrollView = UIScrollView()
     /// The surface cards sit on. Its own coordinates are the flow file's: a card at x 60 is at 60 here.
     let document = UIView()
-    private let linkLayer = LinkLayerView()
-    private var cardViews: [String: CardView] = [:]
-    private var groupViews: [String: GroupFrameView] = [:]
+    let linkLayer = LinkLayerView()
+    /// Drawn over the cards while something is dragged: the lines that show a card is lined up, and the box that selects.
+    let overlayView = CanvasOverlayView()
+    private(set) var cardViews: [String: CardView] = [:]
+    private(set) var groupViews: [String: GroupFrameView] = [:]
+
+    /// Takes the drags that edit the flow, and no others. See `CanvasEditing.swift`.
+    let editPan = UIPanGestureRecognizer()
+    let longPress = UILongPressGestureRecognizer()
+    /// Where the finger of a drag is, in this view's own points, whether or not it has moved.
+    var finger: CGPoint?
+    /// Pans the canvas while a drag is held near its edge.
+    var edgeLink: CADisplayLink?
+    var edgePan: TouchEdit.EdgePan?
+    var edgeLast: CFTimeInterval = 0
 
     /// What is drawn now, and what it was worked out from, so a message that changes none of it costs nothing.
-    private var content = CanvasContent()
+    private(set) var content = CanvasContent()
     private var inputs: Inputs?
     private struct Inputs: Equatable {
         var flow: Flow
@@ -37,6 +50,10 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         var viewed: RunRecord?
         /// The buttons each card offers. They come and go with "Can control", the connection and each command's answer.
         var buttons: [String: [PressButton]]
+        /// The flow is being edited from here, which gives VoiceOver its ways to edit.
+        var isEditing: Bool
+        /// The card a link being dragged is over, and whether it would take the link.
+        var drop: LinkDropTarget?
     }
 
     /// Room at the canvas's edges that something floats over, on top of the bars the system puts there.
@@ -67,6 +84,10 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         linkLayer.bounds.origin = document.bounds.origin
         document.addSubview(linkLayer)
         linkLayer.onActivate = { [weak self] id in self?.model.select(.link(id)) }
+        linkLayer.onEdit = { [weak self] action in self?.perform(action) }
+        overlayView.frame = document.bounds
+        overlayView.bounds.origin = document.bounds.origin
+        document.addSubview(overlayView)
 
         scrollView.delegate = self
         scrollView.backgroundColor = .clear
@@ -89,6 +110,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         // A double tap only ever starts on bare paper, so a tap on a card or a link isn't kept waiting for one.
         tap.require(toFail: double)
         scrollView.addGestureRecognizer(tap)
+        setUpEditing()
 
         observe()
     }
@@ -119,17 +141,32 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             saveViewport()
             clear()
         }
-        let selection = model.selection, viewed = Self.stillOnShow(model.viewedRun, in: snapshot)
+        let viewed = Self.stillOnShow(model.viewedRun, in: snapshot)
         if viewed != model.viewedRun { model.view(viewed) }
         let abilities = Abilities(canControl: client.mirror.canControl, isConnected: client.state == .connected, snapshot: snapshot,
                                   viewed: viewed, waiting: Array(client.mirror.waiting.values))
-        let now = Inputs(flow: snapshot.flow, run: snapshot.run, lastRun: snapshot.runs.last,
-                         siblings: client.openFlow?.project.flows ?? [], selection: selection, viewed: viewed, buttons: abilities.cards)
+        // Editing turns itself off the moment this device may no longer act: "Can control" was turned off, the
+        // link dropped, or an earlier run was put on show. Whatever was under the finger goes back.
+        let edit = client.edit
+        if edit.flowID != nil, edit.flowID != snapshot.flow.id || !abilities.canAct { client.stopEditing() }
+        edit.flowArrived(revision: client.mirror.revision)
+        client.selectWhatWasAdded()
+        // While a card is dragged it is drawn where the finger has it. Everything else is as the Mac last sent it.
+        var shown = snapshot
+        if let carried = edit.carried, carried.flowID == snapshot.flow.id { shown.flow = carried.overlay.applied(to: snapshot.flow) }
+        overlayView.show(guides: edit.guides, marquee: edit.marquee)
+        linkLayer.pending = edit.pendingLink?.points
+        let selection = model.selection
+        let now = Inputs(flow: shown.flow, run: snapshot.run, lastRun: snapshot.runs.last,
+                         siblings: client.openFlow?.project.flows ?? [], selection: selection, viewed: viewed, buttons: abilities.cards,
+                         isEditing: edit.isOn(for: snapshot.flow.id),
+                         drop: edit.pendingLink.flatMap { link in link.over.map { LinkDropTarget(cardID: $0, accepts: link.accepts) } })
         // Most of what the Mac sends is terminal output and log lines, which change nothing here.
         guard now != inputs else { return }
         let isNew = inputs == nil
         inputs = now
-        apply(CanvasContent(snapshot, siblings: now.siblings, selection: selection, viewed: viewed, buttons: now.buttons))
+        apply(CanvasContent(shown, siblings: now.siblings, selection: selection, viewed: viewed, buttons: now.buttons,
+                            isEditing: now.isEditing, drop: now.drop))
         if isNew {
             awaitsPlacing = true
             setNeedsLayout()
@@ -139,6 +176,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         case .card(let id) where snapshot.flow.card(id) == nil: model.select(.none)
         case .link(let id) where !snapshot.flow.links.contains { $0.id == id }: model.select(.none)
         case .group(let id) where !(snapshot.flow.groups ?? []).contains { $0.id == id }: model.select(.none)
+        case .cards(let ids) where !ids.allSatisfy({ snapshot.flow.card($0) != nil }): model.select(.of(ids.filter { snapshot.flow.card($0) != nil }))
         default: break
         }
         #if DEBUG
@@ -188,9 +226,10 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 let id = card.id
                 view.onActivate = { [weak self] in self?.model.select(.card(id)) }
                 view.onPress = { [weak self] in self?.model.onPress?($0) }
+                view.onEdit = { [weak self] action in self?.perform(action) }
                 (view as? AgentCardView)?.onExpand = { [weak self] in self?.model.expandTerminal?(id) }
                 view.zoom = zoom
-                document.addSubview(view)
+                document.insertSubview(view, belowSubview: overlayView)
                 cardViews[card.id] = view
                 if didFirstSync { view.playDrawIn() }
                 created = true
@@ -207,6 +246,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 cardViews[id] = nil
             }
         }
+        linkLayer.isEditing = new.isEditing
         linkLayer.update(new.links)
         content = new
         layoutGroups()
@@ -230,11 +270,12 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 view = GroupFrameView(look: look)
                 let id = look.group.id
                 view.onActivate = { [weak self] in self?.model.select(.group(id)) }
+                view.onEdit = { [weak self] action in self?.perform(action) }
                 groupViews[look.group.id] = view
             }
             // A frame sits behind its cards. Folded, the one card sits where cards do.
             if view.superview == nil || view.look.group.isFolded != look.group.isFolded {
-                if look.group.isFolded { document.addSubview(view) } else { document.insertSubview(view, aboveSubview: linkLayer) }
+                if look.group.isFolded { document.insertSubview(view, belowSubview: overlayView) } else { document.insertSubview(view, aboveSubview: linkLayer) }
             }
             view.zoom = zoom
             if view.look != look || view.frame != frame { view.update(look, frame: frame) }
@@ -297,28 +338,28 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     // MARK: Where the canvas is looking
 
     /// What floats over each edge of the canvas: the system's bars, and whatever `clearance` adds.
-    private var covered: UIEdgeInsets {
+    var covered: UIEdgeInsets {
         let safe = safeAreaInsets
         return UIEdgeInsets(top: safe.top + clearance.top, left: safe.left + clearance.left,
                             bottom: safe.bottom + clearance.bottom, right: safe.right + clearance.right)
     }
 
     /// The part of the screen nothing floats over, never smaller than a card's title.
-    private var room: CGRect {
+    var room: CGRect {
         let c = covered
         return CGRect(x: c.left, y: c.top, width: max(80, bounds.width - c.left - c.right), height: max(80, bounds.height - c.top - c.bottom))
     }
 
-    private var middleOfRoom: CGPoint { CGPoint(x: room.midX, y: room.midY) }
+    var middleOfRoom: CGPoint { CGPoint(x: room.midX, y: room.midY) }
 
     /// The canvas point under a point of this view.
-    private func canvasPoint(at screen: CGPoint) -> CGPoint {
+    func canvasPoint(at screen: CGPoint) -> CGPoint {
         let zoom = max(scrollView.zoomScale, 0.01), offset = scrollView.contentOffset
         return CGPoint(x: (offset.x + screen.x) / zoom - CanvasGeometry.margin, y: (offset.y + screen.y) / zoom - CanvasGeometry.margin)
     }
 
     /// The part of the canvas on screen, in canvas points.
-    private var visible: CGRect {
+    var visible: CGRect {
         let zoom = max(scrollView.zoomScale, 0.01), origin = canvasPoint(at: .zero)
         return CGRect(origin: origin, size: CGSize(width: bounds.width / zoom, height: bounds.height / zoom))
     }
@@ -345,6 +386,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         let zoom = scrollView.zoomScale
         model.noteZoom(zoom)
         cardViews.values.forEach { $0.zoom = zoom }
+        overlayView.zoom = zoom
         layoutGroups()
     }
 
@@ -373,6 +415,12 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             // A screen that has changed shape shows other cards.
             sharpenTerminals()
         }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // A canvas that has left the screen is under no finger.
+        if window == nil { letGoOfDrag() }
     }
 
     override func safeAreaInsetsDidChange() {
@@ -537,7 +585,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { tookHold() }
 
     /// A finger has taken the canvas: it goes where the finger says from here.
-    private func tookHold() {
+    func tookHold() {
         journey?.stop()
         journey = nil
         isFitted = false
@@ -552,11 +600,18 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     // MARK: Taps
 
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
-        let point = tap.location(in: document)
+        self.tap(at: tap.location(in: document))
+    }
+
+    /// What a tap at a canvas point does.
+    func tap(at point: CGPoint) {
         if let key = expandTarget(at: point) {
             model.expandTerminal?(key)
         } else if let press = pressTarget(at: point) {
             model.onPress?(press)
+        } else if client.isEditing, client.edit.isSelecting, case .card(let id) = item(at: point) {
+            // While cards are being selected, a tap on one adds it to them or takes it out.
+            model.toggle(id)
         } else {
             model.select(item(at: point))
         }
@@ -567,8 +622,10 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     }
 
     /// A double tap is for bare paper. On a card or a link it would only hold up the tap that selects it.
+    /// The recognisers that edit are asked in `CanvasEditing.swift`.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: document)
+        if let edits = editingTakes(gestureRecognizer, at: point) { return edits }
         return item(at: point) == .none && expandTarget(at: point) == nil && pressTarget(at: point) == nil
     }
 
@@ -606,6 +663,12 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         travel(to: zoom, point: canvasPoint(at: middleOfRoom), animated: false)
     }
 
+    /// Pans so a canvas point is in the middle of the clear part of the canvas, at the zoom it is at.
+    func debugCentre(on point: CGPoint) {
+        isFitted = false
+        travel(to: scrollView.zoomScale, point: point, animated: false)
+    }
+
     /// What the canvas is showing, read from the views themselves, for a script that can't see the screen.
     var debugState: [String: Any] {
         func rect(_ r: CGRect) -> [String: Any] { ["x": r.minX, "y": r.minY, "width": r.width, "height": r.height] }
@@ -620,6 +683,9 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             entry["name"] = card.name
             entry["hidden"] = view.isHidden
             entry["selected"] = view.context.isSelected
+            // The outline of a card a link is being dragged over, and what VoiceOver can do on the card.
+            entry["linkDrop"] = view.context.linkDrop.rawValue
+            entry["actions"] = (view.accessibilityCustomActions ?? []).map(\.name)
             entry["badges"] = view.badgeTexts
             entry["text"] = (view as? LogicCardView)?.summaryText ?? NSNull()
             entry["hasTerminalPlace"] = terminalContainer(for: card.id) != nil
@@ -649,6 +715,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         case .card(let id): ["card": id]
         case .link(let id): ["link": id]
         case .group(let id): ["group": id]
+        case .cards(let ids): ["cards": ids.sorted()]
         }
         let room = room
         return [
@@ -659,6 +726,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             "passes": Dictionary(uniqueKeysWithValues: content.links.filter { $0.look.count > 0 }.map { ($0.id, $0.look.count) }),
             "live": content.links.filter(\.look.isLive).map(\.id),
             "groups": groupViews.count,
+            "groupActions": Dictionary(uniqueKeysWithValues: groupViews.values.map { ($0.look.group.name, ($0.accessibilityCustomActions ?? []).map(\.name)) }),
+            "linkActions": linkLayer.debugActions,
             "zoom": zoom,
             "fitted": isFitted,
             "contentSize": ["width": scrollView.contentSize.width / zoom, "height": scrollView.contentSize.height / zoom],

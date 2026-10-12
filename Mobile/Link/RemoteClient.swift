@@ -45,6 +45,8 @@ final class RemoteClient {
     let controls = ControlsModel()
     /// What the person has written for each session and not sent, and the keys on their way.
     let composer = ComposerModel()
+    /// Whether the open flow is being edited from here, and what is under the finger.
+    let edit = EditModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)
@@ -315,6 +317,7 @@ final class RemoteClient {
     /// It doesn't say the command failed, because it may not have.
     static let noAnswer = "Your Mac didn't answer. Check the run on your Mac."
     static let noAnswerTyping = "Your Mac didn't answer. Check the session on your Mac."
+    static let noAnswerEdit = "Your Mac didn't answer. Check the flow on your Mac."
     /// How long the Mac is given to answer a command. Starting a run can wait on a condition being judged,
     /// which takes seconds. Nothing takes this long unless something is wrong.
     static var answerWait: Duration {
@@ -350,12 +353,30 @@ final class RemoteClient {
             case .prompt, .keys: true
             default: false
             }
-            answers.removeValue(forKey: id)?.resume(returning: isTyping ? Self.noAnswerTyping : Self.noAnswer)
+            answers.removeValue(forKey: id)?.resume(returning: isTyping ? Self.noAnswerTyping : command.isEdit ? Self.noAnswerEdit : Self.noAnswer)
         }
         return await withCheckedContinuation { waiting in
             answers[id] = waiting
             if let link { link.send(.command(id: id, command: command)) } else { outbox?(id, command) }
         }
+    }
+
+    /// Sends a step of a drag that isn't the last. The Mac sends no answer to one, so nothing waits for one:
+    /// the drag's last step goes through `send` and says how the whole drag went. A step that can't go now
+    /// is dropped, and the next one says where things have got to.
+    func sendStep(_ command: RemoteCommand) {
+        guard !command.isAnswered, command.problem == nil, state == .connected else { return }
+        #if DEBUG
+        let outbox = debugOutbox
+        #else
+        let outbox: ((Int, RemoteCommand) -> Void)? = nil
+        #endif
+        guard link != nil || outbox != nil else { return }
+        let id = mirror.willSend(command)
+        #if DEBUG
+        debugSent.append(command)
+        #endif
+        if let link { link.send(.command(id: id, command: command)) } else { outbox?(id, command) }
     }
 
     /// The link has gone, so nothing that was sent on it will be answered.
@@ -384,8 +405,11 @@ final class RemoteClient {
 
     /// Shows a flow, or none. What was on show goes at once, and the new flow follows when the Mac sends it.
     func open(_ flowID: String?) {
-        // A question about the flow that was open is not one about the next.
-        if flowID != mirror.openFlowID { controls.asking = nil }
+        // A question about the flow that was open is not one about the next, and nor is editing it.
+        if flowID != mirror.openFlowID {
+            controls.asking = nil
+            stopEditing()
+        }
         mirror.willOpen(flowID)
         terminals.reset()
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
@@ -466,6 +490,7 @@ final class RemoteClient {
         mirror = RemoteMirror()
         controls.clear()
         composer.clear()
+        stopEditing()
         terminals.reset()
         canvas.viewports = [:]
         noteMac(notFound: false)

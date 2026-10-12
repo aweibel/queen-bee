@@ -27,6 +27,8 @@ final class GroupFrameView: UIView {
 
     /// Selects the group, when VoiceOver's double tap lands on it.
     var onActivate: (() -> Void)?
+    /// Changes the group, for VoiceOver's actions while the flow is being edited.
+    var onEdit: ((EditAction) -> Void)?
 
     override func accessibilityActivate() -> Bool {
         onActivate?()
@@ -54,6 +56,15 @@ final class GroupFrameView: UIView {
         accessibilityLabel = new.group.isFolded ? "Group \(new.group.name), folded" : "Group \(new.group.name)"
         accessibilityValue = new.detail
         accessibilityTraits = new.isSelected ? [.button, .selected] : .button
+        // What a finger gets by holding on the group's name.
+        let id = new.group.id, folded = new.group.isFolded
+        let edits: [(String, EditAction)] = [(folded ? "Unfold" : "Fold into One Card", .fold(id, !folded)), ("Rename Group…", .renameGroup(id, to: nil)), ("Ungroup", .ungroup(id))]
+        accessibilityCustomActions = !new.isEditing ? nil : edits.map { name, edit in
+            UIAccessibilityCustomAction(name: name) { [weak self] _ in
+                self?.onEdit?(edit)
+                return self?.onEdit != nil
+            }
+        }
         restyle()
         setNeedsLayout()
     }

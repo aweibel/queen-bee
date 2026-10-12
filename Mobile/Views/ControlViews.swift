@@ -27,7 +27,8 @@ struct PressButtons: View {
 }
 
 /// What floats over the foot of the canvas, and the one place its order is set: a refusal on top, since it
-/// is about what was just pressed, then the run bar and the connection strip. Side by side where there is
+/// is about what was just pressed, then the editing bar while the flow is being edited, then the run bar
+/// and the connection strip. Side by side where there is
 /// room, the connection at the left as before and the run bar at the right, under the thumb. One above the
 /// other where there isn't. The canvas is told how tall all of it is, and fits the flow clear of it. The
 /// banners are at the canvas's top, so nothing here can meet them.
@@ -42,6 +43,7 @@ struct CanvasFoot: View {
                 RefusalNotice(text: refusal.text) { client.controls.refusal = nil }
                     .transition(.opacity)
             }
+            EditBar()
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .bottom, spacing: Theme.Space.m) {
                     ConnectionBar(showSettings: showSettings)
@@ -80,6 +82,13 @@ struct RunBar: View {
                 .floatingPanel()
         } else if !abilities.bar.isEmpty {
             HStack(spacing: Theme.Space.s) {
+                // Editing is a mode, and this is the way in. The way out is Done, on the bar that takes its place.
+                if let edit = client.editBar.first, edit.kind == .edit {
+                    Button(edit.title) { client.press(.edit) }
+                        .buttonStyle(.panel(.tool))
+                        .accessibilityHint(edit.hint)
+                    Rectangle().fill(Theme.hairline.ui).frame(width: 1, height: Theme.Touch.target - Theme.Space.s).accessibilityHidden(true)
+                }
                 if let note = abilities.barNote {
                     Text(note)
                         .dsSans(Theme.Touch.caption + 1)
@@ -251,6 +260,16 @@ struct CardActions: View {
         }
         .padding(.horizontal, Theme.Space.l)
         .padding(.vertical, Theme.Space.m)
+        // "Run from here…" was chosen from the card's menu on the canvas: the same question is asked here.
+        .onChange(of: client.controls.runFrom, initial: true) { _, wanted in
+            guard wanted == card.id else { return }
+            client.controls.runFrom = nil
+            if canRunFrom { draft = lastMessage }
+            #if DEBUG
+            // A test can't see the box that has just come up.
+            client.controls.debugNote("asked:runFrom:\(card.name)", canRunFrom ? nil : "This card can't be run from.")
+            #endif
+        }
     }
 }
 

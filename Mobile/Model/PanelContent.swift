@@ -135,7 +135,8 @@ nonisolated struct Details: Equatable {
     init?(selection: CanvasModel.Selection, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary]) {
         let flow = snapshot.flow
         switch selection {
-        case .none:
+        case .none, .cards:
+            // Several cards have no details in common to show.
             return nil
         case .card(let id):
             guard let card = flow.card(id) else { return nil }

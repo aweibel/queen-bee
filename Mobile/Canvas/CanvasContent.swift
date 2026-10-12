@@ -23,6 +23,21 @@ nonisolated struct CardContext: Equatable {
     var mark = RunMark()
     /// The buttons drawn on the card, when this device may answer for it. See `Abilities`.
     var buttons: [PressButton] = []
+    /// The flow is being edited from here, so VoiceOver is given ways to move, link, copy and delete the card.
+    var isEditing = false
+    /// A link is being dragged over the card, and this is whether the card would take it.
+    var linkDrop = LinkDrop.none
+}
+
+/// What a card under a link that is being dragged says about taking it. The Mac's `LinkDrop`.
+nonisolated enum LinkDrop: String, Sendable {
+    case none, accepts, refuses
+}
+
+/// The card a link being dragged is over.
+nonisolated struct LinkDropTarget: Equatable, Sendable {
+    var cardID: String
+    var accepts: Bool
 }
 
 /// How one link is drawn.
@@ -45,6 +60,8 @@ nonisolated struct GroupLook: Equatable {
     var tone = Tone.plain
     var isSelected = false
     var detail = ""
+    /// The flow is being edited from here.
+    var isEditing = false
 }
 
 /// Everything the canvas draws for one flow, worked out from what the Mac sent. Comparing two of these is
@@ -58,9 +75,10 @@ nonisolated struct CanvasContent: Equatable {
     var groups: [GroupLook] = []
     /// Cards folded away inside a group.
     var folded: Set<String> = []
+    var isEditing = false
 
     static func == (a: CanvasContent, b: CanvasContent) -> Bool {
-        a.flowID == b.flowID && a.cards == b.cards && a.contexts == b.contexts && a.groups == b.groups && a.folded == b.folded
+        a.flowID == b.flowID && a.isEditing == b.isEditing && a.cards == b.cards && a.contexts == b.contexts && a.groups == b.groups && a.folded == b.folded
             && a.links.elementsEqual(b.links) { $0.id == $1.id && $0.look == $1.look }
     }
 
@@ -69,8 +87,9 @@ nonisolated struct CanvasContent: Equatable {
     /// - Parameter siblings: the other flows in the same project, for the name of the flow a Flow card runs.
     /// - Parameter viewed: an earlier run to show in place of the latest.
     /// - Parameter buttons: the buttons each card offers, by card id.
+    /// - Parameter drop: the card a link being dragged is over.
     init(_ snapshot: RemoteFlowSnapshot, siblings: [RemoteFlowSummary], selection: CanvasModel.Selection, viewed: RunRecord?,
-         buttons: [String: [PressButton]] = [:]) {
+         buttons: [String: [PressButton]] = [:], isEditing: Bool = false, drop: LinkDropTarget? = nil) {
         let flow = snapshot.flow, run = snapshot.run
         // An earlier run is over: it has marks, counts and results, and nothing in it is live or waiting.
         let marks = viewed?.marks ?? run.marks
@@ -84,10 +103,13 @@ nonisolated struct CanvasContent: Equatable {
         let warnings = QueenBeeCore.warnings(for: flow)
 
         flowID = flow.id
+        self.isEditing = isEditing
         cards = flow.cards
         for card in flow.cards {
             var context = CardContext()
-            context.isSelected = selection == .card(card.id)
+            context.isSelected = selection.cardIDs.contains(card.id)
+            context.isEditing = isEditing
+            if let drop, drop.cardID == card.id { context.linkDrop = drop.accepts ? .accepts : .refuses }
             context.linkedInputs = flow.links.contains { $0.to == card.id }
             context.linkedPorts = Set(flow.links(from: card.id).map(\.port))
             context.warning = warnings[card.id]
@@ -147,7 +169,7 @@ nonisolated struct CanvasContent: Equatable {
             let needs = members.filter { waiting.contains($0.id) }.count
             let detail = needs > 0 ? "\(needs) need\(needs == 1 ? "s" : "") you" : live ? "working" : "\(members.count) cards"
             groups.append(GroupLook(group: group, tone: failed ? .fail : live ? .live : .plain,
-                                    isSelected: selection == .group(group.id), detail: detail))
+                                    isSelected: selection == .group(group.id), detail: detail, isEditing: isEditing))
         }
     }
 

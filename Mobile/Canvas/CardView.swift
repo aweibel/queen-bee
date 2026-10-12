@@ -126,8 +126,8 @@ final class CardButtonView: UIView {
 
 /// A card on the canvas, drawn as the Mac's `CardView` draws it: a title bar, dots for its links, the corner
 /// the Mac resizes it by. Its frame is the card's rectangle widened by `gutter` on each side, so the dots that
-/// straddle the card's edges stay inside the view. Nothing here is moved or changed from the device, so
-/// the view takes no touches: the canvas works out what a tap landed on, the card's buttons included.
+/// straddle the card's edges stay inside the view. The view takes no touches: the canvas works out what a tap
+/// or a drag landed on, the card's buttons, its title bar, its dots and its corner included.
 class CardView: UIView {
     static let gutter: CGFloat = CanvasGeometry.portRadius + 3
     /// Below this zoom a card shows its overview.
@@ -157,6 +157,9 @@ class CardView: UIView {
     private(set) var buttonViews: [CardButtonView] = []
     /// Does what one of the card's buttons is for. The canvas calls it for a finger, and VoiceOver for its actions.
     var onPress: ((Press) -> Void)?
+    /// Makes a change to the flow, for VoiceOver's actions while the flow is being edited. A finger's drags
+    /// and its menu are the canvas's.
+    var onEdit: ((EditAction) -> Void)?
     /// What the view last showed, so an update that changes nothing for this card costs nothing.
     private var shown: (card: Card, context: CardContext)?
     private var laidOut = CGSize.zero
@@ -356,8 +359,24 @@ class CardView: UIView {
         accessibilityCustomActions = all.isEmpty ? nil : all
     }
 
-    /// Actions of a subclass's own, said before the buttons'.
-    var extraActions: [UIAccessibilityCustomAction] { [] }
+    /// Said before the buttons': while the flow is being edited, what a finger does by dragging and holding.
+    /// A subclass adds its own.
+    var extraActions: [UIAccessibilityCustomAction] {
+        guard context.isEditing else { return [] }
+        let id = card.id, step = Double(CanvasGeometry.gridStep)
+        func action(_ name: String, _ edit: EditAction) -> UIAccessibilityCustomAction {
+            UIAccessibilityCustomAction(name: name) { [weak self] _ in
+                self?.onEdit?(edit)
+                return self?.onEdit != nil
+            }
+        }
+        var all = [action("Move left", .nudge([id], dx: -step, dy: 0)), action("Move right", .nudge([id], dx: step, dy: 0)),
+                   action("Move up", .nudge([id], dx: 0, dy: -step)), action("Move down", .nudge([id], dx: 0, dy: step))]
+        if !ports(of: card).isEmpty { all.append(action("Link to…", .showLinks(from: id))) }
+        all.append(action("Duplicate", .duplicate([id])))
+        all.append(action("Delete", .delete(cards: [id], links: [])))
+        return all
+    }
 
     /// Lays the buttons out in one row inside `row`, from its left edge, or in its middle. A row too
     /// narrow for them shares what there is.
@@ -488,9 +507,14 @@ class CardView: UIView {
 
     // MARK: Colour
 
-    /// The outline says the most pressing thing about the card: it is selected, it failed, it is live, or
-    /// nothing in particular.
+    /// The outline says the most pressing thing about the card: a link is about to land, it is selected, it
+    /// failed, it is live, or nothing in particular.
     var outline: (color: UIColor, width: CGFloat) {
+        switch context.linkDrop {
+        case .accepts: return (Theme.live, Theme.Stroke.selected)
+        case .refuses: return (Theme.failInk, Theme.Stroke.selected)
+        case .none: break
+        }
         if context.isSelected { return (Theme.select, Theme.Stroke.selected) }
         if context.mark.failed { return (Theme.failInk, Theme.Stroke.link) }
         if context.isLive { return (Theme.live, Theme.Stroke.link) }
@@ -739,10 +763,10 @@ final class AgentCardView: CardView {
     }
 
     override var extraActions: [UIAccessibilityCustomAction] {
-        terminal == nil ? [] : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
+        (terminal == nil ? [] : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
             self?.onExpand?()
             return self?.onExpand != nil
-        }]
+        }]) + super.extraActions
     }
 
     override func update(card new: Card, context: CardContext) {

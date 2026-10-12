@@ -92,6 +92,9 @@ struct PanelButtonStyle: ButtonStyle {
         case live
         /// Run and Stop, filled as the Mac's are: cobalt to go, the live colour to stop.
         case run, stop
+        /// One of several in a bar that has its own outline: ink, with no outline of its own. And the same
+        /// while what it switches on is on, in the colour of what is selected.
+        case tool, toolOn
     }
 
     var kind: Kind = .outline
@@ -114,7 +117,7 @@ private struct PanelButton: View {
             .dsMono(Theme.Touch.body, .medium)
             .lineLimit(1)
             .foregroundStyle(foreground.ui)
-            .padding(.horizontal, kind == .quiet ? Theme.Space.s : Theme.Space.l)
+            .padding(.horizontal, kind == .quiet || kind == .tool || kind == .toolOn ? Theme.Space.s : Theme.Space.l)
             .frame(maxWidth: isWide ? .infinity : nil, minHeight: Theme.Touch.target)
             .background(background.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(border.ui, lineWidth: Theme.Stroke.card))
@@ -128,7 +131,8 @@ private struct PanelButton: View {
     private var foreground: UIColor {
         guard isEnabled else { return Theme.inkSecondary.withAlphaComponent(0.55) }
         switch kind {
-        case .outline: return Theme.ink
+        case .outline, .tool: return Theme.ink
+        case .toolOn: return Theme.select
         case .quiet: return Theme.inkSecondary
         case .filled, .run, .stop: return Theme.surface
         case .danger: return Theme.failInk
@@ -139,7 +143,7 @@ private struct PanelButton: View {
     private var background: UIColor {
         guard isEnabled else { return .clear }
         switch kind {
-        case .outline, .quiet: return configuration.isPressed ? Theme.barHover : .clear
+        case .outline, .quiet, .tool, .toolOn: return configuration.isPressed ? Theme.barHover : .clear
         case .filled: return Theme.ink
         case .danger: return configuration.isPressed ? Theme.failTint : .clear
         case .live: return configuration.isPressed ? Theme.live.withAlphaComponent(0.25) : Theme.liveTint
@@ -149,10 +153,11 @@ private struct PanelButton: View {
     }
 
     private var border: UIColor {
-        guard isEnabled else { return kind == .quiet ? .clear : Theme.hairline }
+        guard isEnabled else { return kind == .quiet || kind == .tool ? .clear : Theme.hairline }
         switch kind {
         case .outline, .filled: return Theme.ink
-        case .quiet: return .clear
+        case .quiet, .tool: return .clear
+        case .toolOn: return Theme.select
         case .danger: return Theme.failInk
         case .live, .stop: return Theme.live
         case .run: return Theme.select

@@ -12,9 +12,25 @@ final class CanvasModel {
         case link(String)
         /// A group, picked by its name strip or by its one card when folded.
         case group(String)
+        /// Two or more cards, picked one by one or with a box while editing.
+        case cards(Set<String>)
 
         var cardID: String? { if case .card(let id) = self { id } else { nil } }
         var linkID: String? { if case .link(let id) = self { id } else { nil } }
+
+        /// One card is `.card`, so its details show. Several are `.cards`.
+        static func of(_ ids: Set<String>) -> Selection {
+            ids.count > 1 ? .cards(ids) : ids.first.map { .card($0) } ?? .none
+        }
+
+        /// The cards that are selected as cards. A group is selected as a group.
+        var cardIDs: Set<String> {
+            switch self {
+            case .card(let id): [id]
+            case .cards(let ids): ids
+            case .none, .link, .group: []
+            }
+        }
     }
 
     /// The card, link or group the person tapped. The details panel shows it.
@@ -62,6 +78,11 @@ final class CanvasModel {
 
     func select(_ new: Selection) {
         if selection != new { selection = new }
+    }
+
+    /// Adds a card to the ones selected, or takes it out, as a tap does while cards are being selected.
+    func toggle(_ id: String) {
+        select(.of(selection.cardIDs.symmetricDifference([id])))
     }
 
     /// Puts an earlier run on show, or the latest with nil.
