@@ -77,8 +77,8 @@ secret of an agent card whose Browser switch is on, and every call acts on that 
 | `scroll` | `direction`, `amount` | Scrolls the page | Yes |
 | `back` | — | Goes back one page | Yes |
 | `wait` | `text`, `seconds` | Waits for text to appear, or for a time | Yes |
-| `click` | `ref` | Clicks a numbered part | No |
-| `type` | `ref`, `text`, `submit` | Types into a numbered part; `submit` presses Return after | No |
+| `click` | `ref`, or `x` and `y` | Clicks a numbered part, or a point from a screenshot | No |
+| `type` | `ref`, `text`, `submit` | Types into a numbered part, or picks from a drop-down list; `submit` presses Return after | No |
 | `press` | `key` | Presses a key | No |
 
 The outline comes from Chrome's accessibility tree (`Accessibility.getFullAXTree`). Each part that can be acted on

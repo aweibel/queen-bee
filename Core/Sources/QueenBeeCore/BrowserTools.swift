@@ -174,7 +174,7 @@ public enum BrowserTools {
             ])),
         ToolDefinition(
             name: "type",
-            description: "Type text into a numbered part from read, such as a text box. It replaces what was there.",
+            description: "Type text into a numbered part from read, such as a text box. It replaces what was there. For a drop-down list, give the text of the choice to pick.",
             inputSchema: schema([
                 "ref": ["type": "integer", "description": "The number of the part, from read."],
                 "text": ["type": "string", "description": "What to type."],

@@ -67,6 +67,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 
   ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
 
+- Turn on **Browser** in an agent's settings to give it a web browser in its card: terminal on the left, the live page on the right. The agent opens and reads pages by itself and asks before it clicks or types, unless its permissions say otherwise. Click into the page to use it yourself, for instance to sign in to a site; agents with a browser in the same project share those sign-ins, and **Clear browser data** in the flow's settings forgets them. It uses Chrome, Chromium, Edge or Brave if one is installed, and offers to download a browser of its own if not.
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
 - An agent's settings can be saved as a **role**, which then sits under Agent in the palette for any flow.
@@ -90,13 +91,14 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 
 - `Core/` is a Swift package with no UI: the flow model, the file store, the routing engine, the orchestrator's tools and the socket messages. `cd Core && swift test` runs its tests.
 - `App/` is the SwiftUI and AppKit app. The canvas is an `NSScrollView` with magnification, and each terminal is a SwiftTerm view inside a card. `App/Design/Tokens.swift` holds every colour, type size, spacing step and timing the views use.
+- `App/Browser/` runs a hidden Chromium for agent cards that have a browser, one per project, and controls it over a private pipe with the Chrome DevTools Protocol. Each card has a tab: the page is streamed into the card as pictures, and the agent's tools are served by `qb browser-mcp`.
 - `Helper/` builds `qb`, a small binary inside the app bundle. Claude Code hooks, the plugin and the orchestrator's tool server all run it, and it talks to the app over a unix socket in `~/Library/Application Support/QueenBee/`.
 - `Plugin/qb-link/` is the plugin the app loads into every session. When an agent's turn ends it asks the app where the reply goes and sends it there as a Claude Code session message.
 
 ## Tests
 
 ```sh
-cd Core && swift test        # 190 unit tests on the model, store, engine, link router, snapping, layout, triggers and tools
+cd Core && swift test        # 223 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 

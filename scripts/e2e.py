@@ -8,7 +8,7 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/build.sh && ./scripts/e2e.py            # every scenario
     ./scripts/e2e.py guard loop                        # some of them
 
-Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, deep, browser, noclaude.
+Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, deep, browser, nobrowser, noclaude.
 """
 import atexit
 import base64
@@ -1047,6 +1047,23 @@ def scenario_browser(app):
           cleared["hasData"] is False and not after["isError"] and "about:blank" in after["text"], str(cleared) + after["text"][:200])
 
 
+def scenario_nobrowser(project):
+    print("nobrowser: a card says so when there is no browser on the Mac for it to use", flush=True)
+    support = SUPPORT + "-nb"
+    app = App(project, support=support, env={"QB_NO_INSTALLED_BROWSER": "1"})
+    try:
+        fid = BROWSER["id"]
+        app.open_flow(BROWSER)
+        refused = app.op(fid, "browserTool", card="Surfer", name="open", arguments={"url": "https://example.com"})
+        check("the agent is told there is no browser yet", refused["isError"] and "download" in refused["text"], refused["text"][:200])
+        s = app.state(fid)["sessions"]["Surfer"]["browser"]
+        check("the card shows that a browser is missing, and nothing was downloaded unasked",
+              "missing" in s["host"] and not os.path.exists(os.path.join(support, "browser-app")), str(s))
+        app.op(fid, "close")
+    finally:
+        app.quit()
+
+
 def scenario_noclaude(project):
     print("noclaude: the app says so when Claude Code isn't installed", flush=True)
     empty = tempfile.mkdtemp(prefix="qb-nohome-")
@@ -1067,7 +1084,7 @@ def scenario_noclaude(project):
 
 
 def main():
-    wanted = sys.argv[1:] or ["guard", "settings", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "deep", "browser", "noclaude"]
+    wanted = sys.argv[1:] or ["guard", "settings", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "deep", "browser", "nobrowser", "noclaude"]
     if not os.path.exists(APP):
         sys.exit("Build the app first: ./scripts/build.sh")
     sweep()
@@ -1078,7 +1095,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w != "noclaude"]
+    in_app = [w for w in wanted if w not in ("noclaude", "nobrowser")]
     if in_app:
         app = App(project)
         try:
@@ -1098,6 +1115,11 @@ def main():
                     app.op(flow_id, "close")
         finally:
             app.quit()
+    if "nobrowser" in wanted:
+        try:
+            scenario_nobrowser(project)
+        except Exception as e:
+            check("nobrowser ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)

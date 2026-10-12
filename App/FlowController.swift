@@ -970,8 +970,9 @@ final class FlowController: ToolHost {
 
     // MARK: Browsers
 
-    /// The cards of this flow that have been given a tab in the project's browser.
-    private var browserCards: Set<String> = []
+    /// The cards of this flow that have been given a tab in the project's browser. The canvas asks for tabs
+    /// while it draws, so this is kept out of what it watches: noting a tab here must not make it draw again.
+    @ObservationIgnored private var browserCards: Set<String> = []
 
     /// The browser tab of an agent card whose Browser switch is on, or nil for any other card.
     func browserTab(forCard id: String) -> BrowserTab? {

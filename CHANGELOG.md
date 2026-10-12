@@ -6,6 +6,13 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An agent card can have a web browser in it. Turn on **Browser** in the card's settings and the card doubles in width: the terminal on the left, a live page on the right. The agent gets tools to open an address, read the page, take a screenshot, scroll, go back, wait, click, type and press a key. You can click, scroll and type in the page yourself, for instance to sign in. The orchestrator can turn the switch on when it builds a flow.
+- The browser is a Chromium-based browser already on the Mac (Chrome, Chromium, Edge or Brave), run hidden. With none installed, the card offers to download Chrome for Testing, about 150 MB, for Queen Bee's own use.
+- Every agent with a browser in a project shares one set of sign-ins, kept apart from your own browser. **Clear browser data** in a flow's settings forgets them.
+- `./scripts/e2e.py browser nobrowser` checks the browser against a small site served on the Mac, with a real agent.
+
 ### Changed
 
 - The README's screenshots are retaken at twice the size, on a fuller flow with a sub-flow, a script check and an approval, and there is a new one of a run waiting at an Approval card.
