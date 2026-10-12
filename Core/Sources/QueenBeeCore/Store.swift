@@ -19,7 +19,8 @@ public struct FlowStore: Sendable {
     public var directory: URL { home.appendingPathComponent("flows", isDirectory: true) }
 
     /// Every flow in the project, sorted by file name. A file that doesn't parse, comes from another version,
-    /// or repeats the id of a flow already loaded is listed as unreadable instead.
+    /// has an id the app could not have made (`Flow.hasSafeIDs`), or repeats the id of a flow already loaded
+    /// is listed as unreadable instead.
     public func loadAll() -> (flows: [FlowFile], unreadable: [URL]) {
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
             .filter { $0.hasSuffix(".json") && !$0.hasPrefix(".") }
@@ -91,7 +92,7 @@ public struct FlowStore: Sendable {
     private static func read(_ url: URL) -> Flow? {
         guard let data = try? Data(contentsOf: url),
               let flow = try? JSONDecoder().decode(Flow.self, from: data),
-              flow.version == Flow.currentVersion else { return nil }
+              flow.version == Flow.currentVersion, flow.hasSafeIDs else { return nil }
         return flow
     }
 

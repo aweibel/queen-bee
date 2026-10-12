@@ -124,6 +124,30 @@ import Testing
         #expect(try JSONDecoder().decode(Flow.self, from: Data(contentsOf: broken)) == review)
     }
 
+    @Test func aFlowWhoseIDsCouldPassForAnotherSessionIsNotLoaded() throws {
+        let project = try Project()
+        let store = FlowStore(root: project.root)
+        try store.save(Flow(id: "aaaa1111", name: "Good"), to: nil)
+
+        // A session is known to the app as "<flow id>/<card id>", and the orchestrator's is
+        // "<flow id>/orchestrator". A file can't be allowed to name a card into either.
+        func write(_ name: String, flowID: String, cardID: String) throws {
+            let card = Card(id: cardID, kind: .agent, name: "Agent", x: 0, y: 0, width: 240, height: 96)
+            let flow = Flow(id: flowID, name: name, cards: [card])
+            try JSONEncoder().encode(flow).write(to: store.directory.appendingPathComponent(name + ".json"))
+        }
+        try write("named-orchestrator", flowID: "bbbb2222", cardID: "orchestrator")
+        try write("slash-in-card", flowID: "cccc3333", cardID: "x/orchestrator")
+        try write("slash-in-flow", flowID: "dddd/4444", cardID: "eeee5555")
+        try write("no-card-id", flowID: "ffff6666", cardID: "")
+        try write("plain", flowID: "abcd7777", cardID: "writer1234")
+
+        let loaded = store.loadAll()
+        #expect(loaded.flows.map(\.flow.name) == ["Good", "plain"])
+        #expect(loaded.unreadable.map(\.lastPathComponent)
+                == ["named-orchestrator.json", "no-card-id.json", "slash-in-card.json", "slash-in-flow.json"])
+    }
+
     @Test func deleteRemovesTheFile() throws {
         let project = try Project()
         let store = FlowStore(root: project.root)
