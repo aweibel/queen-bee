@@ -1313,6 +1313,7 @@ final class FlowController: ToolHost {
         if hold.kind == .script {
             pending.command = card.command ?? ""
             pending.needsAllow = !ScriptRunner.isAllowed(pending.command, scope: allowScope, cardID: card.id)
+            if pending.needsAllow, isFromDevice(pending.command, cardID: card.id) { pending.allowOnMac = true }
         }
         if hold.kind == .flow {
             let inner = innerFlow(of: card)
@@ -1548,9 +1549,17 @@ final class FlowController: ToolHost {
     }
 
     /// The person read a script's command and let it run. It is remembered for this card.
+    ///
+    /// This is the Mac's own Allow. A paired device's goes through `allowScript(_:fromDevice:)`, which
+    /// never gets this far for a command a device wrote.
     func allowScript(_ id: String) {
         guard let index = holds.firstIndex(where: { $0.id == id }), holds[index].kind == .script, holds[index].needsAllow else { return }
         ScriptRunner.allow(holds[index].command, scope: allowScope, cardID: holds[index].cardID)
+        // Allowed at this Mac, so the command is the person's own from here on.
+        if isFromDevice(holds[index].command, cardID: holds[index].cardID) {
+            ConsentStore.scriptsFromDevices.grant(nil, scope: allowScope, cardID: holds[index].cardID)
+        }
+        holds[index].allowOnMac = nil
         holds[index].needsAllow = false
         runScript(holds[index])
     }
@@ -1565,7 +1574,30 @@ final class FlowController: ToolHost {
         var patch = CardPatch()
         patch.command = command
         update(id, patch)
-        if flow.card(id)?.command == command { ScriptRunner.allow(command, scope: allowScope, cardID: id) }
+        if flow.card(id)?.command == command {
+            ScriptRunner.allow(command, scope: allowScope, cardID: id)
+            // Typed here, so it is no longer a command a device wrote.
+            ConsentStore.scriptsFromDevices.grant(nil, scope: allowScope, cardID: id)
+        }
+    }
+
+    /// Whether this is the command a paired device last wrote into that Script card, or brought back to it.
+    func isFromDevice(_ command: String, cardID: String) -> Bool {
+        ConsentStore.scriptsFromDevices.isGranted(command, scope: allowScope, cardID: cardID)
+    }
+
+    /// A paired device's Allow. A command that came in a flow file, or that the orchestrator or the person
+    /// at this Mac put there, can be allowed from a device the person has let control this Mac. A command a
+    /// device wrote can't: the device would be agreeing to its own change, with nobody at the Mac having
+    /// read it. Returns nil when the command was allowed, or why not, in words the device shows.
+    func allowScript(_ id: String, fromDevice device: String) -> String? {
+        guard let hold = holds.first(where: { $0.id == id }), hold.kind == .script else { return "That is no longer waiting for an answer." }
+        guard hold.needsAllow else { return "That command has already been allowed." }
+        // Asked of what is kept now, not of what the hold said when it was made.
+        guard hold.allowOnMac != true, !isFromDevice(hold.command, cardID: hold.cardID) else { return Remote.allowOnMacRefusal }
+        append("\(device) allowed \(flow.card(hold.cardID).map { Remote.oneLine($0.name) } ?? "a card")'s command")
+        allowScript(id)
+        return nil
     }
 
     /// Adds what an event did to the per-card tallies. The links an event travelled stay live
@@ -1793,6 +1825,8 @@ final class FlowController: ToolHost {
     private func forgetAllowedScripts(changedFrom old: Flow) {
         for card in flow.cards where card.kind == .script && old.card(card.id)?.command != card.command {
             ConsentStore.scripts.grant(nil, scope: allowScope, cardID: card.id)
+            // And it is remembered as a device's, so that no device can then allow it: see `allowScript(_:fromDevice:)`.
+            ConsentStore.scriptsFromDevices.grant(card.command ?? "", scope: allowScope, cardID: card.id)
         }
     }
 

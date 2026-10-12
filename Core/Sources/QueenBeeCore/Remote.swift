@@ -48,6 +48,10 @@ public enum Remote {
     /// What the Mac answers a command from a device that may only watch.
     public static let watchOnlyRefusal = "This device can only watch. To let it control this Mac, turn on “Can control” for it in Settings on your Mac."
 
+    /// What the Mac answers a device that tries to allow a Script card's command that a device wrote. The
+    /// device shows the same words in place of its Allow button.
+    public static let allowOnMacRefusal = "This command was changed from a device. Allow it on your Mac."
+
     /// A name a device gave itself, made safe to put in a line of the Mac's log: on one line, with nothing
     /// in it that a terminal or a text view would act on.
     public static func oneLine(_ name: String) -> String {

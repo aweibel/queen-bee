@@ -312,7 +312,8 @@ while true {
              "nextFires": state.nextFires.count])
     case .run(let id, let state):
         say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue),
-             "holds": state.holds.map { ["id": $0.id, "card": $0.cardID, "kind": $0.kind.rawValue, "needsAllow": $0.needsAllow] as [String: Any] }])
+             "holds": state.holds.map { ["id": $0.id, "card": $0.cardID, "kind": $0.kind.rawValue, "needsAllow": $0.needsAllow,
+                                          "allowOnMac": $0.allowOnMac == true] as [String: Any] }])
     case .log(_, let lines, let reset):
         say(["type": "log", "lines": lines.count, "reset": reset])
     case .messages(_, let link, let all):

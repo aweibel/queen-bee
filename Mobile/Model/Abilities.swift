@@ -142,8 +142,10 @@ nonisolated struct Abilities: Equatable {
                 cards[card.id] = hold.kind == .approval
                     ? [button("Reject", .reject(holdID: hold.id), hint: "Asks why, then sends the message on along the Rejected link."),
                        button("Approve", .approve(holdID: hold.id, text: hold.text), main: true, hint: "Sends the message on along the Approved link.")]
-                    : [button("Don't run", .dontRun(holdID: hold.id), hint: "Skips the command without running it."),
-                       button("Allow and run", .allow(holdID: hold.id), main: true, hint: "Shows the command in full, then lets it run on your Mac.")]
+                    // A command a device wrote is allowed at the Mac and nowhere else: its details say so where the button was.
+                    : [button("Don't run", .dontRun(holdID: hold.id), hint: "Skips the command without running it.")]
+                        + (hold.canBeAllowedFromDevice
+                            ? [button("Allow and run", .allow(holdID: hold.id), main: true, hint: "Shows the command in full, then lets it run on your Mac.")] : [])
                 details[card.id] = cards[card.id]
             } else if card.kind == .agent {
                 let state = run.sessions[card.id] ?? .notStarted

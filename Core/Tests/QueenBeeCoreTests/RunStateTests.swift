@@ -31,6 +31,23 @@ import Testing
         #expect(try JSONDecoder().decode(PendingHold.self, from: JSONEncoder().encode(hold)) == hold)
     }
 
+    @Test func aCommandADeviceWroteIsAllowedAtTheMacOnly() throws {
+        let fromFile = PendingHold(id: "h", cardID: "c", kind: .script, text: "msg", from: "Start", command: "ls", needsAllow: true)
+        var fromDevice = fromFile
+        fromDevice.allowOnMac = true
+        #expect(fromFile.canBeAllowedFromDevice)
+        #expect(!fromDevice.canBeAllowedFromDevice)
+        #expect(try JSONDecoder().decode(PendingHold.self, from: JSONEncoder().encode(fromDevice)) == fromDevice)
+        // A hold as an older Mac sends it, with nothing said about where the command came from.
+        let older = Data(#"{"id":"h","cardID":"c","kind":"script","text":"msg","from":"Start","command":"ls","needsAllow":true}"#.utf8)
+        #expect(try JSONDecoder().decode(PendingHold.self, from: older) == fromFile)
+        // And nothing is added to a hold that has nothing to say about it.
+        #expect(!String(decoding: try JSONEncoder().encode(fromFile), as: UTF8.self).contains("allowOnMac"))
+        // An approval, or a command already allowed, is not a command to allow.
+        #expect(!PendingHold(id: "h", cardID: "c", kind: .approval, text: "ok?", from: "A").canBeAllowedFromDevice)
+        #expect(!PendingHold(id: "h", cardID: "c", kind: .script, text: "m", from: "A", command: "ls").canBeAllowedFromDevice)
+    }
+
     @Test func sessionStatesKeepTheirNames() {
         #expect(SessionState(rawValue: "needsYou") == .needsYou)
         #expect(SessionState.needsYou.label == "Needs you")

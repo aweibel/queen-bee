@@ -46,10 +46,18 @@ public struct PendingHold: Identifiable, Equatable, Sendable, Codable {
     public var command: String
     /// A script whose command the person hasn't allowed yet.
     public var needsAllow: Bool
+    /// True for a script whose command was last written, or brought back, from a paired device. Such a
+    /// command is allowed at the Mac and nowhere else: no device may answer for the person there. Left out
+    /// when it isn't so, so a hold reads the same to a device that knows nothing of this.
+    public var allowOnMac: Bool?
 
-    public init(id: String, cardID: String, kind: CardKind, text: String, from: String, command: String = "", needsAllow: Bool = false) {
+    /// Whether a paired device may allow this script's command.
+    public var canBeAllowedFromDevice: Bool { kind == .script && needsAllow && allowOnMac != true }
+
+    public init(id: String, cardID: String, kind: CardKind, text: String, from: String, command: String = "", needsAllow: Bool = false,
+                allowOnMac: Bool? = nil) {
         self.id = id; self.cardID = cardID; self.kind = kind; self.text = text; self.from = from
-        self.command = command; self.needsAllow = needsAllow
+        self.command = command; self.needsAllow = needsAllow; self.allowOnMac = allowOnMac
     }
 }
 

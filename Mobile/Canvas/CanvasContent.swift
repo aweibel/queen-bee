@@ -132,6 +132,7 @@ nonisolated struct CanvasContent: Equatable {
                 context.isLive = true
                 context.waiting = hold.kind == .approval ? "Waiting for you to approve"
                     : hold.kind == .flow ? "Running \(hold.command)…"
+                    : hold.allowOnMac == true && hold.needsAllow ? "Waiting for you to allow its command on your Mac"
                     : hold.needsAllow ? "Waiting for you to let its command run" : "Running its command…"
             }
             context.mark = marks[card.id] ?? RunMark()

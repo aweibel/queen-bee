@@ -23,6 +23,7 @@ the same way. No finger touches the screen: each gesture is made through what it
 """
 import atexit
 import glob
+import hashlib
 import json
 import math
 import os
@@ -660,6 +661,68 @@ def remote_edits(app, device, send, ask, done, refused, since):
           and "Doors" in app.state(guard)["flows"], str(device.seen[-1:]))
     ask("stop")
     app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+
+    # A device can't allow a command a device wrote: somebody at the Mac has to. The command leaves a file
+    # behind, so whether it ran is seen from here and not taken from what the app says.
+    proof = os.path.join(app.project, f"device-ran-{os.getpid()}.txt")
+    written = f"touch device-ran-{os.getpid()}.txt; tr a-z A-Z"
+    ask("patchCard", card=shout, patch={"command": written})
+    saved_flow(app, doors, lambda f: by_id(f, shout)["command"] == written)
+    # A device is told of the holds of the flow it has open.
+    device.tell(f"open {doors}")
+    device.until(lambda m: m["type"] == "opened" and m["name"] == "Doors")
+    mark = len(device.seen)
+    check("it can run a flow whose Script card it wrote the command of", done(ask("run")), str(device.seen[-2:]))
+    told_hold = since(mark, lambda m: m["type"] == "run" and m["flow"] == doors and m["holds"] and m["holds"][0]["kind"] == "script")
+    h = held(app, doors, "Shout")
+    check("and the run stops there, and the device is told the command is one to allow on the Mac",
+          h[0]["needsAllow"] and h[0]["allowOnMac"] and told_hold is not None and told_hold["holds"][0]["allowOnMac"], f"{h} {told_hold}")
+    log_before = app.state(doors)["log"]
+    check("the device's own Allow is refused in plain words",
+          refused(ask("allowScript", hold=told_hold["holds"][0]["id"]), "This command was changed from a device. Allow it on your Mac."), str(device.seen[-1:]))
+    time.sleep(2)
+    s = app.state(doors)
+    check("and the command has not run, is still waiting, and the log does not say it was allowed",
+          not os.path.exists(proof) and s["holds"] and s["holds"][0]["needsAllow"] and s["holds"][0]["card"] == "Shout"
+          and not any("allowed Shout" in line for line in s["log"][len(log_before):]), f"{os.path.exists(proof)} {s['holds']} {s['log'][-3:]}")
+    kept = subprocess.run(["defaults", "read", "dev.queenbee.app.debug", "scriptsFromDevices"], capture_output=True, text=True).stdout
+    check("and that a device wrote it is kept in the app's own settings, where it outlasts the app being quit, and not in the flow file",
+          hashlib.sha256(written.encode()).hexdigest() in kept and "allowOnMac" not in json.dumps(saved_flow(app, doors)) and "fromDevice" not in json.dumps(saved_flow(app, doors)),
+          kept[-300:])
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    mark = len(device.seen)
+    again = done(ask("run"))
+    told_hold = since(mark, lambda m: m["type"] == "run" and m["flow"] == doors and m["holds"] and m["holds"][0]["kind"] == "script")
+    check("stopping and running again changes nothing: it is asked about again, and is still not the device's to allow",
+          again and told_hold is not None and held(app, doors, "Shout")[0]["allowOnMac"]
+          and refused(ask("allowScript", hold=told_hold["holds"][0]["id"]), "Allow it on your Mac") and not os.path.exists(proof), str(device.seen[-2:]))
+    app.op(doors, "hold", card="Shout", answer="allow")
+    h = held(app, doors, "Check it")
+    check("allowing it on the Mac runs it", os.path.exists(proof) and h[0]["text"] == "HELLO FROM AFAR", f"{os.path.exists(proof)} {h}")
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    if os.path.exists(proof):
+        os.remove(proof)
+    check("and once allowed on the Mac it runs without asking, as any allowed command does", done(ask("run"))
+          and not held(app, doors, "Check it")[0]["needsAllow"] and os.path.exists(proof), str(app.state(doors)["holds"]))
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    # A command the person put there at the Mac without typing it, as pasting a card does, still waits to be
+    # allowed, and a device the person lets control the Mac may still allow that, as before.
+    app.op(doors, "edit", card="Shout", command="tr a-z A-Z | cat")
+    mark = len(device.seen)
+    ask("run")
+    told_hold = since(mark, lambda m: m["type"] == "run" and m["flow"] == doors and m["holds"] and m["holds"][0]["kind"] == "script")
+    check("a command the person put there on the Mac and has not allowed can still be allowed from a device",
+          told_hold is not None and told_hold["holds"][0]["needsAllow"] and not told_hold["holds"][0]["allowOnMac"]
+          and done(ask("allowScript", hold=told_hold["holds"][0]["id"])) and held(app, doors, "Check it")[0]["text"] == "HELLO FROM AFAR", f"{told_hold} {device.seen[-1:]}")
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    if os.path.exists(proof):
+        os.remove(proof)
+    device.tell(f"open {edits}")
+    device.until(lambda m: m["type"] == "opened" and m["name"] == "Edits")
 
     # Flows.
     library = next(m for m in reversed(device.seen) if m["type"] == "library")

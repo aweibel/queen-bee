@@ -127,6 +127,9 @@ enum TestHarness {
             patch.instructions = payload["instructions"]?.stringValue
             patch.model = payload["model"]?.stringValue
             patch.effort = payload["effort"]?.stringValue
+            // A command put in this way is the person's and not typed: what pasting a card or reverting one does. It still has to be allowed.
+            patch.command = payload["command"]?.stringValue
+            patch.template = payload["template"]?.stringValue
             controller.update(cardID, patch)
             return [:]
         case "revert":
@@ -311,7 +314,7 @@ enum TestHarness {
             "runs": .array(controller.runs.map { ["id": .string($0.id), "outcome": .string($0.outcome.rawValue), "command": .string($0.command)] }),
             "viewedRun": controller.viewedRunID.map(JSONValue.string) ?? .null,
             "messages": .number(Double(controller.messages.values.reduce(0) { $0 + $1.count })),
-            "holds": .array(controller.holds.map { ["card": .string(controller.flow.card($0.cardID)?.name ?? ""), "text": .string($0.text), "needsAllow": .bool($0.needsAllow)] }),
+            "holds": .array(controller.holds.map { ["card": .string(controller.flow.card($0.cardID)?.name ?? ""), "text": .string($0.text), "needsAllow": .bool($0.needsAllow), "allowOnMac": .bool($0.allowOnMac == true)] }),
             "selected": .array(controller.flow.cards.filter { controller.selection.cardIDs.contains($0.id) }.map { .string($0.name) }),
             "undo": .string(controller.undoManager.canUndo ? controller.undoManager.undoActionName : ""),
             "isRunning": .bool(controller.isRunning),

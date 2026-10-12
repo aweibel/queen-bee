@@ -91,11 +91,8 @@ enum RemoteCommands {
             return nil
 
         case .allowScript(_, let holdID):
-            guard let hold = controller.holds.first(where: { $0.id == holdID }), hold.kind == .script else { return holdGone }
-            guard hold.needsAllow else { return "That command has already been allowed." }
-            controller.noteFromDevice("\(name) allowed \(called(hold.cardID))'s command")
-            controller.allowScript(holdID)
-            return nil
+            // A command a device wrote is allowed at the Mac and nowhere else, whichever device asks.
+            return controller.allowScript(holdID, fromDevice: name)
 
         case .refuseScript(_, let holdID):
             guard let hold = controller.holds.first(where: { $0.id == holdID }), hold.kind == .script else { return holdGone }

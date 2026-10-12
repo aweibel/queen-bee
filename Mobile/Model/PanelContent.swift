@@ -79,7 +79,8 @@ nonisolated struct WaitingCard: Equatable, Identifiable {
         return snapshot.flow.cards.compactMap { card in
             if let hold = held.first(where: { $0.cardID == card.id }) {
                 return WaitingCard(id: card.id, name: card.name, kind: card.kind,
-                                   reason: hold.kind == .approval ? "Waiting for you to approve" : "Waiting for you to let its command run")
+                                   reason: hold.kind == .approval ? "Waiting for you to approve"
+                                       : hold.allowOnMac == true ? "Waiting for you to allow its command on your Mac" : "Waiting for you to let its command run")
             }
             if card.kind == .agent, run.sessions[card.id] == .needsYou {
                 return WaitingCard(id: card.id, name: card.name, kind: card.kind, reason: "Waiting for you in its terminal")
@@ -229,8 +230,10 @@ nonisolated struct Details: Equatable {
             add(.note, "Runs this command in the project's folder, as if you had typed it in Terminal. If the command succeeds, the run carries on from Pass. If it fails, from Fail. Whatever the command prints is what gets passed on.")
             if let hold {
                 if hold.needsAllow {
-                    items.append(DetailItem(style: .waiting, label: "You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it.",
-                                            value: hold.command, isCode: true))
+                    // In place of the Allow button, for a command a device wrote: the Mac's own words for refusing it.
+                    let label = hold.allowOnMac == true ? Remote.allowOnMacRefusal
+                        : "You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it."
+                    items.append(DetailItem(style: .waiting, label: label, value: hold.command, isCode: true))
                     answerLine = true
                 } else {
                     add(.waiting, "Running its command…")
