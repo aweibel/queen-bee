@@ -3,6 +3,35 @@
     <channel>
         <title>QueenBee</title>
         <item>
+            <title>0.3.4</title>
+            <pubDate>Mon, 12 Oct 2026 15:11:45 +0400</pubDate>
+            <link>https://github.com/bamboozledkitty/queen-bee</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.3.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[
+These come from an outside security review of 0.3.3.
+
+### Security
+
+- A run can no longer get past an Approval card that hasn't been answered. An agent further along that finished a turn of its own, or a late reply from a run that was stopped, used to be passed on as if the run had reached it. Now only a reply to a message the run handed that agent goes on, once for each message. Anything else is left where it is and the log says so.
+- A flow file can't name a card into the orchestrator's place. A file with a card called `orchestrator`, or a slash in an id, is not loaded and is listed as a file the app can't read. Such a card's session used to be given the flow-editing tools.
+- A message the app types into an agent's terminal has its escape sequences and control characters removed first. Text written by one agent could otherwise end the paste early and press keys in another agent's session.
+- The terminal installer checks that the app is signed with the project's Developer ID certificate, up to Apple's root. It used to compare the team name the signature printed, which a signature made with another kind of certificate could also carry.
+
+### Added
+
+- `THIRD-PARTY-NOTICES.md` holds the licenses of SwiftTerm, Sparkle and swift-subprocess, and ships inside the app.
+
+### Changed
+
+- `SECURITY.md` says which orchestrator edits leave a schedule on, that the linked-agents rule lets a message through when the app can't be reached, and that two open copies of one project cross-wire.
+- The plugin and the orchestrator's tool server report the app's version again. They had stayed at 0.3.2.
+
+]]></description>
+            <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.3.4/QueenBee-0.3.4.dmg" length="11167774" type="application/octet-stream" sparkle:edSignature="jJZvg1iu5NSyIIYf/n9iID1Y63nDEMMu3KxpfOZ5Py38+llBXg8n1dJqZVdtUnFm1Vt9Z8uag611n84Jw9ynAQ=="/>
+        </item>
+        <item>
             <title>0.3.3</title>
             <pubDate>Sun, 11 Oct 2026 02:09:32 +0400</pubDate>
             <link>https://github.com/bamboozledkitty/queen-bee</link>
@@ -45,22 +74,6 @@
 
 ]]></description>
             <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.3.2/QueenBee-0.3.2.dmg" length="11120265" type="application/octet-stream" sparkle:edSignature="JihHU4C9WGqxlk2shkN0QSB6HtUCAzhKN3jV+KNStJb0IbKnluAepaoCPWIOk0jLWr9QII126q0+0fQeTgF1Bg=="/>
-        </item>
-        <item>
-            <title>0.3.1</title>
-            <pubDate>Sat, 10 Oct 2026 20:43:32 +0400</pubDate>
-            <link>https://github.com/bamboozledkitty/queen-bee</link>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[
-### Fixed
-
-- The 0.3.0 download contained the 0.2.0 app under a 0.3.0 label, so none of 0.3.0's features were in it and it could not read flows that use the new cards. This release is the real one. Everything listed under 0.3.0 arrives with it.
-- The release script now stops when the build fails, and checks that the app it packages is the one it just built.
-
-]]></description>
-            <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.3.1/QueenBee-0.3.1.dmg" length="11110018" type="application/octet-stream" sparkle:edSignature="oTPWxmIjugFBlhuFut6UrXs6XYMM5Sbonj8P2jRmR2juRve2++B+MFJrwAGmfURcB3jubjgDkjbv6i5VLyNzCQ=="/>
         </item>
     </channel>
 </rss>

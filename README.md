@@ -262,4 +262,4 @@ The script's header lists the certificate, notarization profile and update key i
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The licenses of the packages the app is built with are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and a copy ships inside the app.

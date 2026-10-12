@@ -67,6 +67,13 @@ actor ScriptedJudge: Judge {
         }
     }
 
+    /// A fresh run of `flow`, for a test that has the same agent answer more than once: an agent
+    /// is owed one reply for each message it was handed, so a second answer needs a second run.
+    private func restart(_ engine: Engine, _ flow: Flow) async {
+        _ = await engine.stop()
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+    }
+
     /// Start → Writer → `logic` card, so tests only add what comes after it.
     private func writerInto(_ kind: CardKind, name: String, _ settings: CardPatch = CardPatch(),
                             then build: (inout Flow) throws -> Void) throws -> Flow {
@@ -252,6 +259,7 @@ actor ScriptedJudge: Judge {
         #expect(yes.deliveries.first?.fromName == "Writer")
         #expect(yes.log == ["If \"Approved?\" → Yes", "Writer → Publisher"])
 
+        await restart(engine, flow)
         let no = await engine.agentReplied(flow: flow, cardID: try id("Writer", in: flow), text: "Needs work")
         #expect(no.deliveries.map(\.toCardID) == [try id("Fixer", in: flow)])
         #expect(no.log == ["If \"Approved?\" → No", "Writer → Fixer"])
@@ -270,6 +278,7 @@ actor ScriptedJudge: Judge {
         _ = await engine.start(flow: flow, startCardID: nil, command: nil)
         let yes = await engine.agentReplied(flow: flow, cardID: try id("Writer", in: flow), text: "Old pond")
         #expect(yes.deliveries.map(\.toCardID) == [try id("Publisher", in: flow)])
+        await restart(engine, flow)
         let no = await engine.agentReplied(flow: flow, cardID: try id("Writer", in: flow), text: "A sonnet")
         #expect(no.deliveries.map(\.toCardID) == [try id("Fixer", in: flow)])
         let asked = await judge.statements
@@ -312,11 +321,14 @@ actor ScriptedJudge: Judge {
         let feature = await engine.agentReplied(flow: flow, cardID: writer, text: "Add dark mode")
         #expect(feature.deliveries.map(\.toCardID) == [try id("Builder", in: flow)])
         #expect(feature.log.first == "Switch \"Triage\" → feature")
+        await restart(engine, flow)
         let bug = await engine.agentReplied(flow: flow, cardID: writer, text: "It crashes")
         #expect(bug.deliveries.map(\.toCardID) == [try id("Fixer", in: flow)])
+        await restart(engine, flow)
         let unknown = await engine.agentReplied(flow: flow, cardID: writer, text: "A haiku")
         #expect(unknown.deliveries.map(\.toCardID) == [try id("Helper", in: flow)])
         #expect(unknown.log.first == "Switch \"Triage\" → Other")
+        await restart(engine, flow)
         let failed = await engine.agentReplied(flow: flow, cardID: writer, text: "???")
         #expect(failed.deliveries.map(\.toCardID) == [try id("Helper", in: flow)])
 
@@ -693,6 +705,57 @@ actor ScriptedJudge: Judge {
             CardVisit(cardID: check.id, viaLinkID: toCheck.id, port: "yes"),
             CardVisit(cardID: end.id, viaLinkID: toEnd.id, port: nil),
         ])
+    }
+
+    @Test func aSecondReplyToOneHandOffIsNotPassedOn() async throws {
+        var flow = try chain()
+        try flow.addCard(kind: .agent, name: "Editor")
+        try flow.addLink(from: "Reviewer", to: "Editor")
+        let writer = try id("Writer", in: flow), reviewer = try id("Reviewer", in: flow)
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        let first = await engine.agentReplied(flow: flow, cardID: writer, text: "A haiku")
+        #expect(first.deliveries.map(\.toCardID) == [reviewer])
+
+        // The Writer was handed one message and has answered it. Another turn of its own goes nowhere.
+        let second = await engine.agentReplied(flow: flow, cardID: writer, text: "Another haiku")
+        #expect(second.deliveries.isEmpty && second.visits.isEmpty && !second.finished)
+        #expect(second.log.first?.hasPrefix("Writer finished a turn, but nothing in this run was waiting on it") == true)
+    }
+
+    @Test func anAgentHandedTwoMessagesMayAnswerBoth() async throws {
+        // Start → A and B, both → C → D.
+        let flow = try flow {
+            try $0.addCard(kind: .start, name: "Start", patch: patch { $0.command = "Go" })
+            for name in ["A", "B", "C", "D"] { try $0.addCard(kind: .agent, name: name) }
+            try $0.addLink(from: "Start", to: "A")
+            try $0.addLink(from: "Start", to: "B")
+            try $0.addLink(from: "A", to: "C")
+            try $0.addLink(from: "B", to: "C")
+            try $0.addLink(from: "C", to: "D")
+        }
+        let c = try id("C", in: flow), d = try id("D", in: flow)
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        _ = await engine.agentReplied(flow: flow, cardID: try id("A", in: flow), text: "from A")
+        _ = await engine.agentReplied(flow: flow, cardID: try id("B", in: flow), text: "from B")
+
+        let one = await engine.agentReplied(flow: flow, cardID: c, text: "about A")
+        let two = await engine.agentReplied(flow: flow, cardID: c, text: "about B")
+        #expect(one.deliveries.map(\.toCardID) == [d] && two.deliveries.map(\.toCardID) == [d])
+        // Both hand-offs are answered now, so a third turn is one nobody asked for.
+        let three = await engine.agentReplied(flow: flow, cardID: c, text: "one more thing")
+        #expect(three.deliveries.isEmpty)
+    }
+
+    @Test func anAgentThatAskedAQuestionStillOwesItsReply() async throws {
+        let flow = try chain()
+        let writer = try id("Writer", in: flow)
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        _ = await engine.agentReplied(flow: flow, cardID: writer, text: "Which season?", waitingOnAnswer: true)
+        let reply = await engine.agentReplied(flow: flow, cardID: writer, text: "A haiku")
+        #expect(reply.deliveries.map(\.toCardID) == [try id("Reviewer", in: flow)])
     }
 
     @Test func aReplyThatPassesNothingOnLeavesNoVisit() async {

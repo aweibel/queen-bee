@@ -86,11 +86,15 @@ Bugs:
   (`App/Sessions/TerminalSession.swift`, `flushSoon`).
 - **A Loop set above 3 tries stops early.** Links default to 3 passes, so the run ends at the link's limit before
   the Loop card gives up (`Core/Sources/QueenBeeCore/Engine.swift`, `send`).
-- **A reply from a stopped run can leak into the next run.** Replies carry no run identity.
+- **A reply from a stopped run can leak into the next run**, once the same agent has been handed a message
+  there. Replies carry no run identity. The engine only checks that the agent is owed a reply
+  (`Core/Sources/QueenBeeCore/Engine.swift`, `agentReplied`).
 - **Stop Its Agents also stops the flow's schedule** until the flow is opened again.
 - **Schedules stay on through some orchestrator edits:** changes inside a sub-flow, a Prompt card added after
   Start, or Start linked to a different agent.
-- **Two project folders holding the same flow id cross-wire**, as a copied project does.
+- **Two project folders holding the same flow id cross-wire**, as a copied project does. The app keeps one
+  list of open flows by id, and a session's secret names only the flow id and card id
+  (`App/AppServices.swift`, `register` and `credential`).
 - **Deleting a sub-flow leaves its Flow card pointing at nothing**, with no warning.
 - **Sessions sometimes stay at "starting"** when many start together. The end-to-end `fanout` scenario times out
   on this now and then and passes when run again by itself.
@@ -100,7 +104,6 @@ Security hardening:
 
 - The app's socket trusts a per-session secret. Checking which process is on the other end would make the
   orchestrator's tools unreachable to an agent that can run shell commands.
-- Text typed into a terminal isn't stripped of escape sequences.
 
 Speed. None of this has been measured yet, so the first job is a stress flow and some Instruments recordings:
 

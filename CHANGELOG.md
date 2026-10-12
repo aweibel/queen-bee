@@ -20,6 +20,26 @@ All notable changes to Queen Bee are listed here. The format follows
 - What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
 - Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
 
+## [0.3.4] - 2026-10-12
+
+These come from an outside security review of 0.3.3.
+
+### Security
+
+- A run can no longer get past an Approval card that hasn't been answered. An agent further along that finished a turn of its own, or a late reply from a run that was stopped, used to be passed on as if the run had reached it. Now only a reply to a message the run handed that agent goes on, once for each message. Anything else is left where it is and the log says so.
+- A flow file can't name a card into the orchestrator's place. A file with a card called `orchestrator`, or a slash in an id, is not loaded and is listed as a file the app can't read. Such a card's session used to be given the flow-editing tools.
+- A message the app types into an agent's terminal has its escape sequences and control characters removed first. Text written by one agent could otherwise end the paste early and press keys in another agent's session.
+- The terminal installer checks that the app is signed with the project's Developer ID certificate, up to Apple's root. It used to compare the team name the signature printed, which a signature made with another kind of certificate could also carry.
+
+### Added
+
+- `THIRD-PARTY-NOTICES.md` holds the licenses of SwiftTerm, Sparkle and swift-subprocess, and ships inside the app.
+
+### Changed
+
+- `SECURITY.md` says which orchestrator edits leave a schedule on, that the linked-agents rule lets a message through when the app can't be reached, and that two open copies of one project cross-wire.
+- The plugin and the orchestrator's tool server report the app's version again. They had stayed at 0.3.2.
+
 ## [0.3.3] - 2026-10-11
 
 ### Added
@@ -146,7 +166,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.0...v0.3.1
