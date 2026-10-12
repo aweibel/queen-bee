@@ -135,7 +135,8 @@ final class TerminalSession: NSObject {
             guard self.state == .idle, !self.waiting.isEmpty else { return }
             let text = self.waiting.removeFirst()
             // A bracketed paste keeps a multi-line message as one prompt; Enter follows once the paste has landed.
-            self.view.send(txt: "\u{1b}[200~" + text + "\u{1b}[201~")
+            // The message is cleaned first, so nothing inside it can end the paste and type keys of its own.
+            self.view.send(txt: "\u{1b}[200~" + TerminalText.typed(text) + "\u{1b}[201~")
             self.state = .working
             try? await Task.sleep(for: .milliseconds(350))
             self.view.send(txt: "\r")
