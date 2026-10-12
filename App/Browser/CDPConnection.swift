@@ -18,6 +18,10 @@ final class CDPConnection {
     private var nextID = 0
     private var waiting: [Int: CheckedContinuation<JSONValue, any Error>] = [:]
     private(set) var isOpen = true
+    /// Writes happen here, in order, so a browser that has stopped reading can't freeze the app's window.
+    private let writer = DispatchQueue(label: "dev.queenbee.browser.write")
+    /// Messages handed to `writer` and not yet written.
+    private var backlog = 0
 
     /// Something happened in the browser: the event's name, its details, and the tab's session if it has one.
     var onEvent: ((_ method: String, _ params: JSONValue, _ session: String?) -> Void)?
@@ -49,11 +53,7 @@ final class CDPConnection {
         let data = CDP.command(id: id, method: method, params: params, sessionID: session)
         return try await withCheckedThrowingContinuation { continuation in
             waiting[id] = continuation
-            guard write(data) else {
-                waiting[id] = nil
-                continuation.resume(throwing: BrowserError("The browser has stopped"))
-                return
-            }
+            write(data)
             // A page that has hung must not hang the agent's tool call with it.
             Task {
                 try? await Task.sleep(for: .seconds(timeout))
@@ -64,19 +64,26 @@ final class CDPConnection {
 
     /// Sends a command whose answer nobody needs, such as a mouse move.
     func post(_ method: String, _ params: JSONValue = [:], session: String? = nil) {
-        guard isOpen else { return }
+        // Mouse moves and the like pile up behind a browser that is busy. Past a point they are dropped.
+        guard isOpen, backlog < 400 else { return }
         nextID += 1
-        _ = write(CDP.command(id: nextID, method: method, params: params, sessionID: session))
+        write(CDP.command(id: nextID, method: method, params: params, sessionID: session))
     }
 
-    private func write(_ data: Data) -> Bool {
-        data.withUnsafeBytes { raw -> Bool in
-            var sent = 0
-            while sent < raw.count {
-                let n = Darwin.write(writeFD, raw.baseAddress! + sent, raw.count - sent)
-                if n > 0 { sent += n } else if errno != EINTR { return false }
+    /// Queues one message for the browser. A write that fails means the browser has gone, which the reading
+    /// thread reports when the pipe closes.
+    private func write(_ data: Data) {
+        backlog += 1
+        let fd = writeFD
+        writer.async { [weak self] in
+            data.withUnsafeBytes { raw in
+                var sent = 0
+                while sent < raw.count {
+                    let n = Darwin.write(fd, raw.baseAddress! + sent, raw.count - sent)
+                    if n > 0 { sent += n } else if errno != EINTR { break }
+                }
             }
-            return true
+            Task { @MainActor in self?.backlog -= 1 }
         }
     }
 
@@ -98,7 +105,9 @@ final class CDPConnection {
         case .closed:
             guard isOpen else { return }
             isOpen = false
-            Darwin.close(writeFD)
+            // Behind any write still queued, so the descriptor isn't closed under one.
+            let fd = writeFD
+            writer.async { Darwin.close(fd) }
             let left = waiting
             waiting.removeAll()
             left.values.forEach { $0.resume(throwing: BrowserError("The browser has stopped")) }
@@ -123,6 +132,9 @@ final class CDPConnection {
         guard isOpen else { return }
         kill(pid, SIGTERM)
     }
+
+    /// True once the process has ended and been collected.
+    var hasEnded: Bool { !isOpen }
 
     // MARK: The reading thread
 

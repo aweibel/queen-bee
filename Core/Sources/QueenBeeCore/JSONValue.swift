@@ -41,7 +41,8 @@ public enum JSONValue: Codable, Equatable, Sendable {
     public var stringValue: String? { if case .string(let s) = self { return s }; return nil }
     public var boolValue: Bool? { if case .bool(let b) = self { return b }; return nil }
     public var doubleValue: Double? { if case .number(let n) = self { return n }; return nil }
-    public var intValue: Int? { doubleValue.map { Int($0) } }
+    /// Nil for a number too large to be an Int, which converting directly would crash on.
+    public var intValue: Int? { doubleValue.flatMap { Int(exactly: $0.rounded(.towardZero)) } }
     public var arrayValue: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
     public var objectValue: [String: JSONValue]? { if case .object(let o) = self { return o }; return nil }
     public var isNull: Bool { self == .null }

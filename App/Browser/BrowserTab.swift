@@ -32,6 +32,10 @@ final class BrowserTab: BrowserToolHost {
     private var lastAddress: String?
     /// What pop-up dialogs on the page said since the agent was last told.
     private var dialogs: [String] = []
+    /// The card has lost its browser. Nothing brings a closed tab back.
+    private var isClosed = false
+    /// How many of the agent's own clicks, keys and page opens are under way.
+    private var agentActions = 0
 
     /// A new picture of the page.
     var onFrame: ((CGImage) -> Void)?
@@ -50,6 +54,7 @@ final class BrowserTab: BrowserToolHost {
 
     /// The line to the browser and this tab's session on it, opening the tab first if it isn't open.
     private func session() async throws -> (CDPConnection, String) {
+        guard !isClosed else { throw BrowserError("This card's browser has been turned off.") }
         if let connection, connection.isOpen, let sessionID { return (connection, sessionID) }
         if let attaching { return try await attaching.value }
         let task = Task { try await self.attach() }
@@ -67,6 +72,11 @@ final class BrowserTab: BrowserToolHost {
         guard let target = made["targetId"]?.stringValue else { throw BrowserError("The browser didn't open a tab") }
         let attached = try await connection.send("Target.attachToTarget", ["targetId": .string(target), "flatten": true])
         guard let session = attached["sessionId"]?.stringValue else { throw BrowserError("The browser didn't open a tab") }
+        // The card's browser may have been turned off while the tab was opening.
+        guard !isClosed else {
+            connection.post("Target.closeTarget", ["targetId": .string(target)])
+            throw BrowserError("This card's browser has been turned off.")
+        }
         self.connection = connection
         targetID = target
         sessionID = session
@@ -103,12 +113,13 @@ final class BrowserTab: BrowserToolHost {
 
     /// Opens the tab again after the browser restarted, if a card is showing it.
     func reconnect() {
-        guard wantsStream, !isAttached else { return }
+        guard wantsStream, !isAttached, !isClosed else { return }
         Task { _ = try? await session() }
     }
 
     /// The card has lost its browser: the tab closes for good.
     func close() {
+        isClosed = true
         if let targetID { connection?.post("Target.closeTarget", ["targetId": .string(targetID)]) }
         onFrame = nil
         onChange = nil
@@ -146,9 +157,16 @@ final class BrowserTab: BrowserToolHost {
             }
         case "Page.javascriptDialogOpening":
             // Nobody can see a dialog in a hidden browser, and the page waits behind it until it is answered.
-            if let message = params["message"]?.stringValue, !message.isEmpty { dialogs.append(String(message.prefix(300))) }
+            // One the agent's own action raised is accepted, and the agent is told what it said. One the person
+            // raised, such as "Delete this?", is turned down: they were never shown the question. A page asking
+            // whether it may be left is always let go.
+            let leaving = params["type"]?.stringValue == "beforeunload"
+            let accepts = leaving || agentActions > 0
+            if !leaving, let message = params["message"]?.stringValue, !message.isEmpty {
+                dialogs.append("\"\(message.prefix(300))\" (\(accepts ? "accepted" : "dismissed"))")
+            }
             if dialogs.count > 5 { dialogs.removeFirst(dialogs.count - 5) }
-            if let sessionID { connection?.post("Page.handleJavaScriptDialog", ["accept": true], session: sessionID) }
+            if let sessionID { connection?.post("Page.handleJavaScriptDialog", ["accept": .bool(accepts)], session: sessionID) }
         case "Inspector.targetCrashed":
             title = "This page crashed"
             isLoading = false
@@ -181,7 +199,7 @@ final class BrowserTab: BrowserToolHost {
         guard on != wantsStream else { return }
         wantsStream = on
         if on {
-            if isAttached { startStream() } else if hostState != .missing { Task { _ = try? await session() } }
+            if isAttached { startStream() } else if hostState != .missing, !isClosed { Task { _ = try? await session() } }
         } else {
             stopStream()
         }
@@ -345,9 +363,9 @@ final class BrowserTab: BrowserToolHost {
 
     private func takeDialogNote() -> String {
         guard !dialogs.isEmpty else { return "" }
-        let said = dialogs.map { "\"\($0)\"" }.joined(separator: ", ")
+        let said = dialogs.joined(separator: ", ")
         dialogs = []
-        return " A dialog on the page said \(said) and was accepted."
+        return " A dialog on the page said \(said)."
     }
 
     private static func plain(_ error: String) -> String {
@@ -413,6 +431,8 @@ final class BrowserTab: BrowserToolHost {
     // MARK: BrowserToolHost, for the agent's tools
 
     func open(_ url: URL) async throws -> String {
+        agentActions += 1
+        defer { agentActions -= 1 }
         let (connection, session) = try await session()
         let reply = try await connection.send("Page.navigate", ["url": .string(url.absoluteString)], session: session, timeout: 40)
         if let error = reply["errorText"]?.stringValue, !error.isEmpty {
@@ -491,12 +511,16 @@ final class BrowserTab: BrowserToolHost {
     }
 
     func click(ref: Int) async throws -> String {
+        agentActions += 1
+        defer { agentActions -= 1 }
         try await press(at: try await centre(of: ref))
         await settle()
         return "Clicked part \(ref). The browser is at \(await whereItIs()).\(takeDialogNote()) Call read to see the page as it is now."
     }
 
     func click(x: Double, y: Double) async throws -> String {
+        agentActions += 1
+        defer { agentActions -= 1 }
         guard x >= 0, y >= 0, x <= size.width, y <= size.height else {
             throw BrowserError("That point is off the page as shown, which is \(Int(size.width)) by \(Int(size.height)) points.")
         }
@@ -506,6 +530,8 @@ final class BrowserTab: BrowserToolHost {
     }
 
     func type(ref: Int, text: String, submit: Bool) async throws -> String {
+        agentActions += 1
+        defer { agentActions -= 1 }
         guard let node = refs[ref] else {
             throw BrowserError("There is no part numbered \(ref) on the page as it is now. Call read again and use the numbers it gives.")
         }
@@ -524,6 +550,7 @@ final class BrowserTab: BrowserToolHost {
           }
           if (this.scrollIntoViewIfNeeded) this.scrollIntoViewIfNeeded();
           this.focus();
+          if (document.activeElement !== this) return 'nofocus';
           if (typeof this.select === 'function') this.select();
           else if (this.isContentEditable) document.execCommand('selectAll', false, null);
           return 'ready';
@@ -544,6 +571,7 @@ final class BrowserTab: BrowserToolHost {
         if outcome.hasPrefix("nochoice:") {
             throw BrowserError("Part \(ref) is a list with no choice called \"\(text)\". Its choices are: \(outcome.dropFirst(9))")
         }
+        if outcome == "nofocus" { throw BrowserError("Part \(ref) can't be typed into. It may be disabled, or not a text box.") }
         guard outcome == "ready" else { throw BrowserError(Self.stale) }
         if text.isEmpty {
             try await tap(BrowserKey.named("Backspace")!)
@@ -557,6 +585,8 @@ final class BrowserTab: BrowserToolHost {
     }
 
     func press(_ key: BrowserKey) async throws -> String {
+        agentActions += 1
+        defer { agentActions -= 1 }
         try await tap(key)
         await settle()
         return "Pressed \(key.code.isEmpty ? key.key : key.code). The browser is at \(await whereItIs()).\(takeDialogNote())"

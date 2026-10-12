@@ -49,15 +49,20 @@ public enum BrowserTools {
         }
         // "example.com" and "localhost:3000" are addresses too. A colon before any slash that isn't followed by
         // a port number is a scheme, and only http and https are let through.
-        if !text.contains("://") {
+        let hasScheme = text.range(of: "^[A-Za-z][A-Za-z0-9+.-]*://", options: .regularExpression) != nil
+        if !hasScheme {
             let beforeSlash = text.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
-            if let colon = beforeSlash.firstIndex(of: ":") {
-                let after = beforeSlash[beforeSlash.index(after: colon)...]
+            // An address in square brackets has colons of its own; only what follows it is looked at.
+            let afterName = beforeSlash.hasPrefix("[") ? String(beforeSlash.drop { $0 != "]" }.dropFirst()) : beforeSlash
+            if let colon = afterName.firstIndex(of: ":") {
+                let after = afterName[afterName.index(after: colon)...]
                 guard !after.isEmpty, after.allSatisfy(\.isNumber) else {
                     throw BrowserError("The browser only opens http and https addresses")
                 }
             }
-            let isLocal = beforeSlash.hasPrefix("localhost") || beforeSlash.hasPrefix("127.0.0.1") || beforeSlash.hasPrefix("[::1]")
+            // Only this Mac itself is opened without encryption. "localhost.example.com" is somewhere else.
+            let name = beforeSlash.hasPrefix("[") ? String(beforeSlash.prefix { $0 != "]" }) + "]" : String(beforeSlash.prefix { $0 != ":" })
+            let isLocal = ["localhost", "127.0.0.1", "[::1]"].contains(name.lowercased())
             text = (isLocal ? "http://" : "https://") + text
         }
         guard let url = URL(string: text), let scheme = url.scheme?.lowercased() else {

@@ -27,6 +27,7 @@ final class BrowserHost {
     /// A browser that has been asked to quit and hasn't finished. It still holds the profile.
     private var closing: CDPConnection?
     private var starting: Task<CDPConnection, any Error>?
+    private var isClearing = false
     private var tabs: [String: BrowserTab] = [:]
     /// What the browser calls itself, without the word that tells sites nobody is looking at it.
     private(set) var userAgent: JSONValue?
@@ -67,6 +68,8 @@ final class BrowserHost {
 
     /// The line to the running browser, starting it first if it isn't.
     func connected() async throws -> CDPConnection {
+        // Nothing starts a browser on a profile that is being deleted.
+        while isClearing { try? await Task.sleep(for: .milliseconds(100)) }
         if let connection, connection.isOpen { return connection }
         if let starting { return try await starting.value }
         let task = Task { try await self.start() }
@@ -81,6 +84,7 @@ final class BrowserHost {
             throw BrowserError("There is no browser for this card to use yet. The person can download one from the card.")
         }
         state = .starting
+        var made: CDPConnection?
         do {
             // Two browsers can't share a profile, so one on its way out is waited for.
             if let closing {
@@ -100,7 +104,7 @@ final class BrowserHost {
             // would put a password prompt on screen from an app they can't see.
             if found.isDownloaded { arguments.append("--use-mock-keychain") }
             arguments.append("about:blank")
-            let made = try CDPConnection(executable: found.path, arguments: arguments)
+            let made = try { let new = try CDPConnection(executable: found.path, arguments: arguments); made = new; return new }()
             made.onClose = { [weak self, weak made] in
                 // A browser that was asked to quit has already been dealt with. This is for one that went by itself.
                 guard let self, let made, self.connection === made else { return }
@@ -117,11 +121,22 @@ final class BrowserHost {
             _ = try await made.send("Target.setDiscoverTargets", ["discover": true])
             // A hidden browser has nowhere for the person to see a download land, so there are none.
             _ = try? await made.send("Browser.setDownloadBehavior", ["behavior": "deny"])
+            // Every card that wanted a browser may have gone while it was starting.
+            guard !tabs.isEmpty, !Task.isCancelled else {
+                made.close()
+                closing = made
+                state = .idle
+                throw BrowserError("This card's browser is off")
+            }
             connection = made
             state = .running
             return made
         } catch {
             let words = (error as? BrowserError)?.description ?? error.localizedDescription
+            if state == .idle { throw BrowserError(words) }
+            // A browser that started but never answered is still running, and still holds the profile.
+            made?.terminate()
+            closing = made ?? closing
             state = .failed(words)
             throw BrowserError(words)
         }
@@ -220,24 +235,33 @@ final class BrowserHost {
 
     /// The app is quitting, so there is no time to ask nicely.
     func terminate() {
+        starting?.cancel()
         connection?.terminate()
+        closing?.terminate()
         connection = nil
     }
 
     /// Forgets every sign-in, cookie and page this project's browser has kept.
     func clearData() async {
+        guard !isClearing else { return }
+        isClearing = true
+        defer { isClearing = false }
+        // A browser on its way up is let finish, so there is one process to close and not a stray.
+        _ = try? await starting?.value
         let wasRunning = connection != nil
-        let leaving = connection ?? closing
+        let leaving = [connection, closing].compactMap { $0 }
         connection?.close()
         connection = nil
         closing = nil
-        // The profile can only be deleted once the browser has let go of it.
-        if let leaving {
-            for _ in 0..<60 where leaving.isOpen { try? await Task.sleep(for: .milliseconds(100)) }
-        }
         tabs.values.forEach { $0.detached(forgettingPage: true) }
+        // The profile can only be deleted once every browser has let go of it.
+        for old in leaving {
+            for _ in 0..<60 where old.isOpen { try? await Task.sleep(for: .milliseconds(100)) }
+            old.terminate()
+        }
         try? FileManager.default.removeItem(at: profile)
         state = .idle
+        isClearing = false
         if wasRunning, !tabs.isEmpty { restart() }
     }
 

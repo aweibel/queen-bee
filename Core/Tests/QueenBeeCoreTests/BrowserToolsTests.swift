@@ -41,13 +41,19 @@ actor FakeBrowser: BrowserToolHost {
         #expect(try BrowserTools.checkedURL("localhost:3000/app").absoluteString == "http://localhost:3000/app")
         #expect(try BrowserTools.checkedURL("127.0.0.1:8080").absoluteString == "http://127.0.0.1:8080")
         #expect(try BrowserTools.checkedURL("example.com:8443/x").absoluteString == "https://example.com:8443/x")
+        #expect(try BrowserTools.checkedURL("[::1]:8080/x").absoluteString == "http://[::1]:8080/x")
+        // A name that only starts like this Mac's is somewhere else, and gets an encrypted connection.
+        #expect(try BrowserTools.checkedURL("localhost.example.com").absoluteString == "https://localhost.example.com")
+        #expect(try BrowserTools.checkedURL("127.0.0.1.example.com/a").absoluteString == "https://127.0.0.1.example.com/a")
+        // An address inside another address's query doesn't count as its scheme.
+        #expect(try BrowserTools.checkedURL("example.com/r?u=http://x.com").absoluteString == "https://example.com/r?u=http://x.com")
     }
 
     @Test(arguments: [
         "file:///etc/passwd", "file://localhost/etc/passwd", "chrome://settings", "javascript:alert(1)",
         "data:text/html,<h1>hi</h1>", "about:blank", "view-source:https://example.com", "ftp://example.com/x",
         "chrome-extension://abc/page.html", "blob:https://example.com/1", "FILE:///etc/passwd", "", "   ",
-        "https://", "two words.com", "https://exa mple.com",
+        "https://", "two words.com", "https://exa mple.com", "http:foo", "//example.com", "JaVaScRiPt://x/%0aalert(1)",
     ])
     func anythingButAWebAddressIsRefused(_ raw: String) {
         #expect(throws: BrowserError.self) { try BrowserTools.checkedURL(raw) }

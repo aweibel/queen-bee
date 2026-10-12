@@ -98,7 +98,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 ## Tests
 
 ```sh
-cd Core && swift test        # 223 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools and the browser's tools
+cd Core && swift test        # 224 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 

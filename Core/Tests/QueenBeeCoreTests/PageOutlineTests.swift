@@ -119,6 +119,20 @@ import Testing
         #expect(outline.refs.count == outline.text.split(separator: "\n").count - 1)
     }
 
+    @Test func aNumberTooLargeToCountDoesNotCrashTheApp() {
+        let slider: JSONValue = [
+            "nodeId": "2", "ignored": false, "role": ["value": "slider"], "name": ["value": "Volume"],
+            "value": ["type": "number", "value": .number(1e30)], "backendDOMNodeId": 7, "childIds": [],
+        ]
+        let huge: JSONValue = ["nodeId": "3", "ignored": false, "role": ["value": "button"], "name": ["value": "Go"],
+                               "backendDOMNodeId": .number(1e30), "childIds": []]
+        let outline = PageOutline.build(from: [node(1, "RootWebArea", "", children: [2, 3]), slider, huge])
+        #expect(outline.text.contains("[1] slider \"Volume\" value \"1e+30\""))
+        // A part whose node number makes no sense is shown but can't be acted on.
+        #expect(outline.refs == [1: 7])
+        #expect(JSONValue.number(.infinity).intValue == nil && JSONValue.number(2.9).intValue == 2)
+    }
+
     @Test func anEmptyPageSaysThereIsNothingToRead() {
         #expect(PageOutline.build(from: []).text.contains("nothing that can be read"))
         #expect(PageOutline.build(from: [node(1, "RootWebArea", "Blank")]).refs.isEmpty)

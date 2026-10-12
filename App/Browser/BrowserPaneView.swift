@@ -284,6 +284,8 @@ final class BrowserPageView: NSView {
     private static func key(for event: NSEvent) -> BrowserKey? {
         if let name = special[event.keyCode] { return BrowserKey.named(name) }
         guard let typed = event.characters, let first = typed.first else { return nil }
+        // Function keys arrive as characters from a private range that no page can show.
+        if let scalar = first.unicodeScalars.first, (0xF700...0xF8FF).contains(scalar.value) { return nil }
         var key = BrowserKey.typing(first)
         // The codes come from the key as it is without Shift or Option; the text is what it types with them.
         if let plain = event.charactersIgnoringModifiers?.first {
@@ -315,9 +317,7 @@ final class BrowserPageView: NSView {
         case "a": edit("a", "selectAll")
         case "z": edit("z", shift ? "redo" : "undo", shift: shift)
         case "c": copySelection()
-        case "x":
-            copySelection()
-            edit("x", "delete")
+        case "x": copySelection(thenDelete: true)
         case "v":
             if let text = NSPasteboard.general.string(forType: .string) { tab.insert(text: text) }
         case "r": tab.reload()
@@ -333,12 +333,15 @@ final class BrowserPageView: NSView {
         tab.key(down: false, key, modifiers: modifiers)
     }
 
-    private func copySelection() {
+    /// Copy, and Cut when `thenDelete` is set. The text is fetched before anything is deleted, or there would
+    /// be nothing left to fetch.
+    private func copySelection(thenDelete: Bool = false) {
         Task {
             let text = await tab.selectedText()
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
+            if thenDelete { edit("x", "delete") }
         }
     }
 }

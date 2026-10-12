@@ -44,7 +44,7 @@ public struct PageOutline: Equatable, Sendable {
         var cut = false
 
         func label(_ value: JSONValue?) -> String {
-            let raw = value?["value"]?.stringValue ?? value?["value"]?.doubleValue.map { $0.rounded() == $0 ? String(Int($0)) : String($0) } ?? ""
+            let raw = value?["value"]?.stringValue ?? value?["value"]?.doubleValue.map { Int(exactly: $0).map(String.init) ?? String($0) } ?? ""
             let flat = raw.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
             return flat.count > longestLabel ? String(flat.prefix(longestLabel)) + "…" : flat
         }
