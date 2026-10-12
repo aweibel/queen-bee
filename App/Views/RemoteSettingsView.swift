@@ -20,7 +20,7 @@ struct RemoteSettingsSection: View {
                                                                 set: { host.setCanControl($0, for: device.id) }))
                                 .toggleStyle(.switch)
                                 .controlSize(.mini)
-                                .help(device.canControl ? "\(device.name) can start and stop runs, answer approvals and type into sessions on this Mac."
+                                .help(device.canControl ? "\(device.name) can start and stop runs, answer approvals, type into sessions and edit flows on this Mac."
                                       : "\(device.name) can only watch.")
                             Button("Remove") { host.remove(device.id) }
                                 .help("\(device.name) will no longer be able to connect to this Mac.")
@@ -30,7 +30,7 @@ struct RemoteSettingsSection: View {
                     }
                 }
                 if !host.devices.devices.isEmpty {
-                    Text("A device with “Can control” on can start and stop runs, answer approvals and type into sessions on this Mac. It is off for every device until you turn it on.")
+                    Text("A device with “Can control” on can start and stop runs, answer approvals, type into sessions and edit flows on this Mac. It is off for every device until you turn it on.")
                         .font(.dsSans(Theme.Size.caption))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

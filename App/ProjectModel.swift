@@ -85,15 +85,37 @@ final class ProjectModel {
         return controller
     }
 
-    func delete(_ controller: FlowController) {
+    /// Deletes a flow and its file. With `toTrash` the file goes to the Trash instead, which is how a paired
+    /// device's delete is done: a mistake there, or a device in the wrong hands, destroys nothing. False
+    /// when the file couldn't be moved there, and then the flow is still in the project.
+    @discardableResult
+    func delete(_ controller: FlowController, toTrash: Bool = false) -> Bool {
+        // Saves what was not saved yet, so the file is the flow as it last was.
         controller.shutDown()
+        if toTrash {
+            guard Self.trash(controller.fileURL) else { return false }
+        } else {
+            try? store.delete(controller.fileURL)
+        }
         controller.forgetHistory()
-        try? store.delete(controller.fileURL)
         AppServices.shared.unregister(flowID: controller.flow.id)
         controllers.removeAll { $0 === controller }
         if AppServices.shared.selectedFlowID == controller.flow.id {
             AppServices.shared.selectedFlowID = (controllers.first ?? AppServices.shared.allFlows.first)?.flow.id
         }
+        return true
+    }
+
+    private static func trash(_ url: URL) -> Bool {
+        #if DEBUG
+        // A test copy of the app puts what it throws away in a folder of the test's, not in the Trash of whoever runs the tests.
+        if TestHarness.isEnabled, let folder = ProcessInfo.processInfo.environment["QB_TRASH_DIR"], !folder.isEmpty {
+            let into = URL(fileURLWithPath: folder, isDirectory: true)
+            try? FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+            return (try? FileManager.default.moveItem(at: url, to: into.appendingPathComponent(url.lastPathComponent))) != nil
+        }
+        #endif
+        return (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil
     }
 
     /// Stops every session this project started.

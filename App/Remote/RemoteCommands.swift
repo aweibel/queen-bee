@@ -12,6 +12,11 @@ import QueenBeeCore
 /// orchestrator's tools made: a Script card's command written that way is asked about before it runs, and
 /// a change to what a scheduled flow does turns its schedules off. No edit here can name an agent's folder
 /// or turn a schedule on, and none changes what this Mac's own window is showing or has selected.
+///
+/// A device is also held to a pace. It may send a burst of commands, which is what a drag comes to, and then
+/// so many a second; past that they are refused. And each kind of edit is put in a flow's log once, with
+/// one more line half a minute later saying how many more there were, so no number of edits pushes what
+/// else happened out of the log.
 enum RemoteCommands {
     /// Nil when it was done. Otherwise why not, in words the device shows the person.
     static func obey(_ sent: RemoteCommand, from deviceID: String) async -> String? {
@@ -23,21 +28,31 @@ enum RemoteCommands {
             endDrag(of: deviceID)
         }
         guard let device else { return Remote.watchOnlyRefusal }
+        // The last step of a drag ends it whatever becomes of the step: refused for its size, for coming too
+        // fast, or for a flow or a card that has gone.
+        defer { if sent.dragStep?.isLast == true { endDrag(of: deviceID) } }
+        // Keys are not counted: a held key repeats faster than this, and typing is not an edit.
+        if case .keys = sent {} else if !buckets[deviceID, default: TokenBucket()].take() {
+            // A step of a drag that isn't the last is never answered, so this goes nowhere and the step is dropped.
+            return Remote.tooFastRefusal
+        }
         // Text from a device is entered into terminals as a paste. Nothing in it may end the paste.
         let command = sent.cleaned
         // The size is checked here whatever the device's own app would have let through.
         if let problem = command.problem { return problem }
         let services = AppServices.shared
-        let name = Remote.oneLine(device.name)
+        // In the log a name is one line and short, whatever the device calls itself.
+        let name = Remote.logName(device.name)
         if case .newFlow(let projectID, let flowName) = command { return newFlow(named: flowName, inProject: projectID, by: name) }
         guard let controller = services.allFlows.first(where: { $0.flow.id == command.flowID }) else { return flowGone }
         /// What a card is called in a line of the log.
-        func called(_ cardID: String) -> String { controller.flow.card(cardID).map { Remote.oneLine($0.name) } ?? "a card" }
-        /// Makes an edit and, if it was made, says so in the log. A line that would be said over and over,
-        /// such as one for each pause in typing a setting, is given a key and said once in a while.
-        func edit(_ undo: String, key: String? = nil, say line: String, every: String? = nil, _ body: (inout Flow) throws -> Void) -> String? {
+        func called(_ cardID: String) -> String { controller.flow.card(cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card" }
+        /// Says in the flow's log that the device made an edit of this kind, the first time in a while.
+        func say(_ kind: Kind, _ line: String, in other: FlowController? = nil) { note(kind, line, in: other ?? controller, by: deviceID, called: name) }
+        /// Makes an edit and, if it was made, says so in the log.
+        func edit(_ undo: String, key: String? = nil, _ kind: Kind, say line: String, _ body: (inout Flow) throws -> Void) -> String? {
             if let refusal = controller.edit(from: name, undo, key: key, body) { return refusal }
-            if every.map({ isFirst("\(controller.flow.id)/\($0)", by: deviceID) }) ?? true { controller.noteFromDevice("\(name) \(line)") }
+            say(kind, line)
             return nil
         }
 
@@ -46,8 +61,8 @@ enum RemoteCommands {
             guard services.environment != nil else { return notReady }
             // What choosing the flow in the sidebar does to its sessions, without choosing it: the Mac's
             // window goes on showing what it showed.
-            if !controller.isOpen { controller.noteFromDevice("\(name) started this flow's agents") }
-            controller.open()
+            if !controller.isOpen || controller.hasAgentsHeldBack { controller.noteFromDevice("\(name) started this flow's agents") }
+            controller.startAgents()
             return nil
 
         case .run(_, let command):
@@ -130,24 +145,21 @@ enum RemoteCommands {
 
         case .addCard(_, let kind, let x, let y):
             let spot = FlowController.dropSpot(for: kind, at: CGPoint(x: x, y: y))
-            return edit("Add \(kind.label)", say: "added \(article(kind.label)) \(kind.label) card") {
+            return edit("Add \(kind.label)", .addCard, say: "added \(article(kind.label)) \(kind.label) card") {
                 try $0.addCard(kind: kind, x: spot.x, y: spot.y, patch: FlowController.newCardPatch(for: kind))
             }
 
-        case .moveCards(_, let moves, let final):
-            beginDrag(.move, in: controller, by: deviceID)
-            let refusal = controller.move(to: moves.mapValues { CGPoint(x: $0.x, y: $0.y) })
-            if final { endDrag(of: deviceID) }
-            if refusal == nil, isFirst("\(controller.flow.id)/move", by: deviceID) {
-                controller.noteFromDevice("\(name) moved \(moves.count == 1 ? called(moves.keys.first ?? "") : "\(moves.count) cards")")
-            }
+        case .moveCards(_, let moves, _):
+            // Said once for the drag, however many steps it has.
+            let isFirstStep = beginDrag(.move, in: controller, by: deviceID)
+            let refusal = controller.move(to: moves.mapValues { CGPoint(x: $0.x, y: $0.y) }, by: deviceID)
+            if refusal == nil, isFirstStep { say(.move, "moved \(moves.count == 1 ? called(moves.keys.first ?? "") : "\(moves.count) cards")") }
             return refusal
 
-        case .resizeCard(_, let cardID, let frame, let final):
-            beginDrag(.resize(cardID: cardID), in: controller, by: deviceID)
-            let refusal = controller.resize(cardID, to: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height))
-            if final { endDrag(of: deviceID) }
-            if refusal == nil, isFirst("\(controller.flow.id)/resize", by: deviceID) { controller.noteFromDevice("\(name) resized \(called(cardID))") }
+        case .resizeCard(_, let cardID, let frame, _):
+            let isFirstStep = beginDrag(.resize(cardID: cardID), in: controller, by: deviceID)
+            let refusal = controller.resize(cardID, to: CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height), by: deviceID)
+            if refusal == nil, isFirstStep { say(.resize, "resized \(called(cardID))") }
             return refusal
 
         case .deleteItems(_, let cardIDs, let linkIDs):
@@ -158,7 +170,7 @@ enum RemoteCommands {
             // What the Mac's Edit menu calls it.
             let undo = cards.count > 1 ? "Delete Cards" : cards.count == 1 ? "Delete Card" : links.count == 1 ? "Delete Link" : "Delete Links"
             let line = cards.count == 1 && links.isEmpty ? "deleted \(called(cardIDs[0]))" : "deleted \(what.joined(separator: " and "))"
-            return edit(undo, say: line) { flow in
+            return edit(undo, .delete, say: line) { flow in
                 for id in cards { try flow.removeCard(id) }
                 // A link at either end of a card that went has gone with it.
                 for id in links where flow.links.contains(where: { $0.id == id }) { try flow.removeLink(id) }
@@ -167,22 +179,23 @@ enum RemoteCommands {
         case .addLink(_, let from, let port, let to):
             guard controller.flow.card(from) != nil, controller.flow.card(to) != nil else { return cardGone }
             // When the two can't be linked, the refusal is the Mac's own reason. With no output named, the card's first is meant.
-            return edit("Link", say: "linked \(called(from)) to \(called(to))") { try $0.addLink(from: from, port: port, to: to) }
+            return edit("Link", .link, say: "linked \(called(from)) to \(called(to))") { try $0.addLink(from: from, port: port, to: to) }
 
         case .setLinkLimit(_, let linkID, let maxPasses):
             guard let link = controller.flow.links.first(where: { $0.id == linkID }) else { return linkGone }
-            return edit("Change Link", key: "link:\(linkID)", say: "changed the limit of the link from \(called(link.from)) to \(called(link.to))",
-                        every: "link/\(linkID)") { try $0.updateLink(linkID, maxPasses: maxPasses) }
+            return edit("Change Link", key: "link:\(linkID)", .linkLimit, say: "changed the limit of the link from \(called(link.from)) to \(called(link.to))") {
+                try $0.updateLink(linkID, maxPasses: maxPasses)
+            }
 
         case .duplicate(_, let cardIDs):
             let ids = Set(cardIDs)
             guard ids.allSatisfy({ controller.flow.card($0) != nil }) else { return cardGone }
-            return edit(ids.count == 1 ? "Duplicate Card" : "Duplicate Cards", say: "duplicated \(ids.count == 1 ? called(cardIDs[0]) : counted(ids.count, "card"))") {
+            return edit(ids.count == 1 ? "Duplicate Card" : "Duplicate Cards", .duplicate, say: "duplicated \(ids.count == 1 ? called(cardIDs[0]) : counted(ids.count, "card"))") {
                 $0.insert($0.fragment(of: ids), dx: 48, dy: 48)
             }
 
         case .tidy:
-            return edit("Tidy Up", say: "tidied the flow up") { flow in
+            return edit("Tidy Up", .tidy, say: "tidied the flow up") { flow in
                 for (id, point) in Tidy.layout(flow) {
                     guard let index = flow.cards.firstIndex(where: { $0.id == id }) else { continue }
                     flow.cards[index].x = point.x
@@ -194,21 +207,21 @@ enum RemoteCommands {
 
         case .group(_, let cardIDs, let groupName):
             guard cardIDs.allSatisfy({ controller.flow.card($0) != nil }) else { return cardGone }
-            return edit("Group", say: "grouped \(counted(Set(cardIDs).count, "card"))") { try $0.addGroup(name: groupName, cardIDs: cardIDs) }
+            return edit("Group", .group, say: "grouped \(counted(Set(cardIDs).count, "card"))") { try $0.addGroup(name: groupName, cardIDs: cardIDs) }
 
         case .ungroup(_, let groupID):
             guard let group = group(groupID, in: controller) else { return groupGone }
-            return edit("Ungroup", say: "ungrouped \(Remote.oneLine(group.name))") { $0.removeGroup(groupID) }
+            return edit("Ungroup", .ungroup, say: "ungrouped \(Remote.logName(group.name, or: "a group"))") { $0.removeGroup(groupID) }
 
         case .renameGroup(_, let groupID, let groupName):
             guard let group = group(groupID, in: controller) else { return groupGone }
-            return edit("Rename Group", key: "group:\(groupID)", say: "renamed the group \(Remote.oneLine(group.name))", every: "group/\(groupID)") {
+            return edit("Rename Group", key: "group:\(groupID)", .renameGroup, say: "renamed the group \(Remote.logName(group.name, or: "with no name"))") {
                 try $0.updateGroup(groupID, name: groupName)
             }
 
         case .foldGroup(_, let groupID, let folded):
             guard let group = group(groupID, in: controller) else { return groupGone }
-            return edit(folded ? "Fold Group" : "Unfold Group", say: "\(folded ? "folded" : "unfolded") the group \(Remote.oneLine(group.name))") {
+            return edit(folded ? "Fold Group" : "Unfold Group", .foldGroup, say: "\(folded ? "folded" : "unfolded") the group \(Remote.logName(group.name, or: "with no name"))") {
                 try $0.updateGroup(groupID, isFolded: folded)
             }
 
@@ -231,8 +244,7 @@ enum RemoteCommands {
                 if let problem = controller.nestingProblem(placing: inner) { return problem }
             }
             let changes = changed(by: patch)
-            return edit("Change \(card.name)", key: "edit:\(cardID)", say: "changed \(called(cardID))'s \(list(changes))",
-                        every: "card/\(cardID)/\(changes.joined(separator: ","))") { flow in
+            return edit("Change \(card.name)", key: "edit:\(cardID)", .settings, say: "changed \(called(cardID))'s \(list(changes))") { flow in
                 guard let index = flow.cards.firstIndex(where: { $0.id == cardID }) else { throw FlowError.notFound(cardGone) }
                 if let role { try flow.updateCard(cardID, patch: role.patch) }
                 if patch.role != nil { flow.cards[index].role = role?.id }
@@ -253,11 +265,11 @@ enum RemoteCommands {
                 }
                 guard Nesting.clamped(levels) != controller.ownSubflowLimit else { return nil }
                 controller.setSubflowLimit(levels)
-                if isFirst("\(controller.flow.id)/limit", by: deviceID) { controller.noteFromDevice("\(name) changed how deep sub-flows can go") }
+                say(.flowSettings, "changed how deep sub-flows can go")
             case .notifyOrchestrator(let on):
                 guard controller.flow.notifyOrchestrator != on else { return nil }
                 controller.setNotifiesOrchestrator(on)
-                controller.noteFromDevice("\(name) turned \(on ? "on" : "off") telling the orchestrator when a run ends")
+                say(.flowSettings, "turned \(on ? "on" : "off") telling the orchestrator when a run ends")
             }
             return nil
 
@@ -269,27 +281,32 @@ enum RemoteCommands {
 
         case .renameFlow(_, let flowName):
             guard flowName != controller.flow.name else { return nil }
-            let was = Remote.oneLine(controller.flow.name)
+            if let taken = nameTaken(flowName, in: controller.project, besides: controller) { return taken }
+            let was = Remote.logName(controller.flow.name, or: "a flow with no name")
             controller.rename(to: flowName)
-            controller.noteFromDevice("\(name) renamed this flow from \(was)")
+            say(.renameFlow, "renamed this flow from \(was)")
             return nil
 
         case .deleteFlow:
             let project = controller.project, flowName = controller.flow.name
-            guard !controller.isRunning else { return "\(flowName) is running. Stop the run before deleting the flow." }
+            // What the person at the Mac is looking at is not taken from under them.
+            guard services.current !== controller else { return "That flow is open on your Mac." }
+            // A run that has been asked for and not begun yet is a run going.
+            guard !controller.isRunning, !controller.isStartingRun else { return "\(flowName) is running. Stop the run before deleting the flow." }
             // A run of a flow above this one could be inside it, or about to be.
-            let nesting = project.nesting
-            var above: Set<String> = [], climbing = [controller.flow.id]
-            while let next = climbing.popLast() {
-                for outer in nesting.outerFlows(of: next) where above.insert(outer).inserted { climbing.append(outer) }
-            }
-            if let running = above.compactMap(project.controller).first(where: \.isRunning) {
+            let above = controller.flowsAbove
+            if let running = above.first(where: { $0.isRunning || $0.isStartingRun }) {
                 return "\(running.flow.name) is running, and \(flowName) is one of its sub-flows. Stop the run before deleting the flow."
             }
-            project.delete(controller)
+            // To the Trash, never gone for good: a mistake on a device, or a device in the wrong hands, destroys no work.
+            guard project.delete(controller, toTrash: true) else { return "\(flowName) couldn't be moved to the Trash on your Mac, so it was not deleted." }
+            // A flow that ran it now runs nothing there, with nobody having looked.
+            let gone = Remote.logName(flowName, or: "a flow")
+            for outer in above { outer.turnSchedulesOff(becauseOf: name, changing: gone) }
             // The flow's own log went with it, so it is said where the person at the Mac will see it.
-            (services.current ?? project.controllers.first ?? services.allFlows.first)?
-                .noteFromDevice("\(name) deleted the flow \(Remote.oneLine(flowName))")
+            if let shown = services.current ?? project.controllers.first ?? services.allFlows.first {
+                say(.deleteFlow, "deleted the flow \(gone). It is in the Trash", in: shown)
+            }
             return nil
 
         // MARK: Undo
@@ -297,13 +314,13 @@ enum RemoteCommands {
         case .undo:
             let title = controller.undoTitle
             if let refusal = controller.undo(from: name) { return refusal }
-            controller.noteFromDevice("\(name) chose \(title)")
+            say(.undo, "chose \(Remote.logName(title))")
             return nil
 
         case .redo:
             let title = controller.redoTitle
             if let refusal = controller.undo(from: name, redo: true) { return refusal }
-            controller.noteFromDevice("\(name) chose \(title)")
+            say(.redo, "chose \(Remote.logName(title))")
             return nil
         }
     }
@@ -317,6 +334,7 @@ enum RemoteCommands {
         guard project.controllers.count < flowLimit else {
             return "This project already has \(flowLimit) flows. Make more on your Mac."
         }
+        if let taken = nameTaken(flowName, in: project, besides: nil) { return taken }
         guard let made = project.newFlow(named: flowName, select: false) else { return "The flow couldn't be saved." }
         made.noteFromDevice("\(name) made this flow")
         return nil
@@ -325,29 +343,107 @@ enum RemoteCommands {
     /// A project is not filled with flows from a device without end.
     private static let flowLimit = 200
 
+    /// Why a flow can't be given this name from a device: another flow of the project has it. Nil when it can.
+    /// With no name the Mac picks one nothing else has.
+    private static func nameTaken(_ wanted: String, in project: ProjectModel, besides own: FlowController?) -> String? {
+        let wanted = wanted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty, project.controllers.contains(where: { $0 !== own && $0.flow.name.caseInsensitiveCompare(wanted) == .orderedSame }) else { return nil }
+        return "This project already has a flow called \(Remote.logName(wanted)). Give this one another name."
+    }
+
+    // MARK: Pace
+
+    /// How fast each device may send commands, by device id.
+    private static var buckets: [String: TokenBucket] = [:]
+
     // MARK: Drags
 
-    /// The drag each device has going, by device id: one at a time, in one flow.
-    private static var drags: [String: (flowID: String, drag: RemoteDrag)] = [:]
+    /// The drag each device has going, by device id: one at a time, in one flow, and when its last step came.
+    private static var drags: [String: (flowID: String, drag: RemoteDrag, heard: Date, watch: Task<Void, Never>)] = [:]
+    /// A drag the Mac has heard nothing of for this long is over: the device went quiet without lifting its finger.
+    static let dragTimeout: TimeInterval = 2
 
-    /// Called for every step of a drag. Only the first begins anything.
-    private static func beginDrag(_ drag: RemoteDrag, in controller: FlowController, by deviceID: String) {
-        guard drags[deviceID] == nil else { return }
-        drags[deviceID] = (controller.flow.id, drag)
+    /// Called for every step of a drag. Only the first begins anything, and that is what comes back.
+    @discardableResult
+    private static func beginDrag(_ drag: RemoteDrag, in controller: FlowController, by deviceID: String) -> Bool {
+        if drags[deviceID] != nil {
+            drags[deviceID]?.heard = Date()
+            return false
+        }
+        let watch = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, let open = drags[deviceID] else { return }
+                if Date().timeIntervalSince(open.heard) >= dragTimeout { return endDrag(of: deviceID) }
+            }
+        }
+        drags[deviceID] = (controller.flow.id, drag, Date(), watch)
         controller.beginDrag(from: deviceID)
+        return true
     }
 
     /// Ends the drag a device has going, if it has one: what it moved so far becomes one step of the Mac's
     /// Undo, under the name the Mac gives that kind of drag. Called on the drag's last step, and whenever the
     /// device stops dragging without saying so: it sent something else, opened another flow, lost "Can
-    /// control", or went.
+    /// control", went, or went quiet.
     static func endDrag(of deviceID: String) {
         guard let open = drags.removeValue(forKey: deviceID) else { return }
+        open.watch.cancel()
         let name = switch open.drag {
         case .move: "Move"
         case .resize: "Resize"
         }
         AppServices.shared.allFlows.first { $0.flow.id == open.flowID }?.endDrag(from: deviceID, name)
+    }
+
+    // MARK: The log
+
+    /// The kinds of edit a device makes, each of which is put in a flow's log once in a while.
+    private enum Kind: String {
+        case addCard, move, resize, delete, link, linkLimit, duplicate, tidy, group, ungroup, renameGroup, foldGroup
+        case settings, flowSettings, renameFlow, deleteFlow, undo, redo
+
+        /// What the device did, said of any number of them.
+        var phrase: String {
+            switch self {
+            case .addCard: "added a card"
+            case .move: "moved cards"
+            case .resize: "resized a card"
+            case .delete: "deleted cards or links"
+            case .link: "linked cards"
+            case .linkLimit: "changed a link's limit"
+            case .duplicate: "duplicated cards"
+            case .tidy: "tidied the flow up"
+            case .group: "grouped cards"
+            case .ungroup: "ungrouped cards"
+            case .renameGroup: "renamed a group"
+            case .foldGroup: "folded or unfolded a group"
+            case .settings: "changed a card's settings"
+            case .flowSettings: "changed the flow's settings"
+            case .renameFlow: "renamed this flow"
+            case .deleteFlow: "deleted a flow"
+            case .undo: "chose Undo"
+            case .redo: "chose Redo"
+            }
+        }
+    }
+
+    /// How many of each kind of edit each device has made in each flow since the log was last told.
+    private static var tally = EditTally()
+
+    /// Puts a line in a flow's log about an edit a device made, if it is the first of its kind there from that
+    /// device in a while. The ones after it are counted, and when the while is up one more line says how many
+    /// there were. So the log gets two lines at most for each kind of edit in half a minute, whatever a device sends.
+    private static func note(_ kind: Kind, _ line: String, in controller: FlowController, by deviceID: String, called name: String) {
+        let flowID = controller.flow.id, key = "\(deviceID)/\(flowID)/\(kind.rawValue)"
+        guard tally.count(key) else { return }
+        controller.noteFromDevice("\(name) \(line)")
+        Task {
+            try? await Task.sleep(for: .seconds(EditTally.window))
+            let extra = tally.close(key)
+            guard extra > 0 else { return }
+            AppServices.shared.allFlows.first { $0.flow.id == flowID }?.noteFromDevice("\(name) \(kind.phrase) \(EditTally.more(extra))")
+        }
     }
 
     // MARK: Words

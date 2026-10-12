@@ -37,7 +37,7 @@ struct SidebarView: View {
                     .padding(.horizontal, Theme.Space.s)
                     .padding(.vertical, 5)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .help(controls ? "Connected to this Mac now. A device that can control can start and stop runs, answer approvals and type into sessions. You can turn that off, or remove a device, in Settings."
+                    .help(controls ? "Connected to this Mac now. A device that can control can start and stop runs, answer approvals, type into sessions and edit flows. You can turn that off, or remove a device, in Settings."
                           : "Connected to this Mac now. You can remove a device in Settings.")
                 Rectangle().fill(Theme.hairline.ui).frame(height: 1)
             }

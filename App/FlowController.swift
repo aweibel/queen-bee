@@ -140,8 +140,17 @@ final class FlowController: ToolHost {
     @ObservationIgnored private var lastUndo: (key: String, at: Date)?
     /// The flow as it was when a drag began. While set, the drag's steps don't each get an undo.
     @ObservationIgnored private var gestureStart: Flow?
-    /// The flow as it was when each paired device's drag began, by device id.
-    @ObservationIgnored private var deviceDrags: [String: Flow] = [:]
+    /// Where each card a paired device's drag has moved or resized was before the drag, and how big, by
+    /// device id and then by card id. Only that is put back when the drag is undone.
+    @ObservationIgnored private var deviceDrags: [String: [String: CGRect]] = [:]
+    /// The agent cards a paired device added, copied or brought back while the flow was open. Their sessions
+    /// are not started for them: each agent is a Claude Code process, and a device adds cards faster than
+    /// a person reads them. They start when somebody asks: see `startSession(forCard:)` and `startAgents()`.
+    @ObservationIgnored private var heldBack: Set<String> = []
+    /// How many runs are being started and have not begun: starting can wait on a condition being judged.
+    @ObservationIgnored private var runsStarting = 0
+    /// True from the moment a run is asked for until it has begun or been turned down.
+    var isStartingRun: Bool { runsStarting > 0 }
     /// True while a paired device's Undo or Redo is being done.
     @ObservationIgnored private var undoingForDevice = false
 
@@ -513,6 +522,8 @@ final class FlowController: ToolHost {
         guard !isOpen else { return }
         isOpen = true
         isClosed = false
+        // Opened by somebody: every agent in it starts, whoever added the card.
+        heldBack.removeAll()
         Task {
             while services.environment == nil { try? await Task.sleep(for: .milliseconds(100)) }
             startMissingSessions()
@@ -520,6 +531,17 @@ final class FlowController: ToolHost {
         }
         reschedule()
     }
+
+    /// A paired device's "Start its agents": what choosing the flow in the sidebar does to its sessions, and
+    /// for a flow that is already open, the start of the agents that were waiting to be asked for.
+    func startAgents() {
+        guard isOpen else { return open() }
+        heldBack.removeAll()
+        if services.environment != nil { startMissingSessions() }
+    }
+
+    /// True when the flow is open and has an agent whose session is waiting to be asked for.
+    var hasAgentsHeldBack: Bool { isOpen && !heldBack.isEmpty }
 
     func shutDown() {
         // The run, if there is one, ends here: nothing is waited on and nothing more is routed.
@@ -629,6 +651,8 @@ final class FlowController: ToolHost {
             // An agent's folder is never changed from a device, by Undo either: it stays as it is now.
             if undoingForDevice { back.cards[i].cwd = now.cwd }
         }
+        // An agent a device's Undo brings back is not started for it, any more than one it adds.
+        if undoingForDevice { holdBackAgents(in: back, newSince: current) }
         lastUndo = nil
         flow = back
         undoManager.registerUndo(withTarget: self) { $0.restore(current, name) }
@@ -656,6 +680,7 @@ final class FlowController: ToolHost {
             session.terminate()
             sessions[id] = nil
         }
+        heldBack.formIntersection(agentIDs)
         switch selection {
         case .card(let id) where flow.card(id) == nil: selection = .none
         case .link(let id) where !flow.links.contains(where: { $0.id == id }): selection = .none
@@ -959,7 +984,7 @@ final class FlowController: ToolHost {
     }
 
     private func startMissingSessions() {
-        for card in flow.cards where card.kind == .agent && session(forCard: card.id).state == .notStarted {
+        for card in flow.cards where card.kind == .agent && !heldBack.contains(card.id) && session(forCard: card.id).state == .notStarted {
             startSession(forCard: card.id)
         }
         if orchestrator.state == .notStarted { startOrchestrator() }
@@ -969,6 +994,8 @@ final class FlowController: ToolHost {
     func startSession(forCard id: String) {
         guard let environment = services.environment else { return }
         guard let index = flow.cards.firstIndex(where: { $0.id == id }), flow.cards[index].kind == .agent else { return }
+        // Asked for by name, so it is no longer waiting to be.
+        heldBack.remove(id)
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
         let card = flow.cards[index]
@@ -1180,6 +1207,8 @@ final class FlowController: ToolHost {
     /// `note` is a line for the run's log saying who started it, when that wasn't the person at this Mac.
     func start(command: String? = nil, startCardID: String? = nil, levelsLeft given: Int? = nil, note: String? = nil) async -> RunStart {
         guard let engine = readyEngine() else { return RunStart(began: false, status: services.problem ?? "Claude Code isn't ready yet.") }
+        runsStarting += 1
+        defer { runsStarting -= 1 }
         isClosed = false
         // Run directly, a flow goes by its own place under the flow at the top. Run by a Flow
         // card, it is handed what is left of the run's allowance.
@@ -1215,6 +1244,8 @@ final class FlowController: ToolHost {
         }
         isClosed = false
         runLevelsLeft = levelsLeft
+        runsStarting += 1
+        defer { runsStarting -= 1 }
         let output = await engine.start(flow: flow, at: cardID, message: message, fromName: sender)
         if let id = output.runID {
             clearForRun()
@@ -1595,7 +1626,7 @@ final class FlowController: ToolHost {
         guard hold.needsAllow else { return "That command has already been allowed." }
         // Asked of what is kept now, not of what the hold said when it was made.
         guard hold.allowOnMac != true, !isFromDevice(hold.command, cardID: hold.cardID) else { return Remote.allowOnMacRefusal }
-        append("\(device) allowed \(flow.card(hold.cardID).map { Remote.oneLine($0.name) } ?? "a card")'s command")
+        append("\(device) allowed \(flow.card(hold.cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card")'s command")
         allowScript(id)
         return nil
     }
@@ -1722,10 +1753,15 @@ final class FlowController: ToolHost {
     /// scheduled flow does turns its schedules off.
     private func takeUnseen(_ copy: Flow, from device: String?, undo name: String, key: String?, within window: TimeInterval = 1.5) {
         let old = flow
+        if device != nil { holdBackAgents(in: copy, newSince: old) }
         flow = copy
         withdrawConsents(changedFrom: old, by: device)
         registerUndo(from: old, name, key: key, within: window)
         reconcile()
+    }
+
+    private func holdBackAgents(in new: Flow, newSince old: Flow) {
+        for card in new.cards where card.kind == .agent && old.card(card.id) == nil { heldBack.insert(card.id) }
     }
 
     private func withdrawConsents(changedFrom old: Flow, by device: String?) {
@@ -1782,40 +1818,69 @@ final class FlowController: ToolHost {
     /// An armed schedule runs with nobody watching, so it is tied to what the person agreed to.
     /// When the orchestrator changes a Start card's command, or an agent's brief, folder or
     /// permissions, every schedule in the flow goes off until the person turns it on again.
+    /// The orchestrator putting a command back as it was puts the schedule back on.
     ///
-    /// The same goes for a change from a paired device, which is named here, and a device is held to more.
-    /// A schedule is on when the card's command and schedule are the ones the person agreed to, so the
-    /// orchestrator putting a command back as it was puts the schedule back on. From a device nothing does:
-    /// a change to a scheduled Start card's command or schedule forgets what was agreed, and no change from
-    /// a device leaves a schedule on that was off before it.
+    /// A change from a paired device, which is named here, is held to more: see `disarmSchedules(changedFrom:byDevice:)`.
     private func disarmSchedules(changedFrom old: Flow, by device: String? = nil) {
-        var armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
-        var startsChanged = false
-        if device != nil {
-            let before = old.cards.filter { $0.kind == .start && isArmed($0) }
-            let wereOn = Set(before.map(\.id))
-            // Turned on by this very change: it was made to match something agreed to earlier.
-            for card in armed where !wereOn.contains(card.id) { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
-            armed.removeAll { !wereOn.contains($0.id) }
-            startsChanged = before.contains { was in
-                guard let card = flow.card(was.id) else { return false }
-                return card.command != was.command || card.trigger != was.trigger
-            }
-            // A card whose own command or schedule changed is no longer on, and still has to be forgotten.
-            if startsChanged { armed = before.filter { flow.card($0.id) != nil } }
-        }
-        let agentsChanged = !armed.isEmpty && flow.cards.contains { card in
+        if let device { return disarmSchedules(changedFrom: old, byDevice: device) }
+        let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
+        guard !armed.isEmpty else { return }
+        let agentsChanged = flow.cards.contains { card in
             guard card.kind == .agent, let was = old.card(card.id) else { return card.kind == .agent }
             return card.instructions != was.instructions || card.cwd != was.cwd || card.permissionMode != was.permissionMode
         }
-        guard !armed.isEmpty, agentsChanged || startsChanged else {
-            // What was agreed to may have been forgotten above, so nobody is shown a time for a schedule that is off.
-            if device != nil { reschedule() }
+        guard agentsChanged else { return }
+        for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
+        append("The orchestrator changed what the flow does, so its schedule is off until you turn it on again")
+        banner = "The schedule is off: the orchestrator changed what the flow does. Turn it on again in the Start card's settings."
+        reschedule()
+    }
+
+    /// A paired device changed the flow. If that changed anything the flow does when it runs, which is any
+    /// link, any card added or taken away and any setting, and not where a card is, how big, what group it
+    /// is in or what a note says, then every schedule of the flow goes off, and so does every schedule of a
+    /// flow above it that runs it as a sub-flow. What was agreed to is forgotten, so nothing a device does
+    /// afterwards, putting a command back included, turns one on again. And no change from a device leaves
+    /// a schedule on that was off before it.
+    private func disarmSchedules(changedFrom old: Flow, byDevice device: String) {
+        let wereOn = Set(old.cards.filter { $0.kind == .start && isArmed($0) }.map(\.id))
+        // Turned on by this very change: it was made to match something agreed to earlier.
+        let turnedOn = flow.cards.filter { $0.kind == .start && !wereOn.contains($0.id) && isArmed($0) }.map(\.id)
+        for id in turnedOn { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: id) }
+        guard flow.changesWhatItDoes(from: old) else {
+            // Nobody is shown a time for a schedule that is off.
+            if !turnedOn.isEmpty { reschedule() }
             return
         }
+        // A card that went with this change is forgotten too, so bringing it back doesn't bring its schedule back on.
+        let mine = wereOn.union(flow.cards.filter { $0.kind == .start && isArmed($0) }.map(\.id))
+        for id in mine { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: id) }
+        if !mine.isEmpty {
+            append("\(device) changed what the flow does, so its schedule is off until you turn it on again")
+            banner = "The schedule is off: \(device) changed what the flow does. Turn it on again in the Start card's settings."
+        }
+        if !mine.isEmpty || !turnedOn.isEmpty { reschedule() }
+        let inner = Remote.logName(flow.name, or: "a flow")
+        for outer in flowsAbove { outer.turnSchedulesOff(becauseOf: device, changing: inner) }
+    }
+
+    /// Every flow that runs this one as a sub-flow, however far up.
+    var flowsAbove: [FlowController] {
+        let nesting = project.nesting
+        var above: Set<String> = [], climbing = [flow.id]
+        while let next = climbing.popLast() {
+            for outer in nesting.outerFlows(of: next) where above.insert(outer).inserted { climbing.append(outer) }
+        }
+        return above.sorted().compactMap(project.controller).filter { $0 !== self }
+    }
+
+    /// A paired device changed, or deleted, a flow this one runs as a sub-flow.
+    func turnSchedulesOff(becauseOf device: String, changing inner: String) {
+        let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
+        guard !armed.isEmpty else { return }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
-        append("\(device ?? "The orchestrator") changed what the flow does, so its schedule is off until you turn it on again")
-        banner = "The schedule is off: \(device ?? "the orchestrator") changed what the flow does. Turn it on again in the Start card's settings."
+        append("\(device) changed \(inner), which this flow runs, so its schedule is off until you turn it on again")
+        banner = "The schedule is off: \(device) changed \(inner), which this flow runs. Turn it on again in the Start card's settings."
         reschedule()
     }
 
@@ -1850,6 +1915,15 @@ final class FlowController: ToolHost {
         if copy.links.count > max(flow.links.count, Remote.linkLimit) {
             return "A flow can have \(Remote.linkLimit) links at most when it is added to from a device. Add more on your Mac."
         }
+        // Each agent is a Claude Code session on this Mac.
+        func agents(_ flow: Flow) -> Int { flow.cards.count { $0.kind == .agent } }
+        if agents(copy) > max(agents(flow), Remote.agentLimit) {
+            return "A flow can have \(Remote.agentLimit) agents at most when it is added to from a device. Add more on your Mac."
+        }
+        // Counted as the file it is saved in. Only asked when the flow could have grown past it.
+        if copy != flow, let size = try? Remote.encode(copy).count, size > Remote.flowByteLimit, size > ((try? Remote.encode(flow).count) ?? 0) {
+            return "This flow is as big as a device can make it. Make it bigger on your Mac."
+        }
         cutLooseFlowCardsThatCannotNest(in: &copy)
         takeUnseen(copy, from: device, undo: name, key: key)
         return nil
@@ -1857,18 +1931,59 @@ final class FlowController: ToolHost {
 
     /// The first step of a device's drag: everything it moves until `endDrag` is one undo step.
     func beginDrag(from deviceID: String) {
-        if deviceDrags[deviceID] == nil { deviceDrags[deviceID] = flow }
+        if deviceDrags[deviceID] == nil { deviceDrags[deviceID] = [:] }
     }
 
+    /// The drag is over. What it did becomes one step of Undo that puts back where the cards it touched
+    /// were and how big, and nothing else: whatever else was changed meanwhile, here or from another
+    /// device, is not that drag's to take back.
     func endDrag(from deviceID: String, _ name: String) {
-        guard let start = deviceDrags.removeValue(forKey: deviceID) else { return }
-        registerUndo(from: start, name)
+        guard let before = deviceDrags.removeValue(forKey: deviceID) else { return }
+        guard before.contains(where: { id, was in frame(of: id).map { $0 != was } ?? false }) else { return }
+        lastUndo = nil
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: self) { $0.restoreFrames(before, name) }
+        undoManager.setActionName(name)
+        undoManager.endUndoGrouping()
+        undoRevision += 1
+    }
+
+    private func frame(of id: String) -> CGRect? {
+        flow.card(id).map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+    }
+
+    /// Puts cards back where they were and how big, in the flow as it is now, and makes that undoable in
+    /// turn. A card that has gone since is left out.
+    private func restoreFrames(_ frames: [String: CGRect], _ name: String) {
+        var now: [String: CGRect] = [:]
+        var copy = flow
+        for i in copy.cards.indices {
+            guard let frame = frames[copy.cards[i].id] else { continue }
+            now[copy.cards[i].id] = CGRect(x: copy.cards[i].x, y: copy.cards[i].y, width: copy.cards[i].width, height: copy.cards[i].height)
+            copy.cards[i].x = frame.minX
+            copy.cards[i].y = frame.minY
+            copy.cards[i].width = frame.width
+            copy.cards[i].height = frame.height
+        }
+        lastUndo = nil
+        if copy != flow { flow = copy }
+        undoManager.registerUndo(withTarget: self) { $0.restoreFrames(now, name) }
+        undoManager.setActionName(name)
+        undoRevision += 1
+    }
+
+    /// Remembers where the cards a step of a device's drag is about to touch are, the first time each is touched.
+    private func noteDragged(_ ids: some Sequence<String>, by deviceID: String) {
+        guard var before = deviceDrags[deviceID] else { return }
+        for id in ids where before[id] == nil { before[id] = frame(of: id) }
+        deviceDrags[deviceID] = before
     }
 
     /// A step of a device's drag: puts each card where it was dragged to. Part of a drag, so it is undone with the drag.
-    func move(to places: [String: CGPoint]) -> String? {
+    func move(to places: [String: CGPoint], by deviceID: String) -> String? {
         guard places.keys.allSatisfy({ flow.card($0) != nil }) else { return "That card is no longer in the flow." }
         guard let left = places.values.map(\.x).min(), let top = places.values.map(\.y).min() else { return nil }
+        noteDragged(places.keys, by: deviceID)
         // The whole set stops at the canvas's edge together, so it keeps its shape, as a drag on this Mac does.
         let dx = max(0, CardView.farLeft - left), dy = max(0, CardView.farLeft - top)
         var copy = flow
@@ -1882,7 +1997,7 @@ final class FlowController: ToolHost {
     }
 
     /// A step of a device's drag of a card's corner. A card is never made smaller than its kind allows.
-    func resize(_ id: String, to frame: CGRect) -> String? {
+    func resize(_ id: String, to frame: CGRect, by deviceID: String) -> String? {
         var patch = CardPatch()
         patch.x = max(frame.minX, CardView.farLeft)
         patch.y = max(frame.minY, CardView.farLeft)
@@ -1890,6 +2005,7 @@ final class FlowController: ToolHost {
         patch.height = frame.height
         var copy = flow
         guard copy.card(id) != nil, (try? copy.updateCard(id, patch: patch)) != nil else { return "That card is no longer in the flow." }
+        noteDragged([id], by: deviceID)
         if copy != flow { flow = copy }
         return nil
     }

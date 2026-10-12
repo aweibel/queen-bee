@@ -84,7 +84,9 @@ class App:
         self.support = support
         shutil.rmtree(support, ignore_errors=True)
         atexit.register(shutil.rmtree, support, ignore_errors=True)
-        cmd = ["open", "-g", "-n", APP, "--env", f"QB_SUPPORT_DIR={support}"]
+        # What a test copy moves to the Trash goes to a folder of its own instead, which goes with the support folder.
+        self.trash = os.path.join(support, "Trash")
+        cmd = ["open", "-g", "-n", APP, "--env", f"QB_SUPPORT_DIR={support}", "--env", f"QB_TRASH_DIR={self.trash}"]
         for k, v in (env or {}).items():
             cmd += ["--env", f"{k}={v}"]
         # The defaults-style flag goes first: after a bare flag, macOS would read it as that flag's value.
@@ -586,6 +588,36 @@ def remote_edits(app, device, send, ask, done, refused, since):
           and (lambda f: (f["notifyOrchestrator"], f.get("subflowLimit")))(on_disk(lambda f: f.get("subflowLimit") == 1 and f["notifyOrchestrator"])) == (True, 1),
           str({k: v for k, v in on_disk().items() if k in ("notifyOrchestrator", "subflowLimit")}))
 
+    # A drag's Undo puts back where the dragged cards were, and nothing else.
+    spot = by_id(on_disk(), sid)
+    send("moveCards", flow=edits, moves={sid: [spot["x"] + 40.0, spot["y"] + 40.0]}, final=False)
+    saved_flow(app, edits, lambda f: by_id(f, sid)["x"] == spot["x"] + 40)
+    app.op(edits, "edit", card="Wrapper", template="Changed on the Mac while a device was dragging")
+    check("a drag goes on while something else is changed on the Mac",
+          done(e("moveCards", moves={sid: [spot["x"] + 300.0, spot["y"] + 200.0]}, final=True)) and undo_is() == "Move", f"{device.seen[-1:]} {undo_is()}")
+    f = on_disk(lambda f: by_id(f, sid)["x"] == spot["x"] + 300 and "on the Mac" in by_id(f, wrap)["template"])
+    check("and undoing the drag puts the card back and leaves the other change alone", done(e("undo"))
+          and (lambda f: (by_id(f, sid)["x"], by_id(f, sid)["y"], by_id(f, wrap)["template"]))(on_disk(lambda f: by_id(f, sid)["x"] == spot["x"]))
+          == (spot["x"], spot["y"], "Changed on the Mac while a device was dragging"), str([by_id(on_disk(), sid), by_id(on_disk(), wrap)]))
+    check("and redoing it moves the card again and nothing else", done(e("redo"))
+          and (lambda f: (by_id(f, sid)["x"], by_id(f, wrap)["template"]))(on_disk(lambda f: by_id(f, sid)["x"] == spot["x"] + 300))
+          == (spot["x"] + 300, "Changed on the Mac while a device was dragging"), str(by_id(on_disk(), sid)))
+    e("patchCard", card=wrap, patch={"template": "Loudly: {{message}}"})
+    e("tidy")
+    spot = by_id(on_disk(lambda f: by_id(f, sid)["x"] != spot["x"] + 300), sid)
+    send("moveCards", flow=edits, moves={sid: [spot["x"] + 50.0, spot["y"]]}, final=False)
+    check("a last step of a drag that is refused still ends the drag",
+          refused(e("moveCards", moves={sid: [1e9, 0.0]}, final=True), "off the edge") and undo_is() == "Move", f"{device.seen[-1:]} {undo_is()}")
+    e("undo")
+    send("moveCards", flow=edits, moves={sid: [spot["x"] + 60.0, spot["y"]]}, final=False)
+    saved_flow(app, edits, lambda f: by_id(f, sid)["x"] == spot["x"] + 60)
+    still_open = undo_is()
+    time.sleep(3.5)
+    check("and a drag the Mac hears no more of is ended by the Mac after two seconds", still_open == "Tidy Up" and undo_is() == "Move", f"{still_open} then {undo_is()}")
+    e("undo")
+    check("a name of one character under a pile of marks is refused for its size, as a long one is",
+          refused(e("patchCard", card=wrap, patch={"name": "e" + "\u0301" * 500}), "too long") and by_id(on_disk(), wrap)["name"] == "Wrapper", str(device.seen[-1:])[:300])
+
     # An agent's folder, and its permissions. The flow isn't open on the Mac, so the agent never starts.
     check("it can add an agent", done(e("addCard", kind="agent", x=900.0, y=900.0)), str(device.seen[-2:]))
     f = on_disk(lambda f: any(c["kind"] == "agent" for c in f["cards"]))
@@ -641,6 +673,54 @@ def remote_edits(app, device, send, ask, done, refused, since):
     check("and so does undoing one from a device", was_on == ["Start"] and done(e("undo")) and app.state(edits)["armed"] == []
           and by_id(on_disk(lambda f: by_id(f, aid).get("instructions") == "Stay where you are."), aid).get("instructions") == "Stay where you are.",
           f"{was_on} {app.state(edits)['armed']} {by_id(on_disk(), aid)}")
+    # Any change from a device to what the flow does turns its schedule off, not only the ones the orchestrator's do.
+    def armed_again():
+        app.op(edits, "trigger", card="Start", minutes=30)
+        return app.state(edits)["armed"] == ["Start"]
+
+    was_on = armed_again()
+    check("adding a link from a scheduled Start card turns the schedule off", was_on and done(e("addLink", **{"from": start, "port": "out", "to": end}))
+          and app.state(edits)["armed"] == [] and app.state(edits)["scheduled"] == 0, f"{was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    extra = next(l["id"] for l in on_disk(lambda f: any(l["from"] == start and l["to"] == end for l in f["links"]))["links"] if l["to"] == end and l["from"] == start)
+    was_on = armed_again()
+    check("and so does deleting one", was_on and done(e("deleteItems", cards=[], links=[extra])) and app.state(edits)["armed"] == [],
+          f"{was_on} {app.state(edits)['armed']}")
+    was_on = armed_again()
+    check("and so does changing a Prompt card's template", was_on and done(e("patchCard", card=wrap, patch={"template": "Quietly: {{message}}"}))
+          and app.state(edits)["armed"] == [], f"{was_on} {app.state(edits)['armed']}")
+    was_on = armed_again()
+    spot = by_id(on_disk(), wrap)
+    check("moving a card, resizing one, grouping and tidying leave a schedule on: they change nothing the flow does",
+          was_on and done(e("moveCards", moves={wrap: [spot["x"] + 10.0, spot["y"] + 10.0]}, final=True))
+          and done(e("resizeCard", card=wrap, frame=[spot["x"], spot["y"], 300.0, 200.0], final=True))
+          and done(e("group", cards=[wrap, end], name="Still on")) and done(e("tidy")) and app.state(edits)["armed"] == ["Start"],
+          f"{was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    e("ungroup", group=on_disk(lambda f: f.get("groups"))["groups"][0]["id"])
+    # A flow that Edits runs as a sub-flow, with an agent in it. Neither is open on the Mac, so no agent starts.
+    project_id = next(m for m in reversed(device.seen) if m["type"] == "library")["projects"][0]
+    mark = len(device.seen)
+    ask("newFlow", flow="", project=project_id, name="Underneath")
+    inner = (since(mark, lambda m: m["type"] == "library" and "Underneath" in m["flows"], 10) or {}).get("flowIDs", {}).get("Underneath", "")
+    ask("addCard", flow=inner, kind="agent", x=600.0, y=300.0)
+    inner_agent = next(c["id"] for c in saved_flow(app, inner, lambda f: len(f["cards"]) == 2)["cards"] if c["kind"] == "agent")
+    e("addCard", kind="flow", x=300.0, y=700.0)
+    flow_card = next(c["id"] for c in on_disk(lambda f: any(c["kind"] == "flow" for c in f["cards"]))["cards"] if c["kind"] == "flow")
+    placed = done(e("patchCard", card=flow_card, patch={"flowRef": inner}))
+    on_disk(lambda f: by_id(f, flow_card).get("flowRef") == inner)
+    was_on = armed_again()
+    check("changing an agent's instructions in a sub-flow turns off the schedule of the flow that runs it",
+          placed and was_on and done(ask("patchCard", flow=inner, card=inner_agent, patch={"instructions": "Do something nobody at the Mac has read."}))
+          and app.state(edits)["armed"] == [] and app.state(edits)["scheduled"] == 0, f"{placed} {was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    s = app.state(edits)
+    check("and the log and the banner of the flow above say which device changed which flow",
+          "Test device changed Underneath, which this flow runs, so its schedule is off until you turn it on again" in s["log"]
+          and "Test device changed Underneath" in (s["banner"] or ""), f"{s['log'][-3:]} {s['banner']}")
+    was_on = armed_again()
+    check("and so does deleting the sub-flow", was_on and done(ask("deleteFlow", flow=inner)) and app.state(edits)["armed"] == []
+          and os.path.isdir(app.trash) and len(os.listdir(app.trash)) == 1, f"{was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    e("deleteItems", cards=[flow_card], links=[])
+    on_disk(lambda f: all(c["id"] != flow_card for c in f["cards"]))
+    e("patchCard", card=wrap, patch={"template": "Loudly: {{message}}"})
     check("it can take a schedule away", done(e("patchCard", card=start, patch={"removesTrigger": True}))
           and "trigger" not in by_id(on_disk(lambda f: "trigger" not in by_id(f, start)), start), str(by_id(on_disk(), start)))
 
@@ -746,6 +826,27 @@ def remote_edits(app, device, send, ask, done, refused, since):
           and saved_flow(app, big, lambda f: f["name"] == "Built afar")["name"] == "Built afar"
           and since(mark, lambda m: m["type"] == "library" and "Built afar" in m["flows"], 10) is not None, str(device.seen[-2:]))
     check("a flow has to have a name", refused(ask("renameFlow", flow=big, name=" \n "), "needs a name"), str(device.seen[-1:]))
+    before = set(flows_on_disk(app))
+    check("a flow can't be given a name another flow of the project has, new or renamed",
+          refused(ask("newFlow", flow="", project=project, name="doors"), "already has a flow called doors")
+          and refused(ask("renameFlow", flow=big, name="Guard"), "already has a flow called Guard")
+          and set(flows_on_disk(app)) == before and saved_flow(app, big)["name"] == "Built afar", str(device.seen[-2:]))
+    before = flows_on_disk(app)
+    check("the flow the Mac's own window is showing can't be deleted from a device",
+          refused(ask("deleteFlow", flow=guard), "That flow is open on your Mac.") and flows_on_disk(app) == before
+          and "Guard" in app.state(guard)["flows"], str(device.seen[-1:]))
+    # A run that has been asked for and has not begun: Slow asks Claude which way to go before it starts.
+    slow = SLOW["id"]
+    starting = threading.Thread(target=lambda: app.op(slow, "run"), daemon=True)
+    starting.start()
+    time.sleep(0.4)
+    answer = ask("deleteFlow", flow=slow)
+    check("a flow whose run is still starting can't be deleted from a device", refused(answer, "is running") and flows_on_disk(app) == before
+          and "Slow" in app.state(guard)["flows"], str(answer))
+    starting.join(120)
+    ask("stop", flow=slow)
+    app.wait(slow, lambda s: not s["isRunning"], 60, "the slow run to stop")
+    app.op(slow, "close")
 
     # No flow is grown without limit from a device.
     ask("addCard", flow=big, kind="note", x=100.0, y=400.0)
@@ -766,6 +867,18 @@ def remote_edits(app, device, send, ask, done, refused, since):
     f = saved_flow(app, big)
     check("and the Mac's file has 200 cards and no more", len(f["cards"]) == 200, str(len(f["cards"])))
     notes = [c["id"] for c in f["cards"] if c["kind"] == "note"]
+    # Each of these is as much text as one card may be given, and the flow as a whole has a size of its own.
+    heavy, fitted, answer = "\u8a9e" * 16000, 0, None
+    for note in notes[:60]:
+        answer = ask("patchCard", flow=big, card=note, patch={"text": heavy})
+        if not done(answer):
+            break
+        fitted += 1
+    check("a flow can't be made bigger than 2 MB from a device, however small each change is",
+          35 <= fitted <= 45 and refused(answer, "as big as a device can make it"), f"{fitted} {str(answer)[:200]}")
+    time.sleep(1)
+    size = max(len(data) for data in flows_on_disk(app).values())
+    check("and the Mac's file is no bigger than that", 1_500_000 < size < 2_100_000, str(size))
     check("it can delete many cards at once", done(ask("deleteItems", flow=big, cards=notes, links=[]))
           and len(saved_flow(app, big, lambda f: len(f["cards"]) == 1)["cards"]) == 1, str(device.seen[-1:]))
     first = saved_flow(app, big)["cards"][0]["id"]
@@ -793,31 +906,77 @@ def remote_edits(app, device, send, ask, done, refused, since):
     time.sleep(1)
     f = saved_flow(app, big)
     check("and the Mac's file has 400 links and no more", (len(f["links"]), len(f["cards"])) == (400, 73), f"{len(f['links'])} {len(f['cards'])}")
+    log = app.state(big)["log"]
+    check("and of all that, the flow's log has a line or two for each kind of change, not one for each change",
+          1 <= sum("linked" in line for line in log) <= 4 and sum("Test device" in line for line in log) <= 30
+          and "Test device made this flow" in log, str(log[-12:]))
+    added = [done(ask("addCard", flow=big, kind="agent", x=100.0 + 20 * i, y=2000.0)) for i in range(12)]
+    f = saved_flow(app, big, lambda f: sum(c["kind"] == "agent" for c in f["cards"]) == 12)
+    agents = [c["id"] for c in f["cards"] if c["kind"] == "agent"]
+    check("it can give a flow twelve agents", all(added) and len(agents) == 12, f"{added} {len(agents)}")
+    check("and not one more, added or copied", refused(ask("addCard", flow=big, kind="agent", x=0.0, y=0.0), "12 agents at most")
+          and refused(ask("duplicate", flow=big, cards=agents[:1]), "12 agents at most")
+          and sum(c["kind"] == "agent" for c in saved_flow(app, big)["cards"]) == 12, str(device.seen[-2:]))
+    check("and none of them has a session: the flow was never opened", all(v["state"] == "notStarted" for v in app.state(big)["sessions"].values()),
+          str(app.state(big)["sessions"])[:300])
 
     mark = len(device.seen)
     check("it can delete a flow", done(ask("deleteFlow", flow=big)), str(device.seen[-2:]))
     time.sleep(1)
-    check("and the Mac removes its file, tells the device, and says in the log of the flow it is showing which device did it",
+    binned = []
+    for name in os.listdir(app.trash):
+        with open(os.path.join(app.trash, name)) as thrown:
+            binned.append(json.load(thrown))
+    check("and the Mac takes its file out of the project, tells the device, and says in the log of the flow it is showing which device did it",
           set(flows_on_disk(app)) == files and saved_flow(app, big, timeout=0) is None
           and since(mark, lambda m: m["type"] == "library" and "Built afar" not in m["flows"], 10) is not None
-          and "Test device deleted the flow Built afar" in app.state(guard)["log"], str(app.state(guard)["log"][-3:]))
+          and any("Test device deleted the flow" in line and "It is in the Trash" in line for line in app.state(guard)["log"]),
+          str(app.state(guard)["log"][-3:]))
+    check("and the file is not destroyed: it is where the Mac puts what it throws away, whole",
+          any(b["id"] == big and b["name"] == "Built afar" and len(b["links"]) == 400 for b in binned), str([(b["id"], b["name"]) for b in binned]))
     check("a flow that is gone can't be changed", refused(ask("tidy", flow=big), "no longer on your Mac")
           and refused(ask("deleteFlow", flow=big), "no longer on your Mac"), str(device.seen[-2:]))
 
-    # What the Mac's log says of all this.
-    log = app.state(edits)["log"]
+    # What the Mac's log says of all this: the first of each kind of change, and then how many more there were.
     said = ["Test device added a Script card", "Test device moved Script", "Test device resized Script", "Test device linked Wrap to Script",
             "Test device changed the limit of the link from Wrap to Script", "Test device deleted 1 link", "Test device grouped 2 cards",
             "Test device folded the group Tail", "Test device renamed the group Tail", "Test device ungrouped The tail", "Test device tidied the flow up",
-            "Test device changed Wrap's template", "Test device changed Wrap's name and template", "Test device added an Agent card",
-            "Test device changed Agent's instructions", "Test device changed Start's schedule", "Test device changed Start's command",
-            "Test device chose Undo Move", "Test device chose Redo Move", "Test device turned on telling the orchestrator when a run ends",
-            "Test device changed how deep sub-flows can go"]
+            "Test device changed Wrap's template", "Test device chose Undo Move", "Test device chose Redo Move",
+            "Test device turned on telling the orchestrator when a run ends"]
+    deadline = time.time() + 40
+    while True:
+        log = app.state(edits)["log"]
+        counted = [line for line in log if line.startswith("Test device changed a card's settings ") and line.endswith(("more times", "once more"))]
+        if counted or time.time() > deadline:
+            break
+        time.sleep(2)
     check("the Mac's log says what the device did to the flow, naming the device", not [line for line in said if line not in log],
           str([line for line in said if line not in log]) + str(log[-8:]))
-    check("and says once in a while that it moved or resized a card, however many steps a drag had",
-          1 <= log.count("Test device moved Script") <= 2 and 1 <= log.count("Test device resized Script") <= 2
-          and not any("\u001b" in line for line in log), str([line for line in log if "moved" in line or "resized" in line]))
+    check("and when a kind of change is made over and over, one more line half a minute later says how many more there were",
+          bool(counted) and any(line.startswith("Test device chose Undo ") and line.endswith(("more times", "once more")) for line in log),
+          str([line for line in log if "more" in line]))
+    settings = [line for line in log if line.startswith("Test device changed ") and "'s " in line and "settings" not in line and "limit" not in line]
+    check("and no kind of change has a line for each time it was made", len(settings) <= 10 and not any("\u001b" in line for line in log)
+          and 1 <= sum(line.startswith("Test device moved ") for line in log) <= 10, f"{len(settings)} {settings}")
+
+    # A device that sends faster than a person makes changes is refused, and then let back in.
+    time.sleep(3.5)
+    burst = [send(None) for _ in range(150)]
+    first = burst[0]
+    for n in burst:
+        device.tell(json.dumps(dict(id=n, do="foldGroup", flow=edits, group="nogroup", folded=True)))
+    answers = {}
+    while len(answers) < 150:
+        answer = device.until(lambda m: m["type"] == "answer" and m["id"] in burst, 20)
+        if answer is None:
+            break
+        answers[answer["id"]] = answer["refusal"] or ""
+    slowed = [i for i, r in sorted(answers.items()) if "Too many changes at once. Try again in a moment." in r]
+    heard = [i for i, r in sorted(answers.items()) if "no longer in the flow" in r]
+    check("a burst of commands from a device is heard, and past it they are refused for coming too fast",
+          len(answers) == 150 and 55 <= len(heard) <= 110 and len(slowed) == 150 - len(heard) and heard[0] == first, f"{len(answers)} {len(heard)} {len(slowed)}")
+    time.sleep(3.5)
+    check("and a moment later it is heard again", refused(e("foldGroup", group="nogroup", folded=True), "no longer in the flow"), str(device.seen[-1:]))
 
     # A drag left going when the device looks at another flow.
     send("moveCards", flow=edits, moves={sid: [1500.0, 900.0]}, final=False)
@@ -825,6 +984,27 @@ def remote_edits(app, device, send, ask, done, refused, since):
     check("a drag left going when the device opens another flow is ended by the Mac",
           device.until(lambda m: m["type"] == "opened" and m["name"] == "Guard") is not None and undo_is() == "Move"
           and by_id(on_disk(lambda f: by_id(f, sid)["x"] == 1500), sid)["x"] == 1500, f"{undo_is()} {by_id(on_disk(), sid)}")
+
+    # Guard is open on the Mac, with its agents running. An agent a device adds there is not started for it.
+    check("it can add an agent to a flow that is open on the Mac", done(ask("addCard", flow=guard, kind="agent", x=900.0, y=900.0)), str(device.seen[-1:]))
+    added = next(c["id"] for c in saved_flow(app, guard, lambda f: any(c["name"] == "Agent" for c in f["cards"]))["cards"] if c["name"] == "Agent")
+    time.sleep(4)
+    s = app.state(guard)
+    check("and no session is started for it until somebody asks", s["sessions"]["Agent"]["state"] == "notStarted"
+          and s["sessions"]["Alice"]["state"] != "notStarted", str({k: v["state"] for k, v in s["sessions"].items()}))
+    check("nor for a copy of it", done(ask("duplicate", flow=guard, cards=[added])) and time.sleep(3) is None
+          and [v["state"] for k, v in app.state(guard)["sessions"].items() if k.startswith("Agent")] == ["notStarted", "notStarted"],
+          str({k: v["state"] for k, v in app.state(guard)["sessions"].items()}))
+    check("the device's Start agent starts it", done(ask("startSession", flow=guard, card=added)), str(device.seen[-1:]))
+    try:
+        s = app.wait(guard, lambda s: s["sessions"]["Agent"]["state"] != "notStarted", 60, "the agent a device added to start")
+        states = [v["state"] for k, v in s["sessions"].items() if k.startswith("Agent")]
+        check("and only it", len(states) == 2 and states.count("notStarted") == 1, str(states))
+    except TimeoutError as err:
+        check("and only it", False, str(err)[:300])
+    copies = [c["id"] for c in saved_flow(app, guard)["cards"] if c["name"].startswith("Agent")]
+    check("and both can be deleted again", done(ask("deleteItems", flow=guard, cards=copies, links=[]))
+          and not [k for k in app.state(guard)["sessions"] if k.startswith("Agent")], str(list(app.state(guard)["sessions"])))
 
 
 def remote_control(app, device, device_id):
@@ -839,6 +1019,8 @@ def remote_control(app, device, device_id):
         """Sends one command without waiting to hear of it, and returns its id. With no command, only takes the next id."""
         sent[0] += 1
         if do is not None:
+            # No faster than a device may keep sending: the Mac refuses a device that sends more than 20 a second for long.
+            time.sleep(0.06)
             device.tell(json.dumps(dict(id=sent[0], do=do, flow=flow, **fields)))
         return sent[0]
 
@@ -1073,6 +1255,7 @@ def remote_control(app, device, device_id):
         remote_edits(app, device, send, ask, done, refused, since)
     except Exception as e:  # the checks of stage 2 that follow are worth having whatever went wrong here
         check("the edits ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    edits_ended = time.time()
 
     check("it can restart an agent", done(ask("startSession", flow=guard, card=alice)), str(device.seen[-3:]))
     check("and the Mac's log says which device did", "Test device restarted Alice's agent" in app.state(guard)["log"], str(app.state(guard)["log"][-4:]))
@@ -1081,6 +1264,8 @@ def remote_control(app, device, device_id):
         check("and the agent starts again", True)
     except TimeoutError as e:
         check("and the agent starts again", False, str(e)[:300])
+    # The log is told how many more of each kind of change there were half a minute after the first, so that is waited out.
+    time.sleep(max(0, 33 - (time.time() - edits_ended)))
     # A session that has just started goes on drawing for a moment. What follows is compared with the Mac at rest.
     deadline = time.time() + 60
     quiet = mac()
@@ -1092,11 +1277,13 @@ def remote_control(app, device, device_id):
         quiet = now
 
 
-    # A drag is going when "Can control" is turned off.
+    # A drag is going when "Can control" is turned off. The Mac ends one it hears no more of after two
+    # seconds, so the switch is turned off straight after the step.
     wrapper = next(c["id"] for c in EDITS["cards"] if c["name"] == "Wrap")
     ask("tidy", flow=EDITS["id"])
     send("moveCards", flow=EDITS["id"], moves={wrapper: [2000.0, 1200.0]}, final=False)
-    saved_flow(app, EDITS["id"], lambda f: next(c for c in f["cards"] if c["id"] == wrapper)["x"] == 2000)
+    # Until the Mac has saved the step, so that what follows is compared with a file that is not about to change.
+    saved_flow(app, EDITS["id"], lambda f: next(c for c in f["cards"] if c["id"] == wrapper)["x"] == 2000, timeout=1.4)
     was = app.state(EDITS["id"])["undo"]
 
     app.op("app", "remote-control", device=device_id, on=False)
@@ -1109,7 +1296,9 @@ def remote_control(app, device, device_id):
     check("and so is the rest of its drag", refused(ask("moveCards", flow=EDITS["id"], moves={wrapper: [0.0, 0.0]}, final=True), "can only watch"),
           str(device.seen[-2:]))
     time.sleep(1)
-    check("and does nothing", mac() == quiet and flows_on_disk(app) == files)
+    now, on_disk_now = mac(), flows_on_disk(app)
+    check("and does nothing", now == quiet and on_disk_now == files,
+          str([(a, b) for a, b in zip(now, quiet) if a != b])[:500] + str([name for name in set(files) | set(on_disk_now) if files.get(name) != on_disk_now.get(name)]))
     app.op(doors, "close")
 
 
@@ -2317,6 +2506,17 @@ def scenario_controls():
               c.get("answerLine") is None and drawn(s, "Writer") == [] and (s.get("composer") or {}).get("openTerminal") == ["Writer"],
               f"{c.get('answerLine')} {(s.get('composer') or {}).get('openTerminal')}")
         both("controls-03-script-waiting")
+        s = play(1, *on, "-qbFromDevice", "1", "-qbZoomCard", "Style guide", "-qbSelect", "Style guide")
+        c = controls(s)
+        waiting = [i for i in ((s.get("panel") or {}).get("details") or {}).get("items", []) if i["style"] == "waiting"]
+        check("a command that was written from a device has no Allow here, on its card, in the banner or in its details: only Don't run",
+              c.get("cards") == {"Style guide": ["Don't run"]} and c.get("banner") == {"Style guide": ["Don't run"]} and c.get("details") == ["Don't run"]
+              and drawn(s, "Style guide") == [("Don't run", True)], f"{c} {drawn(s, 'Style guide')}")
+        check("and where Allow was, the details say it is allowed on the Mac, in the Mac's words, with the command",
+              len(waiting) == 1 and waiting[0]["label"] == "This command was changed from a device. Allow it on your Mac." and waiting[0]["value"] == "cat docs/style.md"
+              and {"name": "Style guide", "reason": "Waiting for you to allow its command on your Mac"} in (s.get("panel") or {}).get("needsYou", []),
+              f"{waiting} {(s.get('panel') or {}).get('needsYou')}")
+        both("controls-03b-script-from-device")
         s = play(1, *on, "-qbPress", "allow:Style guide", also=lambda s: controls(s).get("asking"))
         check("Allow shows the whole command and asks before anything is sent",
               controls(s).get("asking") == "allow:Style guide:cat docs/style.md" and controls(s).get("waiting") == [] and needing(s) == ["Writer", "Style guide"],
@@ -3004,8 +3204,8 @@ def scenario_settings_edit():
         both("settings-08-flows")
         s = play("askFlow:delete/Rota", *on, "-qbShow", "flows")
         ask = flows(s).get("asking") or {}
-        check("deleting a flow asks first, by the flow's name, and says it can't be undone",
-              ask.get("title") == "Delete “Rota”?" and "cannot be undone" in ask.get("message", "") and ask.get("answer") == "Delete Flow" and sent(s) == [] and "Rota" in s.get("flows", []),
+        check("deleting a flow asks first, by the flow's name, and says where it goes",
+              ask.get("title") == "Delete “Rota”?" and "It goes to the Trash on your Mac." in ask.get("message", "") and ask.get("answer") == "Delete Flow" and sent(s) == [] and "Rota" in s.get("flows", []),
               f"{ask} {sent(s)}")
         both("settings-09-delete-flow")
         s = play("askFlow:new/Book club", *on)
