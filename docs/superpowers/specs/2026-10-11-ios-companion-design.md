@@ -29,7 +29,37 @@ still watch-only until "Can control" is turned on for it in the Mac's Settings. 
 - A message box under each session's terminal and in the orchestrator's page, and keys for the terminal itself.
 - A line in the flow's log on the Mac for everything a device does, naming the device.
 
-Stage 3, editing the flow from the device, is not started.
+Stage 3, "Edit", is built too, by `docs/superpowers/plans/2026-10-12-ios-companion-3-edit.md`, which ends with
+what was built, how it was checked and what is left to try on a real device. Editing is part of "Can control".
+With it on, stage 3 delivered:
+
+- Edit, a mode turned on from the canvas's bar or the foot of a card's details, with a bar of its own: Undo and
+  Redo by the Mac's names, Add Card, Select, Tidy Up and Done.
+- Moving a card by its title bar with the Mac's snapping and guides, resizing by its corner, linking by dragging
+  from a port dot, and a menu on a held finger for a card, a link, a group or empty canvas.
+- Every setting the Mac's panel has, in the details, sent when a field is left or after a pause; a link's limit, a
+  group's name and the flow's own settings.
+- Making, renaming and deleting flows from the list of flows.
+- A line in the flow's log on the Mac for each kind of edit, naming the device.
+
+Where stage 3 differs from the design below:
+
+- **Edit is a mode.** The design had the canvas take edits whenever the device could control the Mac. A finger
+  that only meant to pan would then move a card, so nothing on the canvas changes until Edit is pressed.
+- **A device's edits follow the rules for edits the Mac did not see the person make.** The design made each edit
+  "through the same gate every Mac edit goes through" and stopped there. They also go through the rules the
+  orchestrator's edits follow, and then some: a Script card's command changed from a device is allowed on the Mac
+  and from no device; any change to what a flow does turns off its schedules and those of the flows that run it;
+  a schedule can't be turned on from a device; agents a device adds to an open flow wait to be started; and sizes,
+  rates and the number of agents are capped. `SECURITY.md` has the list.
+- **An agent's folder can't be changed.** It is shown, with a line saying it is changed on the Mac.
+- **Deleting asks, sometimes.** Several things, or a card with links, are asked about. One link or one unlinked
+  card is not: Undo brings it back. A flow is always asked about by name, and goes to the Mac's Trash instead of
+  being destroyed.
+- **The selection box adds.** Select is a button, not a gesture. With it on, a dragged box and tapped cards add
+  to what is selected.
+- **A drag's Undo is the drag.** One step of Undo for a whole drag, which puts back where the dragged cards were
+  and nothing else, so it can't take back what somebody changed on the Mac meanwhile.
 
 Where stage 2 differs from the design below:
 

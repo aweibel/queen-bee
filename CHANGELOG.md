@@ -10,7 +10,15 @@ All notable changes to Queen Bee are listed here. The format follows
 
 - Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi, with no server and no account.
 - A companion app for iPad and iPhone, built from source and installed on your own device. It shows every flow with its state, the open flow's canvas live, each agent's terminal with scroll-back, the run log, End cards' answers, earlier runs, cost, and which cards are waiting on you. The README has the steps to install it with a free Apple ID.
-- "Can control", a switch for each paired device in Settings → Remote. It is off until you turn it on. With it on, the device can run and stop flows, approve and reject, allow a Script card's command, start and restart agents, and send messages and keys to the orchestrator and to any agent. The Mac checks the switch for every one of these, and writes what a device did in the flow's log with the device's name. A device still can't edit a flow or a card's settings.
+- "Can control", a switch for each paired device in Settings → Remote. It is off until you turn it on. With it on, the device can run and stop flows, approve and reject, allow a Script card's command, start and restart agents, and send messages and keys to the orchestrator and to any agent. The Mac checks the switch for every one of these, and writes what a device did in the flow's log with the device's name.
+- Edit, in the companion app, for a device with "Can control" on. Press Edit to move, resize, link, add, copy, group and delete cards by touch, change a card's settings, a link's limit and a group's name in the details, and make, rename and delete flows. Undo and Redo are shared with the Mac. A flow deleted from a device goes to the Trash on the Mac.
+
+### Security
+
+- A change made from a paired device is held to more than one made on the Mac. A Script card's command changed from a device stops the run and must be allowed on the Mac itself: no device can allow it. Any change from a device to what a flow does turns off that flow's schedules, and those of flows that run it as a sub-flow, until they are turned on again on the Mac. A device cannot turn a schedule on, change an agent's folder, or set a permission mode that skips permission checks.
+- Agent cards added from a device do not start a session by themselves in a flow that is open on the Mac, and a flow can be given twelve agents at most from a device.
+- What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
+- Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
 
 ## [0.3.3] - 2026-10-11
 

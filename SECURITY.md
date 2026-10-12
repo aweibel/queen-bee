@@ -20,9 +20,9 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
 - **Permission modes are limited.** A card can use manual, accept edits, plan or auto. A mode that skips permission
   checks cannot be set from a flow file, the settings panel or the orchestrator's tools.
 - **Script cards run commands with no prompt.** A Script card runs a shell command as you when a run reaches it.
-  It only runs a command you typed into its settings or allowed yourself on this Mac. A command written by the
-  orchestrator, pasted in, or arriving in a flow file stops the run and asks you first. What you allowed is kept in
-  the app's own settings, not in the flow file.
+  It only runs a command you typed into its settings on this Mac or allowed yourself. A command written by the
+  orchestrator, pasted in, arriving in a flow file or written from a paired device stops the run and asks you
+  first. What you allowed is kept in the app's own settings, not in the flow file.
 - **End cards write files.** An End card can save the final answer to a file in the project folder, and the
   orchestrator can set that up without asking. A save can't leave the project folder, and it is refused inside
   `.git`, `.claude` and `.queenbee`, where a file could change what git, Claude Code or Queen Bee does next. Any
@@ -31,7 +31,8 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   changes, while the app is open. A schedule only fires once you have set it or turned it on in this app, and only
   for the command you set it with, so one that arrives in a flow file stays off until you agree. If the orchestrator
   changes that command, or an agent's instructions, folder or permissions, the flow's schedules go off until you turn
-  them on again. A copied Start card never brings its schedule with it.
+  them on again. A paired device is held to more: see "Can control" below. A copied Start card never brings its
+  schedule with it.
 - **Sub-flows have a depth limit.** A Flow card runs another flow of the same project. How deep that can nest is
   set on the flow at the top, three levels unless changed and never more than ten, and a run stops at the limit, so
   flows can't be chained without end.
@@ -61,17 +62,60 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   with it off can do nothing whatever its app sends, and turning it off takes effect at once, for a device that
   is connected too. With it on, the device can do what these buttons and keys on your Mac do:
   start and stop runs; approve or reject a message an Approval card is holding; allow a Script card's command, which
-  is then remembered for that card exactly as if you had allowed it on the Mac; start or restart a flow's agents;
+  is then remembered for that card exactly as if you had allowed it on the Mac, unless a device wrote the
+  command, which the next point is about; start or restart a flow's agents;
   and type into any session of a flow, the orchestrator's included. Typing is the wide one. A session's terminal
   is where Claude Code asks "may I run this command?", and a device that can type there can answer yes. So a
   device with control can do what you can do in those terminals, which is whatever Claude Code can do on your Mac.
   Turn it on only for a device you would hand your Mac's keyboard to.
-  With it on or off, no device can add a project folder, answer the "trust this folder" prompt, change the
-  Remote settings, pair or remove a device, change a card's settings, or change the flow itself: the Mac has no
-  message for any of those. What a device does is noted in the flow's log on the Mac with the device's
-  name: a run started or stopped, a message approved or rejected, a command allowed or not run, agents started, a
-  message sent to a session, and that it typed into a session, though never what it typed. While a device that can
-  control is connected, the sidebar says so.
+- **A device with "Can control" can edit your flows.** With the switch on, the device can also change a flow: add,
+  move, resize, link, copy, group and delete cards; change a card's settings, a link's limit and a group's name;
+  undo and redo; and make, rename and delete flows in the projects already in your sidebar. A flow deleted from a
+  device goes to the Trash on your Mac, with its file whole. The Mac did not see you make these changes, so it
+  holds them to rules its own canvas is not held to:
+  - **A Script card's command changed from a device is allowed on the Mac itself.** It stops the run and asks, and
+    no device can give the answer, the one that changed it or any other: somebody at the Mac has to read it and
+    allow it. The Mac remembers that a card's command came from a device for as long as the command stays as it
+    is, in the app's own settings, so quitting the app or undoing and redoing changes nothing. A device can still
+    allow a command that came some other way and is waiting, as it could before.
+  - **A change from a device to what a flow does turns its schedules off.** That is any link, any card added or
+    taken away, and any setting. Moving and resizing cards, grouping them, and notes do not count. The schedules
+    of every flow that runs the changed flow as a sub-flow go off too. They stay off until you turn them on again
+    on the Mac: nothing a device does afterwards, putting things back included, turns one on, and a schedule a
+    device sets arrives switched off.
+  - **A permission mode that skips permission checks cannot be set**, as nowhere else.
+  - **An agent's folder cannot be changed from a device**, by a setting or by Undo. It is picked on the Mac.
+  - **Agents added from a device do not start by themselves.** In a flow that is open on the Mac, an agent card a
+    device adds, copies or brings back has no Claude Code session until someone starts it: the device's
+    **Start agent** or **Start its agents**, or you on the Mac. A flow can be given twelve agents at most from a
+    device.
+  - **Sizes and rates are capped.** A name is 200 characters and 800 bytes at most, any other text 16,000
+    characters and 48,000 bytes, a flow 200 cards, 400 links and 2 MB when it is added to from a device, and a
+    project 200 flows. A device may send 60 commands in a burst and 20 a second after that; more are refused. Key
+    presses for a terminal are not counted in that. A drag the Mac hears no more of ends after two seconds.
+  - **Every kind of change is noted in the flow's log with the device's name.** The first of each kind is written
+    at once, and half a minute later one more line says how many more there were. So a device adds two lines at
+    most for each kind of change in half a minute, however many changes it makes. A long name is cut short
+    there. The log keeps its last 600 lines, so a device that kept changing things for several minutes could
+    still push older lines out of it.
+  - **Undo is shared with the Mac.** A device's Undo and Redo work on the Mac's own list of changes, so a device
+    can undo a change you made on the Mac, and you can undo one a device made.
+  - A device cannot delete the flow your Mac's window is showing, or a flow with a run going or starting, or give
+    a flow a name another flow in the project has.
+- **What a device still cannot do.** With "Can control" on or off, no device can add or remove a project folder,
+  answer the "trust this folder" prompt, turn a schedule on, change a saved role, change the app's settings or the
+  Remote settings, or pair or remove a device: the Mac has no message for any of those. What a device does is
+  noted in the flow's log on the Mac with the device's name: a run started or stopped, a message approved or
+  rejected, a command allowed or not run, agents started, a message sent to a session, each kind of edit, and
+  that it typed into a session, though never what it typed. While a device that can control is connected, the
+  sidebar says so.
+- **What these rules do not stop.** A device with control can type into the orchestrator and into any agent, so
+  it can ask them to change the flow or to run a command, and it can answer Claude Code's own permission prompts
+  in their terminals. A command the orchestrator writes into a Script card at a device's asking is the
+  orchestrator's, and a device may allow it. So may it allow the command of a card you copy on the Mac from one
+  whose command a device wrote: the copy is a new card. A device can raise a flow's sub-flow limit as far as ten. So the
+  rules above keep a device's own edits from running unseen. They do not make "Can control" safe to give to a
+  device you do not trust.
 
 ## What the iPad and iPhone app does
 
@@ -85,9 +129,14 @@ account and talks to no server.
 - **What it sends the Mac.** When pairing: the device's id and its name, which is what the Mac lists it as. On
   each connection: its id, its name and the version of the link it speaks. After that, which flow it has open, and
   each thing you ask of the Mac from it: a button you pressed, such as Run or Approve, a message you wrote for a
-  session, or keys you pressed for a session's terminal. The Mac refuses every one of these unless "Can control"
-  is on for the device, and the app shows no buttons and no place to type while it is off. Nothing is kept to
-  send later: what can't go now is given up.
+  session, keys you pressed for a session's terminal, or a change you made to a flow with Edit on. The Mac refuses
+  every one of these unless "Can control" is on for the device, and the app shows no buttons, no Edit and no place
+  to type while it is off. A button press, a message or a key that can't go now is given up, and so is a change
+  made on the canvas.
+- **What it keeps to send later.** One thing: what you wrote in a card's setting, when the Mac could not be reached
+  or turned it down. It is kept in memory on the device, shown where you wrote it with a line saying it has not
+  been sent, until you send it or discard it or close the app. It is never written to the device's storage, and it
+  is never sent without the Mac checking it like any other change.
 - **Terminals give nothing back.** A terminal on the device is drawn from the output of the session on the Mac.
   That output holds the questions a program asks its terminal, and the terminal on the device answers them, as
   any terminal would. Every answer is dropped on the device. So is anything else the terminal would send: taps on
@@ -111,8 +160,9 @@ account and talks to no server.
   the code that pairing used, could work out that device's key and read what it is sent. The code is on screen for
   two minutes at most. Treat it like a password: don't share your screen or photograph it while it shows.
 - Anyone holding a paired, unlocked iPad or iPhone can read everything that device is sent: instructions, messages
-  between agents, and whatever is on each terminal. If "Can control" is on for it, they can also run your flows and
-  type into your sessions. The app has no lock of its own. Remove the device in the Mac's settings if it is lost.
+  between agents, and whatever is on each terminal. If "Can control" is on for it, they can also run your flows,
+  change them, and type into your sessions. The app has no lock of its own. Remove the device in the Mac's
+  settings if it is lost.
 - Text a device sends for a session is entered there as one paste, with anything a terminal would act on taken out
   of it first. Keys are different: they are sent as they are, because Esc and Ctrl-C are what they are for.
 - A build of the iPad and iPhone app from source in the Debug configuration, which is what Run in Xcode makes,
