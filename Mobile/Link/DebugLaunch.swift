@@ -71,7 +71,8 @@ import UIKit
 ///   -qbWriteNote 1                      when a rejection asks for its note, start writing in the box
 ///   -qbPress <step>                     press one button as a finger does, so that what it asks first is on screen
 ///   -qbEdit 1                           once the flow is on the canvas, press Edit. The steps that edit a flow
-///                                       by touch are in `DebugEditing`.
+///                                       by touch are in `DebugEditing`, and those that change settings and
+///                                       flows are in `DebugSettings`.
 ///
 /// Arguments written this way are read as settings, which is how they get here.
 enum DebugLaunch {
@@ -265,6 +266,13 @@ enum DebugLaunch {
                 case _ where typing(step, in: client) != nil:
                     guard let work = typing(step, in: client) else { continue }
                     client.controls.debugNote(step, await work())
+                case _ where DebugSettings.step(step, in: client) != nil:
+                    guard let work = DebugSettings.step(step, in: client) else { continue }
+                    if isWaitedFor {
+                        client.controls.debugNote(step, await work())
+                    } else {
+                        Task { client.controls.debugNote(step, await work()) }
+                    }
                 case _ where DebugEditing.step(step, in: client) != nil:
                     guard let work = DebugEditing.step(step, in: client) else { continue }
                     if isWaitedFor {
@@ -624,6 +632,7 @@ enum DebugLaunch {
             fields["controls"] = controlsState(client)
             fields["composer"] = composerState(client)
             fields["edit"] = DebugEditing.state(client)
+            fields["settings"] = DebugSettings.state(client)
         } onChange: {
             Task { @MainActor in report(client) }
         }

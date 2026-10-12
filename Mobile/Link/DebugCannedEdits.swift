@@ -6,9 +6,15 @@ import QueenBeeCore
 /// through the same rules in `QueenBeeCore`, or the real Mac's refusal. It keeps its own Undo and Redo, by
 /// the names the real one gives them, and treats a drag's steps as the real one does: one step of Undo for
 /// the whole drag, ended by its last step or by anything else arriving. See `App/Remote/RemoteCommands.swift`.
-/// It changes no card's settings and makes no flows. None of this is in a release build.
+/// It changes a card's settings and the flow's own as the real one does, and makes, renames and deletes
+/// flows in its made-up list. None of this is in a release build.
 struct MadeUpEdits {
     private(set) var flow: Flow
+    /// Its projects, their flows and its saved roles, as it lists them.
+    private(set) var library: RemoteLibrary
+    /// The Start cards whose schedule is on. One is only ever turned on at the Mac, so here they only go off.
+    private(set) var armed: [String]
+    private var flowsMade = 0
     /// Set by a test: every edit is refused in these words until it is cleared.
     var refusing: String?
     private var undos: [(name: String, flow: Flow)] = []
@@ -20,11 +26,33 @@ struct MadeUpEdits {
     private static let cardGone = "That card is no longer in the flow."
     private static let linkGone = "That link is no longer in the flow."
     private static let groupGone = "That group is no longer in the flow."
+    private static let flowGone = "That flow is no longer on your Mac."
+    /// A flow that already runs the open one, so a Flow card here can't run it: the real Mac's own refusal.
+    static let outerFlow = "other002"
 
-    init(flow: Flow) { self.flow = flow }
+    init(flow: Flow, library: RemoteLibrary) {
+        self.flow = flow
+        self.library = library
+        // As if each schedule the flow came with had been turned on at the Mac.
+        armed = flow.cards.filter { $0.kind == .start && $0.trigger != nil }.map(\.id)
+    }
 
     var state: RemoteEditState {
-        RemoteEditState(undo: undos.last.map { "Undo \($0.name)" }, redo: redos.last.map { "Redo \($0.name)" })
+        var fires: [String: Date] = [:]
+        for id in armed {
+            // A whole minute, so what is shown of it doesn't change from one look to the next.
+            let now = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 / 60).rounded(.down) * 60)
+            if let next = flow.card(id)?.trigger?.nextFire(after: now) { fires[id] = next }
+        }
+        return RemoteEditState(undo: undos.last.map { "Undo \($0.name)" }, redo: redos.last.map { "Redo \($0.name)" }, armed: armed, nextFires: fires)
+    }
+
+    private func summary(_ id: String) -> RemoteFlowSummary? { library.projects.flatMap(\.flows).first { $0.id == id } }
+
+    private mutating func changeSummary(_ id: String, _ body: (inout RemoteFlowSummary) -> Void) {
+        for p in library.projects.indices {
+            for f in library.projects[p].flows.indices where library.projects[p].flows[f].id == id { body(&library.projects[p].flows[f]) }
+        }
     }
 
     /// A change made at the Mac itself, by whoever is sitting at it.
@@ -163,8 +191,61 @@ struct MadeUpEdits {
             flow = next.flow
             return nil
 
+        case .patchCard(_, let cardID, let patch):
+            guard let card = flow.card(cardID) else { return Self.cardGone }
+            if patch.trigger != nil || patch.removesTrigger == true, card.kind != .start { return "Only a Start card has a schedule." }
+            if let roleID = patch.role {
+                guard card.kind == .agent else { return "Only an agent card has a role." }
+                if !roleID.isEmpty, !library.roles.contains(where: { $0.id == roleID }) { return "That role is no longer on your Mac." }
+            }
+            if card.kind == .flow, let ref = patch.flowRef, !ref.isEmpty, ref != card.flowRef {
+                guard let inner = summary(ref), ref != flow.id else { return Self.flowGone }
+                if ref == Self.outerFlow { return "\(inner.name) already runs \(flow.name), so the two would go round for ever." }
+            }
+            let refusal = edit("Change \(card.name)") { flow in
+                guard let index = flow.cards.firstIndex(where: { $0.id == cardID }) else { return }
+                if let roleID = patch.role { flow.cards[index].role = roleID.isEmpty ? nil : roleID }
+                if let trigger = patch.trigger { flow.cards[index].trigger = trigger }
+                if patch.removesTrigger == true { flow.cards[index].trigger = nil }
+                try flow.updateCard(cardID, patch: patch.cardPatch)
+            }
+            // A change the Mac didn't see the person make, to what a scheduled flow does, turns its schedules off.
+            let changesWhatRuns = card.kind == .start ? patch.command != nil || patch.trigger != nil || patch.removesTrigger == true
+                : card.kind == .agent && (patch.instructions != nil || patch.permissionMode != nil)
+            if refusal == nil, changesWhatRuns { armed = [] }
+            return refusal
+
+        case .setFlowOption(_, let option):
+            switch option {
+            case .subflowLimit(let levels):
+                guard flow.isSubflow != true else { return "The limit is set on the flow above this one." }
+                flow.subflowLimit = Nesting.clamped(levels)
+            case .notifyOrchestrator(let on):
+                flow.notifyOrchestrator = on
+            }
+            return nil
+
+        case .newFlow(let projectID, let name):
+            guard let index = library.projects.firstIndex(where: { $0.id == projectID }) else { return "That project is no longer in your Mac's sidebar." }
+            flowsMade += 1
+            library.projects[index].flows.append(RemoteFlowSummary(id: "made000\(flowsMade)", name: name.isEmpty ? "Flow \(library.projects[index].flows.count + 1)" : name,
+                                                                   isSubflow: false, activity: .quiet))
+            return nil
+
+        case .renameFlow(let id, let name):
+            guard summary(id) != nil else { return Self.flowGone }
+            changeSummary(id) { $0.name = name }
+            if id == flow.id { flow.name = name }
+            return nil
+
+        case .deleteFlow(let id):
+            guard let found = summary(id) else { return Self.flowGone }
+            guard found.activity != .running else { return "\(found.name) is running. Stop the run before deleting the flow." }
+            for index in library.projects.indices { library.projects[index].flows.removeAll { $0.id == id } }
+            return nil
+
         default:
-            return "This made-up Mac can't change a card's settings, or make or delete a flow."
+            return "This made-up Mac doesn't do that."
         }
     }
 }

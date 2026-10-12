@@ -32,7 +32,7 @@ enum DebugCannedRun {
     /// The flow as the made-up Mac has it now, with its Undo and Redo.
     private static var edits: MadeUpEdits?
     /// What the device was last sent of those, so it is only sent what has changed.
-    private static var told: (flow: Flow, edit: RemoteEditState, revision: Int)?
+    private static var told: (flow: Flow, edit: RemoteEditState, revision: Int, library: RemoteLibrary)?
     /// The size each made-up terminal was started at, by session, so more can be printed in it.
     private static let screens = [writer: (cols: 58, rows: 16), orchestrator: (cols: 40, rows: 30)]
 
@@ -173,16 +173,18 @@ enum DebugCannedRun {
         func other(_ n: Int, _ name: String, _ activity: FlowActivity = .quiet, isSubflow: Bool = false) -> RemoteFlowSummary {
             RemoteFlowSummary(id: "other00\(n)", name: name, isSubflow: isSubflow, activity: activity)
         }
-        client.debugTake(.library(RemoteLibrary(projects: [
+        let library = RemoteLibrary(projects: [
             RemoteProject(id: "p", name: "Book club", flows: [summary, other(1, "Monthly newsletter", .running), other(2, "Reading list", .failed),
                                                              other(3, "Thank the speakers"), other(4, "Check the spelling", isSubflow: true)]),
             RemoteProject(id: "q", name: "Allotment society", flows: [other(5, "Seed order with a long name that runs on"), other(6, "Rota")]),
-        ])))
+        ], roles: [RemoteRole(id: "role0001", name: "Note writer"), RemoteRole(id: "role0002", name: "Proof reader")])
+        let mac = MadeUpEdits(flow: flow, library: library)
+        client.debugTake(.library(library))
         client.open(flowID)
-        client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, log: log, messages: messages, runs: [first, second])))
+        client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, edit: mac.state, log: log, messages: messages, runs: [first, second])))
         current = run
-        edits = MadeUpEdits(flow: flow)
-        told = (flow, RemoteEditState(), 0)
+        edits = mac
+        told = (flow, mac.state, 0, library)
         terminal(writer, cols: screens[writer]?.cols ?? 0, rows: screens[writer]?.rows ?? 0, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"
             + "I'd like to save the draft.\r\n\r\n\(esc)[1mAllow writing to notes/welcome.md?\(esc)[0m\r\n\(esc)[7m 1. Yes \(esc)[0m\r\n 2. No\r\n")
         terminal(orchestrator, cols: screens[orchestrator]?.cols ?? 0, rows: screens[orchestrator]?.rows ?? 0, "\(esc)[1mOrchestrator\(esc)[0m\r\n\(esc)[2mRuns the flow called Welcome note.\(esc)[0m\r\n\r\n"
@@ -348,6 +350,10 @@ enum DebugCannedRun {
             sent.edit = mac.state
             client.debugTake(.edit(id: flowID, state: mac.state))
         }
+        if mac.library != sent.library {
+            sent.library = mac.library
+            client.debugTake(.library(mac.library))
+        }
         told = sent
     }
 
@@ -356,6 +362,8 @@ enum DebugCannedRun {
     ///   delete:<card>          delete a card
     ///   refuse:<words>         refuse every edit from now on, in those words
     ///   accept                 stop refusing
+    ///   set:<card>:<setting>=<text>
+    ///                          change one of a card's settings: name, instructions, command, template, text or value
     static func macDoes(_ what: String, _ client: RemoteClient) {
         guard var mac = edits else { return }
         let parts = what.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
@@ -372,6 +380,21 @@ enum DebugCannedRun {
         case "delete":
             guard let card else { return }
             mac.changeAtMac("Delete Card") { try? $0.removeCard(card.id) }
+        case "set":
+            let change = (parts.count > 2 ? parts[2] : "").split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard let card, change.count == 2 else { return }
+            mac.changeAtMac("Change \(card.name)") { flow in
+                guard let index = flow.cards.firstIndex(where: { $0.id == card.id }) else { return }
+                switch change[0] {
+                case "name": flow.cards[index].name = change[1]
+                case "instructions": flow.cards[index].instructions = change[1]
+                case "command": flow.cards[index].command = change[1]
+                case "template": flow.cards[index].template = change[1]
+                case "text": flow.cards[index].text = change[1]
+                case "value": flow.cards[index].value = change[1]
+                default: break
+                }
+            }
         case "refuse":
             mac.refusing = parts.dropFirst().joined(separator: ":")
         case "accept":
