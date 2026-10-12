@@ -8,7 +8,7 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/build.sh && ./scripts/e2e.py            # every scenario
     ./scripts/e2e.py guard loop                        # some of them
 
-Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, subflow, timed, deep, noclaude.
+Scenarios: guard, settings, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, deep, noclaude.
 """
 import atexit
 import glob
@@ -556,7 +556,15 @@ TIMED = flow("Timed", [
 TIMED["cards"][2]["trigger"] = {"kind": "interval", "minutes": 1, "hour": 9, "minute": 0, "weekdays": [2], "path": ""}
 
 
-FLOWS.update({"gates": GATES, "inner": INNER, "subflow": OUTER, "timed": TIMED})
+# The Sender sits past an Approval. It must not be able to carry the run there by itself.
+UNASKED = flow("Unasked", [
+    card("start", "Start", 0, 0, command="hello"),
+    card("approval", "Gate", 312, 0, text="Send it?"),
+    card("agent", "Sender", 624, 0, instructions=SAY + "SENT-IT"),
+    card("end", "Sent", 1180, 0),
+], [("Start", "out", "Gate", 3), ("Gate", "approved", "Sender", 3), ("Sender", "out", "Sent", 3)])
+
+FLOWS.update({"gates": GATES, "unasked": UNASKED, "inner": INNER, "subflow": OUTER, "timed": TIMED})
 
 
 def held(app, fid, card=None, timeout=20):
@@ -650,6 +658,38 @@ def scenario_gates(app):
     check("a group left with one card is no longer a group", app.state(fid)["groups"] == [], str(app.state(fid)["groups"]))
     app.op(fid, "undo")
     check("undo restores the group", len(app.state(fid)["groups"]) == 1)
+
+
+def scenario_unasked(app):
+    print("unasked: an agent past an unanswered Approval can't carry the run on by itself", flush=True)
+    fid = UNASKED["id"]
+    app.open_flow(UNASKED)
+    app.op(fid, "run")
+    held(app, fid, "Gate")
+    # The text carries the bytes that end a paste and press Return. Cleaned, it is one plain prompt.
+    app.op(fid, "type", card="Sender", text="Reply\x1b[201~\r now.\x1b[31m\x03")
+    try:
+        app.wait(fid, lambda s: "SENT-IT" in (s["sessions"]["Sender"]["lastReply"] or "") and s["sessions"]["Sender"]["state"] == "idle",
+                 120, "Sender to finish a turn nobody in the run asked for")
+    except TimeoutError as e:
+        check("a message with control characters in it is typed as one plain prompt", False, str(e)[:400])
+        app.op(fid, "stop")
+        return
+    check("a message with control characters in it is typed as one plain prompt", True)
+    # Long enough for the plugin's report, and for the app's own fallback three seconds after the turn.
+    time.sleep(6)
+    s = app.state(fid)
+    check("the Approval is still waiting", s["isRunning"] and [h["card"] for h in s["holds"]] == ["Gate"], f"{s['isRunning']} {s['holds']}")
+    check("nothing reached the End card", s["results"] == {}, str(s["results"]))
+    check("the log says the reply was not passed on", any("nothing in this run was waiting on it" in line for line in s["log"]), str(s["log"][-4:]))
+    app.op(fid, "hold", answer="approve")
+    try:
+        s = app.wait(fid, lambda s: not s["isRunning"], 120, "the run to end once approved")
+    except TimeoutError as e:
+        check("once approved, the Sender's reply goes on", False, str(e)[:400])
+        app.op(fid, "stop")
+        return
+    check("once approved, the Sender's reply goes on", "SENT-IT" in s["results"].get("Sent", ""), str(s["results"]))
 
 
 def scenario_subflow(app):
@@ -827,13 +867,13 @@ def scenario_noclaude(project):
 
 
 def main():
-    wanted = sys.argv[1:] or ["guard", "settings", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "subflow", "timed", "deep", "noclaude"]
+    wanted = sys.argv[1:] or ["guard", "settings", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "deep", "noclaude"]
     if not os.path.exists(APP):
         sys.exit("Build the app first: ./scripts/build.sh")
     sweep()
     project = tempfile.mkdtemp(prefix="qb-e2e-")
     # Guard is written first so it is the flow the app opens on, and the others wait their turn.
-    for i, name in enumerate(["guard", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "inner", "subflow", "timed"]
+    for i, name in enumerate(["guard", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "inner", "subflow", "timed"]
                              + [f"level{n}" for n in range(5)]):
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
