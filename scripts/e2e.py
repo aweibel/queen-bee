@@ -431,6 +431,23 @@ def saved_flow(app, fid, test=None, timeout=8):
         time.sleep(0.2)
 
 
+def file_changes(before, after):
+    """What differs between two copies of a flow's file, for a check that failed to say: the top-level settings, and each card's."""
+    try:
+        a, b = json.loads(before), json.loads(after)
+    except ValueError:
+        return "not JSON"
+    found = [(key, a.get(key), b.get(key)) for key in sorted(set(a) | set(b)) if key not in ("cards", "links") and a.get(key) != b.get(key)]
+    was = {c["id"]: c for c in a.get("cards", [])}
+    for c in b.get("cards", []):
+        old = was.pop(c["id"], {})
+        found += [(c.get("name"), key, old.get(key), c.get(key)) for key in sorted(set(c) | set(old)) if old.get(key) != c.get(key)]
+    found += [(c.get("name"), "gone") for c in was.values()]
+    if a.get("links") != b.get("links"):
+        found.append(("links", len(a.get("links", [])), len(b.get("links", []))))
+    return found
+
+
 def remote_edits(app, device, send, ask, done, refused, since):
     """What a device that may control the Mac can do to a flow, checked against the file the Mac saves.
     Every flow here has no agents, and Edits is never opened on the Mac, so no session starts for any of it."""
@@ -1075,6 +1092,10 @@ def remote_control(app, device, device_id):
     every.append(("newFlow", {"flow": "", "project": project, "name": "Made by a watcher"}))
 
     check("pairing leaves a device able to watch and nothing more", app.op("app", "remote-state")["controlling"] == 0)
+    # The Mac saves a flow a moment after its last change, and Guard was changed a moment ago, here and in the
+    # scenario before this one. The files are looked at once that has been saved, so that what is compared is
+    # what the device's commands did and not a save that was already on its way.
+    time.sleep(1.5)
     before, files = mac(), flows_on_disk(app)
     answers = [(do, ask(do, **fields)) for do, fields in every]
     unrefused = [do for do, answer in answers if not refused(answer, "can only watch")]
@@ -1089,7 +1110,7 @@ def remote_control(app, device, device_id):
           str([(a, b) for a, b in zip(mac(), before) if a != b])[:600])
     now = flows_on_disk(app)
     check("and every flow's file is byte for byte what it was, with no new one beside them", now == files and len(files) >= 10,
-          str(sorted(set(now) ^ set(files)) or [name for name in files if now[name] != files[name]]))
+          str(sorted(set(now) ^ set(files)) or [(name, file_changes(files[name], now[name])) for name in files if now[name] != files[name]])[:600])
     check("and there is nothing to undo, and nothing in the flow's log", app.state(edits)["undo"] == "" and app.state(edits)["log"] == [], str(app.state(edits)["log"]))
 
     app.op("app", "remote-control", device=device_id, on=True)
@@ -1936,7 +1957,15 @@ def scenario_mobile(app):
 
         # Editing, on a flow with no agents that the Mac has never opened, so no session starts for any of it.
         # Each gesture is made through what its recogniser calls, and the Mac's saved file is read after each.
-        eid = EDITS["id"]
+        # A flow of its own, put in the project now, which the Mac takes in as it does any flow file that turns up.
+        # `remote` edits Edits and leaves it changed, and it may have run before this in the same test copy.
+        touch = flow("Touch", [card("start", "Start", 0, 0, command="hello"), card("prompt", "Wrap", 312, 0, template="{{message}}"),
+                               card("end", "Done", 624, 0)], [("Start", "out", "Wrap", 3)])
+        write(app.project, 30, touch)
+        eid = touch["id"]
+        deadline = time.time() + 30
+        while "sessions" not in app.state(eid) and time.time() < deadline:
+            time.sleep(0.5)
 
         def edit(state):
             return state.get("edit") or {}
@@ -1964,11 +1993,11 @@ def scenario_mobile(app):
             return mobile.wait(lambda s: len(did(s)) >= done and also(s), 40, f"the app to get as far as its {done}th step")
 
         before = on_mac()
-        mobile.launch("-qbOpen", "Edits", "-qbDo",
+        mobile.launch("-qbOpen", "Touch", "-qbDo",
                       "edit:on;wait:e1;add:script:400,300;wait:e2;zoom:1;move:Script:96,48;wait:e3;link:Wrap:Script;wait:e4;undo;undo;wait:e5;"
                       "redo;wait:e6;delete:Script;wait:e7;move:Start:-3050,0;wait:e8;set:Wrap:name:Wrapper;set:Wrapper:template:Dear reader, {{message}};"
                       "set:link/0:limit:7;wait:e9;newFlow::Made afar;wait:e10;renameFlow:Made afar:Renamed afar;wait:e11;deleteFlow:Renamed afar")
-        s = mobile.wait(lambda s: s.get("openFlow") == "Edits" and edit(s).get("on"), 40, "the app to open Edits and turn editing on")
+        s = mobile.wait(lambda s: s.get("openFlow") == "Touch" and edit(s).get("on"), 40, "the app to open Touch and turn editing on")
         check("with control on, Edit turns editing on for a flow the Mac has never opened",
               edit(s).get("on") is True and [b["id"] for b in edit(s).get("bar", [])] == ["undo", "redo", "add", "select", "tidy", "done"]
               and on_mac() == before, str(edit(s).get("bar")))
@@ -2027,9 +2056,17 @@ def scenario_mobile(app):
               f"{did(s)[-1]} {f['links']}")
         check("each went as one command naming only what changed, and nothing is left unsent",
               fields(s).get("sent") == ["patchCard:name", "patchCard:template", "setLinkLimit:7"] and fields(s).get("kept") == [], f"{fields(s).get('sent')} {fields(s).get('kept')}")
-        log = app.state(eid)["log"]
-        check("and the Mac's log says which device made the edits", any(f"{name} added a Script card" in line for line in log)
-              and any(f"{name} moved" in line for line in log) and any(f"{name} changed" in line and "template" in line for line in log), str(log[-8:]))
+        # The first of each kind of edit is in the log at once. The ones after it are counted, and said half a minute later.
+        deadline = time.time() + 40
+        while True:
+            log = app.state(eid)["log"]
+            counted = [line for line in log if line.startswith(f"{name} changed a card's settings ") and line.endswith(("once more", "more times"))]
+            if counted or time.time() > deadline:
+                break
+            time.sleep(2)
+        check("and the Mac's log says which device made the edits: the first of each kind, and then how many more",
+              any(f"{name} added a Script card" in line for line in log) and any(f"{name} moved" in line for line in log)
+              and any(f"{name} changed Wrap's name" in line for line in log) and bool(counted) and len([line for line in log if name in line]) <= 24, str(log[-10:]))
         mine = app.state(eid)
         check("with no session started on the Mac for any of it", mine["orchestrator"]["state"] == "notStarted" and not mine["isRunning"], str(mine["orchestrator"]))
 
@@ -2097,7 +2134,16 @@ def scenario_mobile(app):
               [r for _, r in did(s)] == [None] * 5 and fields(s).get("sent") == ["patchCard:command"] * 2
               and next(c for c in saved_flow(app, gid)["cards"] if c["name"] == "Shout")["command"] == "tr a-z A-Z", f"{did(s)} {fields(s).get('sent')}")
         check("and the next run is held until it is allowed, even though the command is one that was allowed before",
-              bool(h) and h[0]["needsAllow"] and needing(s) == ["Shout"] and controls(s).get("cards") == {"Shout": script}, f"{h} {needing(s)} {controls(s).get('cards')}")
+              bool(h) and h[0]["needsAllow"] and needing(s) == ["Shout"], f"{h} {needing(s)}")
+        waiting_on_mac = [i for i in (panel(s).get("details") or {}).get("items", []) if i["style"] == "waiting"]
+        check("and it is the Mac's to allow: the device that wrote it has Don't run and no Allow, and says where to allow it",
+              h[0]["allowOnMac"] and controls(s).get("cards") == {"Shout": ["Don't run"]} and controls(s).get("banner") == {"Shout": ["Don't run"]}
+              and panel(s).get("needsYou") == [{"name": "Shout", "reason": "Waiting for you to allow its command on your Mac"}],
+              f"{h} {controls(s).get('cards')} {panel(s).get('needsYou')} {waiting_on_mac}")
+        mobile.shot("mobile-4j-allow-on-mac")
+        app.op(gid, "hold", card="Shout", answer="allow")
+        h = held(app, gid, "Check it")
+        check("allowed on the Mac, the command runs", h[0]["text"] == "HELLO FROM THE START CARD", str(h))
         app.op(gid, "stop")
         app.wait(gid, lambda s: not s["isRunning"], 20, "the held run to stop")
         app.op(gid, "close")
