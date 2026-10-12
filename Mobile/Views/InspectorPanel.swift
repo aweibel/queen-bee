@@ -16,7 +16,8 @@ struct InspectorPanel: View {
                 TabStrip(selected: tab) { panel.show($0) }
                 // A sheet needs its own way out. Beside the canvas, the bar's button hides the panel.
                 if sizeClass == .compact {
-                    Button("Done") { dismiss() }.buttonStyle(.panel(.quiet))
+                    // Not "Done": with Edit on, the foot of the details has a Done of its own, which stops editing.
+                    Button("Close") { dismiss() }.buttonStyle(.panel(.quiet))
                         .padding(.trailing, Theme.Space.xs)
                         .accessibilityHint("Closes the details.")
                 }

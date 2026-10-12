@@ -20,6 +20,8 @@ so it needs the Simulator and no Mac app or Claude Code session.
 the same way.
 `editing` is run only when named: it checks editing a flow by touch in the iPad app against a Mac made up inside the app,
 the same way. No finger touches the screen: each gesture is made through what its recogniser calls.
+`settings-edit` is run only when named: it checks changing settings in the details, and making, renaming and deleting
+flows, in the iPad app against a Mac made up inside the app, the same way.
 """
 import atexit
 import glob
@@ -3088,7 +3090,11 @@ def scenario_settings_edit():
               len(r.get("value", "")) == 200 and r.get("count") == "200 of 200 characters" and row(s, "instructions").get("count") is None, str(r.get("count")))
 
         # Leaving: another thing selected, Done, and the Mac out of reach.
-        s = play("edit:on;pick:Writer;write:Writer:name:Moved on;pick:Start", *on, also=lambda s: "Moved on" in names(s))
+        # It is the details that send it, when what they show changes. Beside the canvas on an iPad they are always
+        # there. On an iPhone they are a sheet, and a setting can only be written in with the sheet up, so there the
+        # sheet is brought up for this, as it would be.
+        sheet = ("-qbShow", "details") if "iPhone" in os.environ.get("QB_E2E_SIMULATOR", "") else ()
+        s = play("edit:on;pick:Writer;write:Writer:name:Moved on;pick:Start", *on, *sheet, also=lambda s: "Moved on" in names(s))
         check("selecting something else sends what was written first", sent(s) == ["patchCard:name"] and "Moved on" in names(s) and settings(s).get("title") == "Start" and kept(s) == [],
               f"{sent(s)} {names(s)} {kept(s)}")
         s = play("edit:on;pick:Writer;write:Writer:name:All done;edit:off", *on, also=lambda s: "All done" in names(s))

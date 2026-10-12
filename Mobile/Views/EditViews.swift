@@ -149,14 +149,19 @@ private struct EditMenuPanel: View {
 /// Asks before a delete that takes more than one thing, and asks a group's new name.
 private struct AsksBeforeEditing: ViewModifier {
     @Environment(RemoteClient.self) private var client
+    /// True for the one inside the details' sheet on an iPhone, which asks while that sheet is up. The one on
+    /// the whole app asks the rest of the time: a question put up under a sheet is never seen.
+    let overSheet: Bool
     @State private var name = ""
 
+    private var isMine: Bool { overSheet || !client.panel.isSheetUp }
+
     private var delete: EditAsk? {
-        if case .delete = client.edit.asking { client.edit.asking } else { nil }
+        if case .delete = client.edit.asking, isMine { client.edit.asking } else { nil }
     }
 
     private var rename: EditAsk? {
-        if case .renameGroup = client.edit.asking { client.edit.asking } else { nil }
+        if case .renameGroup = client.edit.asking, isMine { client.edit.asking } else { nil }
     }
 
     private func isAsking(_ ask: EditAsk?) -> Binding<Bool> {
@@ -181,7 +186,7 @@ private struct AsksBeforeEditing: ViewModifier {
             }
             // What was being asked about may have gone while the question was up: editing turned itself off.
             .onChange(of: client.isEditing) { _, isEditing in
-                if !isEditing { client.edit.asking = nil }
+                if !isEditing, isMine { client.edit.asking = nil }
             }
     }
 
@@ -192,5 +197,5 @@ private struct AsksBeforeEditing: ViewModifier {
 
 extension View {
     /// Puts up the questions that are asked before an edit is sent.
-    func asksBeforeEditing() -> some View { modifier(AsksBeforeEditing()) }
+    func asksBeforeEditing(overSheet: Bool = false) -> some View { modifier(AsksBeforeEditing(overSheet: overSheet)) }
 }

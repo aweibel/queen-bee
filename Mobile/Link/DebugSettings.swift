@@ -17,6 +17,7 @@ import QueenBeeCore
 ///   leave:<of>:<setting>              take the keyboard out of its box, which sends it
 ///   again:<of>:<setting>              press Try Again or Send Again under it
 ///   putBack:<of>:<setting>            press Put Back under it
+///   list                              go back to the list of flows, as Back does on an iPhone: no flow is open then
 ///   flowMenu:<flow>                   hold a finger on a flow's row in the list
 ///   askFlow:new/<project> | askFlow:rename/<flow> | askFlow:delete/<flow>
 ///                                     press + beside a project, or choose from a flow's menu, which asks first
@@ -164,6 +165,13 @@ enum DebugSettings {
                     return nil
                 }
                 return await settled(key, in: client)
+            }
+        case "list":
+            return {
+                client.open(nil)
+                // A moment, for the list to be the screen that is on show.
+                try? await Task.sleep(for: .milliseconds(700))
+                return nil
             }
         case "flowMenu":
             return {

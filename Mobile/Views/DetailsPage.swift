@@ -47,6 +47,20 @@ struct DetailsPage: View {
             if !isEditing { focus = nil }
         }
         .onDisappear { client.flushFields() }
+        #if DEBUG
+        // A test can't tap a box. With `-qbFocus <setting>` the keyboard is put in that setting's box once it is on show.
+        .task(id: client.canvas.selection) {
+            guard let wanted = DebugLaunch.focus else { return }
+            for _ in 0..<40 {
+                if let key = client.editForm?.fields.first(where: { $0.key.name.rawValue == wanted })?.key {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    focus = FieldFocus(key: key)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        #endif
     }
 
     /// Nothing selected: the flow itself.

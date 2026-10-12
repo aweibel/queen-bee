@@ -170,6 +170,7 @@ private struct StackShell: View {
             InspectorPanel()
                 // What a button here or on the canvas asks first comes up over this sheet, not under it.
                 .asksBeforeActing(overSheet: true)
+                .asksBeforeEditing(overSheet: true)
                 .asksAboutFlows(overSheet: true)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
                 .presentationDetents([.medium, .large])
