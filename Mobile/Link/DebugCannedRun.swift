@@ -19,6 +19,7 @@ import QueenBeeCore
 /// real one would: it changes the run, or refuses in the real Mac's words. With `-qbSilent 1` it never answers.
 /// What is typed for a session that is running shows up in that session's terminal, as it would once the
 /// program echoed it. With `-qbStale 1` the sessions have ended without the device being told, so typing is refused.
+/// It makes the edits it is asked for too, to its own copy of the flow, and sends the flow back: see `MadeUpEdits`.
 enum DebugCannedRun {
     static var isWanted: Bool { wanted > 0 }
     private static var wanted: Int { UserDefaults.standard.integer(forKey: "qbCannedRun") }
@@ -28,6 +29,10 @@ enum DebugCannedRun {
     private(set) static var isPlayed = false
     /// The run as the made-up Mac has it now, for it to answer commands from.
     private static var current: RemoteRunState?
+    /// The flow as the made-up Mac has it now, with its Undo and Redo.
+    private static var edits: MadeUpEdits?
+    /// What the device was last sent of those, so it is only sent what has changed.
+    private static var told: (flow: Flow, edit: RemoteEditState, revision: Int)?
     /// The size each made-up terminal was started at, by session, so more can be printed in it.
     private static let screens = [writer: (cols: 58, rows: 16), orchestrator: (cols: 40, rows: 30)]
 
@@ -176,6 +181,8 @@ enum DebugCannedRun {
         client.open(flowID)
         client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, log: log, messages: messages, runs: [first, second])))
         current = run
+        edits = MadeUpEdits(flow: flow)
+        told = (flow, RemoteEditState(), 0)
         terminal(writer, cols: screens[writer]?.cols ?? 0, rows: screens[writer]?.rows ?? 0, "\(esc)[1;38;5;208m● Writer\(esc)[0m in \(esc)[36m~/example/notes\(esc)[0m\r\n\r\n> \(command)\r\n\r\n"
             + "I'd like to save the draft.\r\n\r\n\(esc)[1mAllow writing to notes/welcome.md?\(esc)[0m\r\n\(esc)[7m 1. Yes \(esc)[0m\r\n 2. No\r\n")
         terminal(orchestrator, cols: screens[orchestrator]?.cols ?? 0, rows: screens[orchestrator]?.rows ?? 0, "\(esc)[1mOrchestrator\(esc)[0m\r\n\(esc)[2mRuns the flow called Welcome note.\(esc)[0m\r\n\r\n"
@@ -264,6 +271,7 @@ enum DebugCannedRun {
     /// one does in `App/Remote/RemoteCommands.swift`.
     private static func answer(_ client: RemoteClient, _ id: Int, _ command: RemoteCommand) {
         guard !UserDefaults.standard.bool(forKey: "qbSilent") else { return }
+        if command.isEdit { return answer(client, id, edit: command) }
         Task {
             try? await Task.sleep(for: .milliseconds(150))
             guard var run = current else { return }
@@ -301,8 +309,8 @@ enum DebugCannedRun {
                     let isText = data.allSatisfy { $0 >= 0x20 && $0 != 0x7F }
                     if isRunning(key, in: run) { echo(client, key, isText ? String(decoding: data, as: UTF8.self) : "") } else { refusal = notRunning }
                 default:
-                    // The made-up Mac makes no edits yet. Nothing on the device sends one yet either.
-                    refusal = "This made-up Mac can't change a flow."
+                    // Edits are answered in `answer(_:_:edit:)`.
+                    break
                 }
             }
             if refusal == nil {
@@ -311,6 +319,68 @@ enum DebugCannedRun {
             }
             client.debugTake(.answer(id: id, refusal: refusal))
         }
+    }
+
+    /// What the made-up Mac makes of an edit. It is made at once, so the steps of a drag are made in the
+    /// order they were sent. Then, as the real Mac does, the answer goes first and the changed flow a moment
+    /// after it. A step of a drag that isn't the last gets no answer.
+    private static func answer(_ client: RemoteClient, _ id: Int, edit command: RemoteCommand) {
+        guard var mac = edits else { return }
+        let refusal = client.mirror.canControl ? mac.obey(command) : Remote.watchOnlyRefusal
+        edits = mac
+        Task {
+            try? await Task.sleep(for: .milliseconds(40))
+            if command.isAnswered { client.debugTake(.answer(id: id, refusal: refusal)) }
+            try? await Task.sleep(for: .milliseconds(50))
+            tellFlow(client)
+        }
+    }
+
+    /// Sends the device the flow and its Undo and Redo, if either has changed since it was last sent them.
+    private static func tellFlow(_ client: RemoteClient) {
+        guard let mac = edits, var sent = told else { return }
+        if mac.flow != sent.flow {
+            sent.flow = mac.flow
+            sent.revision += 1
+            client.debugTake(.flow(id: flowID, revision: sent.revision, flow: mac.flow))
+        }
+        if mac.state != sent.edit {
+            sent.edit = mac.state
+            client.debugTake(.edit(id: flowID, state: mac.state))
+        }
+        told = sent
+    }
+
+    /// Something a test has the made-up Mac do by itself, as if someone were sitting at it:
+    ///   move:<card>:<x>,<y>    move a card there
+    ///   delete:<card>          delete a card
+    ///   refuse:<words>         refuse every edit from now on, in those words
+    ///   accept                 stop refusing
+    static func macDoes(_ what: String, _ client: RemoteClient) {
+        guard var mac = edits else { return }
+        let parts = what.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        let card = parts.count > 1 ? mac.flow.cards.first { $0.name == parts[1] } : nil
+        switch parts[0] {
+        case "move":
+            let place = (parts.count > 2 ? parts[2] : "").split(separator: ",").compactMap { Double($0) }
+            guard let card, place.count == 2 else { return }
+            mac.changeAtMac("Move") { flow in
+                guard let index = flow.cards.firstIndex(where: { $0.id == card.id }) else { return }
+                flow.cards[index].x = place[0]
+                flow.cards[index].y = place[1]
+            }
+        case "delete":
+            guard let card else { return }
+            mac.changeAtMac("Delete Card") { try? $0.removeCard(card.id) }
+        case "refuse":
+            mac.refusing = parts.dropFirst().joined(separator: ":")
+        case "accept":
+            mac.refusing = nil
+        default:
+            return
+        }
+        edits = mac
+        tellFlow(client)
     }
 
     private static let notRunning = "That session isn't running."
