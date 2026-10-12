@@ -143,7 +143,9 @@ enum DebugCannedRun {
         var run = RemoteRunState(
             isRunning: true, marks: [start: mark(passes: 2, port: "out"), writer: mark(arrivals: 1), style: mark(arrivals: 1)],
             linkPasses: ["l0": 1, "l1": 1], liveLinkIDs: [], handOffs: 1,
-            holds: [PendingHold(id: "hold0001", cardID: style, kind: .script, text: command, from: "Start", command: "cat docs/style.md", needsAllow: true)],
+            // With `-qbFromDevice 1` the command is one a device wrote, which is allowed at the Mac and nowhere else.
+            holds: [PendingHold(id: "hold0001", cardID: style, kind: .script, text: command, from: "Start", command: "cat docs/style.md", needsAllow: true,
+                                allowOnMac: UserDefaults.standard.bool(forKey: "qbFromDevice") ? true : nil)],
             results: [:], usage: usage, sessions: sessions, awaitingAnswer: [], banner: nil)
         var messages: [String: [LinkMessage]] = [
             "l0": [LinkMessage(date: at(began - 6), from: "Start", text: command)],
@@ -297,6 +299,8 @@ enum DebugCannedRun {
                 case .approve(_, let holdID, _), .reject(_, let holdID, _):
                     if !held(holdID, .approval) { refusal = gone }
                     run.holds.removeAll { $0.id == holdID }
+                case .allowScript(_, let holdID) where run.holds.contains { $0.id == holdID && $0.allowOnMac == true }:
+                    refusal = Remote.allowOnMacRefusal
                 case .allowScript(_, let holdID), .refuseScript(_, let holdID):
                     if !held(holdID, .script) { refusal = gone }
                     run.holds.removeAll { $0.id == holdID }

@@ -65,6 +65,8 @@ import UIKit
 ///                                                                    Library/Caches/qb-wait-<name>
 ///   -qbSilent 1                         with a made-up run: the made-up Mac answers no command
 ///   -qbAnswerWait <n>                   give the Mac n seconds to answer a command, in place of 30
+///   -qbFromDevice 1                     with a made-up run: the command its Script card is waiting on was written
+///                                       from a device, so it is allowed at the Mac and nowhere else
 ///   -qbStale 1                          with a made-up run: its sessions have ended and the made-up Mac
 ///                                       hasn't said so yet, so what is typed is refused
 

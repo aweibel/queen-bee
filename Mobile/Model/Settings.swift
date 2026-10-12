@@ -212,9 +212,10 @@ extension RemoteClient {
     @discardableResult
     func newFlow(in projectID: String, name: String) async -> String? {
         let known = Set(mirror.library?.projects.first { $0.id == projectID }?.flows.map(\.id) ?? [])
-        let refusal = await flowCommand(.newFlow(projectID: projectID, name: String(Remote.plainLine(name).prefix(Remote.nameLimit))))
+        let wanted = String(Remote.plainLine(name).prefix(Remote.nameLimit))
+        let refusal = await flowCommand(.newFlow(projectID: projectID, name: wanted))
         if refusal == nil {
-            settings.awaitingNew = (projectID, known)
+            settings.awaitingNew = NewFlowAwaited(projectID: projectID, known: known, name: Remote.plainLine(wanted), answered: Date())
             openNewFlow()
         }
         return refusal
@@ -234,10 +235,12 @@ extension RemoteClient {
         return refusal
     }
 
-    /// The Mac's list of flows has arrived. A flow that was asked for from here and is now in it is opened.
+    /// The Mac's list of flows has arrived. A flow that was asked for from here a moment ago and is now in it
+    /// is opened. One that turns up later, or under another name, is somebody else's and is left alone.
     func openNewFlow() {
-        guard let awaited = settings.awaitingNew, let project = mirror.library?.projects.first(where: { $0.id == awaited.projectID }),
-              let made = project.flows.first(where: { !awaited.known.contains($0.id) }) else { return }
+        guard let awaited = settings.awaitingNew else { return }
+        guard !awaited.isOver() else { return settings.awaitingNew = nil }
+        guard let project = mirror.library?.projects.first(where: { $0.id == awaited.projectID }), let made = awaited.flow(among: project.flows) else { return }
         settings.awaitingNew = nil
         open(made.id)
     }

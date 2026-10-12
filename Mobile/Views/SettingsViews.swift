@@ -927,7 +927,7 @@ extension FlowAsk {
         switch ask {
         case .new: "Give it a name, or leave this empty and your Mac names it."
         case .rename: "The flow is renamed on your Mac."
-        case .delete: "The flow is deleted from your Mac and its agents are stopped. This cannot be undone."
+        case .delete: "The flow is taken out of this project on your Mac and its agents are stopped. It goes to the Trash on your Mac."
         }
     }
 

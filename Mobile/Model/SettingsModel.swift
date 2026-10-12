@@ -505,8 +505,9 @@ final class SettingsModel {
     var showsFlowSettings = false
     /// The last thing about a flow that the Mac turned down, in its words, shown over the list of flows.
     var refusal: String?
-    /// A new flow was asked for in this project, and is opened when the Mac lists it. The flows it had before.
-    @ObservationIgnored var awaitingNew: (projectID: String, known: Set<String>)?
+    /// A new flow was asked for in this project, and is opened when the Mac lists it: the flows the project
+    /// had before, the name that was asked for, which may be none, and when the Mac said it had made it.
+    @ObservationIgnored var awaitingNew: NewFlowAwaited?
 
     /// How long after the last key a long text is sent.
     static let pause: Duration = .seconds(1)
