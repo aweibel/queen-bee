@@ -66,8 +66,10 @@ public struct ToolDefinition: Equatable, Sendable {
 public struct ToolResult: Equatable, Sendable {
     public let text: String
     public let isError: Bool
+    /// A PNG picture that goes back with the text, in base64. Nil for most tools.
+    public let image: String?
 
-    public init(text: String, isError: Bool) { self.text = text; self.isError = isError }
+    public init(text: String, isError: Bool, image: String? = nil) { self.text = text; self.isError = isError; self.image = image }
 }
 
 /// The tools the orchestrator session builds and runs a flow with.
@@ -195,6 +197,7 @@ public enum Tools {
                 fields["effort"] = text(card.effort)
                 fields["permission_mode"] = text(card.permissionMode)
                 fields["cwd"] = text(card.cwd)
+                fields["browser"] = .bool(card.browser == true)
                 let status = snapshot.agents[card.id]
                 fields["state"] = .string(status?.state ?? "not started")
                 fields["has_last_reply"] = .bool(!(status?.lastReply ?? "").isEmpty)
@@ -298,7 +301,7 @@ public enum Tools {
             description: """
             Change a card's name, position, size or settings. Pass only what should change. A setting that does not \
             belong to the card's kind is refused. Changing a switch's branches removes links from branches that no \
-            longer exist. New agent settings (instructions, model, effort, permission_mode, cwd) apply the next \
+            longer exist. New agent settings (instructions, model, effort, permission_mode, cwd, browser) apply the next \
             time that agent's session starts.
             """,
             inputSchema: schema(
@@ -377,6 +380,7 @@ public enum Tools {
         "effort": ["type": "string", "description": "agent: low, medium, high, xhigh or max. An empty string goes back to the model's default."],
         "permission_mode": ["type": "string", "description": "agent: manual, acceptEdits, plan or auto. An empty string goes back to the person's default."],
         "cwd": ["type": "string", "description": "agent: the folder the agent works in. An empty string goes back to the project folder."],
+        "browser": ["type": "boolean", "description": "agent: true gives the agent a web browser in its card, which the person can watch and use too, and makes the card twice as wide. Turn it on only for an agent whose work needs the web."],
         "command": ["type": "string", "description": "start: the message a run begins with. script: the shell command to run."],
         "check": ["type": "string", "enum": .array(CheckKind.allCases.map { .string($0.rawValue) }),
                   "description": "if, loop: how value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value."],
@@ -405,6 +409,7 @@ private struct Arguments: Sendable {
     /// so the orchestrator finds out instead of believing the change was made.
     private static let settings: [(key: String, kinds: Set<CardKind>)] = [
         ("instructions", [.agent]), ("model", [.agent]), ("effort", [.agent]), ("permission_mode", [.agent]), ("cwd", [.agent]),
+        ("browser", [.agent]),
         ("command", [.start, .script]), ("check", [.ifElse, .loop]), ("value", [.ifElse, .loop]), ("max_tries", [.loop]),
         ("branches", [.switchCard]), ("template", [.prompt]), ("save_to", [.end]), ("text", [.note, .approval]), ("flow", [.flow]),
     ]
@@ -440,6 +445,13 @@ private struct Arguments: Sendable {
         return Int(number)
     }
 
+    func bool(_ key: String) throws -> Bool? {
+        guard let value = value(key) else { return nil }
+        // Models sometimes quote these too.
+        if let flag = value.boolValue ?? value.stringValue.flatMap({ Bool($0.lowercased()) }) { return flag }
+        throw FlowError.invalid("\"\(key)\" must be true or false")
+    }
+
     func strings(_ key: String) throws -> [String]? {
         guard let value = value(key) else { return nil }
         guard let items = value.arrayValue, items.allSatisfy({ $0.stringValue != nil }) else {
@@ -465,6 +477,7 @@ private struct Arguments: Sendable {
         patch.effort = try string("effort")
         patch.permissionMode = try string("permission_mode")
         patch.cwd = try string("cwd")
+        patch.browser = try bool("browser")
         patch.command = try string("command")
         patch.flowRef = try string("flow")
         if let raw = try string("check") {

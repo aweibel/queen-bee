@@ -107,6 +107,17 @@ import Testing
         return written
     }
 
+    @Test func theBrowsersRelayMarksItsRequestsAsItsOwn() {
+        var input = [#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#][...]
+        var sent: [WireRequest] = []
+        HelperCommand.runMCP(kind: "browser-mcp", environment: environment, readLine: { input.popFirst() }, write: { _ in }) { request in
+            sent.append(request)
+            return .null
+        }
+        #expect(sent.map(\.kind) == ["browser-mcp"])
+        #expect(sent.first?.session == "card-42")
+    }
+
     @Test func mcpRelaysEachLineAndWritesEachReply() throws {
         var sent: [WireRequest] = []
         let written = relay([
