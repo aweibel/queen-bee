@@ -13,6 +13,9 @@ final class AgentCardView: CardView {
     private let terminalHolder = FlippedView()
     private weak var terminal: NSView?
     private var stateText = ""
+    /// The card's browser half, while its Browser switch is on.
+    private var browserPane: BrowserPaneView?
+    private let browserRule = NSView()
 
     override var overviewText: String { stateText }
 
@@ -32,6 +35,35 @@ final class AgentCardView: CardView {
         startButton.target = self
         startButton.action = #selector(startSession)
         content.addSubview(startButton)
+
+        browserRule.wantsLayer = true
+        browserRule.isHidden = true
+        content.addSubview(browserRule)
+    }
+
+    /// Shows the card's browser beside its terminal, or takes it away. `tab` is nil when the card has none.
+    func attach(browser tab: BrowserTab?) {
+        guard browserPane?.tab !== tab else { return }
+        browserPane?.letGo()
+        browserPane?.removeFromSuperview()
+        browserPane = tab.map { BrowserPaneView(tab: $0) }
+        if let browserPane { content.addSubview(browserPane, positioned: .below, relativeTo: browserRule) }
+        browserRule.isHidden = browserPane == nil
+        needsLayout = true
+        updateBrowserVisibility()
+    }
+
+    /// The canvas scrolled or zoomed. A browser that can't be seen, or is too small to read, stops streaming.
+    func updateBrowserVisibility() {
+        guard let browserPane else { return }
+        browserPane.isInView = zoom >= Self.overviewBelow && !browserPane.visibleRect.isEmpty
+    }
+
+    override var zoom: CGFloat { didSet { updateBrowserVisibility() } }
+
+    override func removeFromSuperview() {
+        browserPane?.letGo()
+        super.removeFromSuperview()
     }
 
     override var titleAccessories: [NSView] { [stateBadge, costBadge, restartBadge] }
@@ -67,16 +99,25 @@ final class AgentCardView: CardView {
     }
 
     override func layoutContent() {
-        terminalHolder.frame = content.bounds
+        // With a browser the card is split down the middle: terminal on the left, page on the right.
+        var left = content.bounds
+        if let browserPane {
+            left.size.width = (content.bounds.width / 2).rounded()
+            browserRule.frame = CGRect(x: left.maxX, y: 0, width: 1, height: content.bounds.height)
+            browserPane.frame = CGRect(x: left.maxX + 1, y: 0, width: content.bounds.width - left.maxX - 1, height: content.bounds.height)
+        }
+        terminalHolder.frame = left
         // A few points of padding so text doesn't touch the card's edge or the resize corner.
         terminal?.frame = terminalHolder.bounds.insetBy(dx: 6, dy: 4)
         startButton.sizeToFit()
-        startButton.frame.origin = CGPoint(x: (content.bounds.width - startButton.frame.width) / 2,
-                                           y: (content.bounds.height - startButton.frame.height) / 2)
+        startButton.frame.origin = CGPoint(x: left.minX + (left.width - startButton.frame.width) / 2,
+                                           y: (left.height - startButton.frame.height) / 2)
+        updateBrowserVisibility()
     }
 
     override func updateContentLayers() {
         terminalHolder.layer?.backgroundColor = Theme.terminal.cgColor
+        browserRule.layer?.backgroundColor = Theme.hairline.cgColor
     }
 
     @objc private func startSession() {

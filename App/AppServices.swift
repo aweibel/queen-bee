@@ -357,6 +357,11 @@ final class AppServices {
             // any command as the person, which could read another of their processes' environment.
             guard who == FlowController.orchestratorKey else { return fallback(for: request) }
             return await MCPServer.handle(request.payload, host: controller) ?? .null
+        case "browser-mcp":
+            // An agent reaches only the tab of its own card, and only while that card's Browser switch is on.
+            // Which card is asking comes from the session's secret, like everything else here.
+            guard let tab = controller.browserTab(forCard: who) else { return fallback(for: request) }
+            return await MCPServer.handleBrowser(request.payload, host: tab) ?? .null
         default:
             return fallback(for: request)
         }
@@ -370,6 +375,9 @@ final class AppServices {
         case "mcp":
             guard let id = request.payload["id"], !id.isNull else { return .null }
             return ["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "This flow isn't open in Queen Bee."]]
+        case "browser-mcp":
+            guard let id = request.payload["id"], !id.isNull else { return .null }
+            return ["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "This agent's card has no browser. The person can turn one on in the card's settings."]]
         default: return [:]
         }
     }

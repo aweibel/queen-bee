@@ -597,6 +597,8 @@ final class FlowController: ToolHost {
         if historyTask != nil { saveHistory() }
         sessions.values.forEach { $0.terminate() }
         sessions.removeAll()
+        browserCards.forEach { project.browser.release("\(flow.id)/\($0)") }
+        browserCards.removeAll()
         isOpen = false
         isClosed = true
     }
@@ -705,6 +707,11 @@ final class FlowController: ToolHost {
         for (id, session) in sessions where id != Self.orchestratorKey && !agentIDs.contains(id) {
             session.terminate()
             sessions[id] = nil
+        }
+        // A card that was deleted, or had its Browser switch turned off, gives its tab back.
+        for id in browserCards where flow.card(id)?.browser != true {
+            browserCards.remove(id)
+            project.browser.release("\(flow.id)/\(id)")
         }
         switch selection {
         case .card(let id) where flow.card(id) == nil: selection = .none
@@ -961,6 +968,18 @@ final class FlowController: ToolHost {
         }
     }
 
+    // MARK: Browsers
+
+    /// The cards of this flow that have been given a tab in the project's browser.
+    private var browserCards: Set<String> = []
+
+    /// The browser tab of an agent card whose Browser switch is on, or nil for any other card.
+    func browserTab(forCard id: String) -> BrowserTab? {
+        guard !isClosed, let card = flow.card(id), card.kind == .agent, card.browser == true else { return nil }
+        browserCards.insert(id)
+        return project.browser.tab(for: "\(flow.id)/\(id)")
+    }
+
     // MARK: Sessions
 
     /// The session behind an agent card, or behind the orchestrator for `orchestratorKey`.
@@ -994,6 +1013,7 @@ final class FlowController: ToolHost {
         patch.effort = launched.effort
         patch.permissionMode = launched.permissionMode
         patch.cwd = launched.folder
+        patch.browser = launched.browser
         update(id, patch)
     }
 
@@ -1751,14 +1771,15 @@ final class FlowController: ToolHost {
     }
 
     /// An armed schedule runs with nobody watching, so it is tied to what the person agreed to.
-    /// When the orchestrator changes a Start card's command, or an agent's brief, folder or
-    /// permissions, every schedule in the flow goes off until the person turns it on again.
+    /// When the orchestrator changes a Start card's command, or an agent's brief, folder,
+    /// permissions or browser, every schedule in the flow goes off until the person turns it on again.
     private func disarmSchedules(changedFrom old: Flow) {
         let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
         guard !armed.isEmpty else { return }
         let agentsChanged = flow.cards.contains { card in
             guard card.kind == .agent, let was = old.card(card.id) else { return card.kind == .agent }
             return card.instructions != was.instructions || card.cwd != was.cwd || card.permissionMode != was.permissionMode
+                || (card.browser == true) != (was.browser == true)
         }
         guard agentsChanged else { return }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }

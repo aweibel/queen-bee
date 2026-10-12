@@ -164,6 +164,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
     var effort: String
     var permissionMode: String
     var folder: String
+    var browser: Bool
 
     init(_ card: QueenBeeCore.Card) {
         name = card.name
@@ -172,6 +173,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
         effort = card.effort ?? ""
         permissionMode = card.permissionMode ?? ""
         folder = card.cwd ?? ""
+        browser = card.browser == true
     }
 
     /// What differs from `other`, named as the settings panel names it.
@@ -183,6 +185,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
         if effort != other.effort { changed.append("effort") }
         if permissionMode != other.permissionMode { changed.append("permissions") }
         if folder != other.folder { changed.append("folder") }
+        if browser != other.browser { changed.append("browser") }
         return changed
     }
 }

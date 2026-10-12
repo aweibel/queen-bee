@@ -70,8 +70,44 @@ enum TestHarness {
             patch.instructions = payload["instructions"]?.stringValue
             patch.model = payload["model"]?.stringValue
             patch.effort = payload["effort"]?.stringValue
+            patch.browser = payload["browser"]?.boolValue
             controller.update(cardID, patch)
             return [:]
+        case "browserTool":
+            // Calls one of the browser tools on a card's tab, as its agent would.
+            guard let cardID, let name = payload["name"]?.stringValue else { return ["error": "browserTool needs card and name"] }
+            guard let tab = controller.browserTab(forCard: cardID) else { return ["error": "that card has no browser"] }
+            let result = await BrowserTools.call(name: name, arguments: payload["arguments"] ?? [:], host: tab)
+            return ["text": .string(result.text), "isError": .bool(result.isError), "image": result.image.map(JSONValue.string) ?? .null]
+        case "browserDoor":
+            // Sends a browser tool-server message through the app's door with a card's own secret, as its helper would.
+            guard let cardID else { return ["error": "browserDoor needs card"] }
+            let secret = AppServices.shared.credential(for: "\(controller.flow.id)/\(cardID)")
+            return await AppServices.shared.handle(WireRequest(kind: "browser-mcp", session: secret, payload: payload["message"] ?? [:]))
+        case "browserClick":
+            // A click by the person in a card's browser half.
+            guard let cardID, let tab = controller.browserTab(forCard: cardID) else { return ["error": "that card has no browser"] }
+            let point = CGPoint(x: payload["x"]?.doubleValue ?? 0, y: payload["y"]?.doubleValue ?? 0)
+            tab.mouse("mousePressed", at: point, button: "left", buttons: 1, clicks: 1)
+            tab.mouse("mouseReleased", at: point, button: "left", clicks: 1)
+            return [:]
+        case "browserKill":
+            // What a browser crash looks like from outside.
+            guard let pid = controller.project.browser.testProcessID else { return ["error": "no browser is running"] }
+            kill(pid, SIGKILL)
+            return ["pid": .number(Double(pid))]
+        case "browserRestart":
+            controller.project.browser.restart()
+            return [:]
+        case "browserClear":
+            await controller.project.browser.clearData()
+            return ["hasData": .bool(controller.project.browser.hasData)]
+        case "launchArguments":
+            // The command line a card's session would be started with.
+            guard let cardID, let card = controller.flow.card(cardID), let environment = AppServices.shared.environment,
+                  let spec = ClaudeLauncher.agent(flow: controller.flow, card: card, sessionID: "test", projectRoot: controller.project.root,
+                                                  services: AppServices.shared, environment: environment) else { return ["error": "no launch"] }
+            return ["arguments": .array(spec.arguments.map(JSONValue.string))]
         case "revert":
             guard let cardID else { return ["error": "revert needs card"] }
             controller.revertSettings(forCard: cardID)
@@ -198,6 +234,16 @@ enum TestHarness {
             described["instructions"] = .string(card.instructions ?? "")
             described["model"] = card.model.map(JSONValue.string) ?? .null
             described["effort"] = card.effort.map(JSONValue.string) ?? .null
+            described["width"] = .number(card.width)
+            if let tab = controller.browserTab(forCard: card.id) {
+                described["browser"] = [
+                    "url": .string(tab.url), "title": .string(tab.title), "attached": .bool(tab.isAttached),
+                    "hasPicture": .bool(tab.lastFrame != nil), "pictureWidth": .number(Double(tab.lastFrame?.width ?? 0)),
+                    "host": .string("\(tab.hostState)"),
+                ]
+            } else {
+                described["browser"] = .null
+            }
             sessions[card.name] = .object(described)
         }
         var results: [String: JSONValue] = [:]
