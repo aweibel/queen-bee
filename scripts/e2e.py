@@ -18,6 +18,8 @@ so it needs the Simulator and no Mac app or Claude Code session.
 `typing` is run only when named: it checks the iPad app's message box and keys under a terminal, the same way.
 `controls` is run only when named: it checks the iPad app's run bar and buttons against a Mac made up inside the app,
 the same way.
+`editing` is run only when named: it checks editing a flow by touch in the iPad app against a Mac made up inside the app,
+the same way. No finger touches the screen: each gesture is made through what its recogniser calls.
 """
 import atexit
 import glob
@@ -1678,6 +1680,87 @@ def scenario_mobile(app):
         allow(True)
         mobile.wait(lambda s: controls(s).get("canAct"), 15, "the app to hear it may control the Mac again")
 
+        # Editing, on a flow with no agents that the Mac has never opened, so no session starts for any of it.
+        # Each gesture is made through what its recogniser calls, and the Mac's saved file is read after each.
+        eid = EDITS["id"]
+
+        def edit(state):
+            return state.get("edit") or {}
+
+        def on_mac(test=None):
+            return saved_flow(app, eid, test)
+
+        def card_named(f, name):
+            return next((c for c in f["cards"] if c["name"] == name), None)
+
+        def placed(f, name):
+            c = card_named(f, name)
+            return (c["x"], c["y"]) if c else None
+
+        def here(state, name):
+            c = shown(state, name)
+            return (c.get("x"), c.get("y")) if c else None
+
+        def undo_title(state):
+            return next((b["title"] for b in edit(state).get("bar", []) if b["id"] == "undo"), None)
+
+        def step(name, done, also=lambda s: True):
+            """Lets the app past its next wait, and waits for it to have done that many steps."""
+            mobile.go(name)
+            return mobile.wait(lambda s: len(did(s)) >= done and also(s), 40, f"the app to get as far as its {done}th step")
+
+        before = on_mac()
+        mobile.launch("-qbOpen", "Edits", "-qbDo",
+                      "edit:on;wait:e1;add:script:400,300;wait:e2;zoom:1;move:Script:96,48;wait:e3;link:Wrap:Script;wait:e4;undo;undo;wait:e5;"
+                      "redo;wait:e6;delete:Script;wait:e7;move:Start:-3050,0")
+        s = mobile.wait(lambda s: s.get("openFlow") == "Edits" and edit(s).get("on"), 40, "the app to open Edits and turn editing on")
+        check("with control on, Edit turns editing on for a flow the Mac has never opened",
+              edit(s).get("on") is True and [b["id"] for b in edit(s).get("bar", [])] == ["undo", "redo", "add", "select", "tidy", "done"]
+              and on_mac() == before, str(edit(s).get("bar")))
+        mobile.shot("mobile-9a-editing")
+        s = step("e1", 3, also=lambda s: shown(s, "Script"))
+        f = on_mac(lambda f: len(f["cards"]) == 4)
+        check("a card added from the device is saved by the Mac where one dropped there on the Mac lands",
+              did(s)[-1] == ("add:script:400,300", None) and placed(f, "Script") == (280, 286) and here(s, "Script") == (280, 286), f"{did(s)} {f['cards'][-1]}")
+        check("and both name the Mac's Undo for it", app.state(eid)["undo"] == "Add Script" and undo_title(s) == "Undo Add Script", f"{app.state(eid)['undo']} {undo_title(s)}")
+        s = step("e2", 6, also=lambda s: here(s, "Script") == (384, 336) and edit(s).get("overlay") is None)
+        f = on_mac(lambda f: placed(f, "Script") == (384, 336))
+        sent = edit(s).get("sent", [])
+        check("a card dragged on the device, in steps and then a last one, is saved where the finger left it",
+              did(s)[-1] == ("move:Script:96,48", None) and placed(f, "Script") == (384, 336) and here(s, "Script") == (384, 336)
+              and "moveCards:step" in sent and sent.count("moveCards:last") == 1, f"{did(s)} {placed(f, 'Script')} {here(s, 'Script')} {sent}")
+        check("and the whole drag is one step of the Mac's Undo", app.state(eid)["undo"] == "Move" and undo_title(s) == "Undo Move", str(app.state(eid)["undo"]))
+        s = step("e3", 8, also=lambda s: s["canvas"].get("links") == 2)
+        f = on_mac(lambda f: len(f["links"]) == 2)
+        made = [(l["from"], l["port"], l["to"]) for l in f["links"]][-1]
+        check("a link dragged from a card's dot to another card is made on the Mac",
+              did(s)[-1] == ("link:Wrap:Script", None) and made == (card_named(f, "Wrap")["id"], "out", card_named(f, "Script")["id"])
+              and app.state(eid)["undo"] == "Link", f"{did(s)} {made} {app.state(eid)['undo']}")
+        s = step("e4", 11, also=lambda s: s["canvas"].get("links") == 1 and here(s, "Script") == (280, 286))
+        f = on_mac(lambda f: len(f["links"]) == 1 and placed(f, "Script") == (280, 286))
+        check("Undo twice from the device takes back the link and then the move, on the Mac and here",
+              [r for _, r in did(s)[-2:]] == [None, None] and len(f["links"]) == 1 and placed(f, "Script") == (280, 286)
+              and app.state(eid)["undo"] == "Add Script" and undo_title(s) == "Undo Add Script", f"{did(s)} {placed(f, 'Script')} {app.state(eid)['undo']}")
+        s = step("e5", 13, also=lambda s: here(s, "Script") == (384, 336))
+        f = on_mac(lambda f: placed(f, "Script") == (384, 336))
+        check("Redo once moves it again", did(s)[-1] == ("redo", None) and placed(f, "Script") == (384, 336) and len(f["links"]) == 1
+              and app.state(eid)["undo"] == "Move", f"{did(s)} {placed(f, 'Script')} {app.state(eid)['undo']}")
+        s = step("e6", 15, also=lambda s: not shown(s, "Script"))
+        f = on_mac(lambda f: len(f["cards"]) == 3)
+        check("and deleting it from the device deletes it on the Mac", did(s)[-1] == ("delete:Script", None) and [c["name"] for c in f["cards"]] == ["Start", "Wrap", "Done"]
+              and app.state(eid)["undo"] == "Delete Card", f"{did(s)} {[c['name'] for c in f['cards']]} {app.state(eid)['undo']}")
+        s = step("e7", 17, also=lambda s: edit(s).get("overlay") is None and (here(s, "Start") or (0,))[0] == -2900)
+        f = on_mac(lambda f: placed(f, "Start")[0] == -2900)
+        asked = (edit(s).get("lastMove") or {}).get("Start")
+        check("dragged past the Mac's left limit, the card ends where the Mac put it, not where the device asked: the Mac's copy wins",
+              did(s)[-1] == ("move:Start:-3050,0", None) and asked is not None and asked[0] < -2900 and placed(f, "Start")[0] == -2900
+              and here(s, "Start")[0] == -2900, f"asked {asked}, the Mac saved {placed(f, 'Start')}, the device shows {here(s, 'Start')}")
+        log = app.state(eid)["log"]
+        check("and the Mac's log says which device made the edits", any(f"{name} added a Script card" in line for line in log)
+              and any(f"{name} moved" in line for line in log), str(log[-8:]))
+        mine = app.state(eid)
+        check("with no session started on the Mac for any of it", mine["orchestrator"]["state"] == "notStarted" and not mine["isRunning"], str(mine["orchestrator"]))
+
         # A second run that ends another way, so there is an earlier one to look back at.
         app.op(gid, "run")
         held(app, gid, "Check it")
@@ -2205,6 +2288,318 @@ def scenario_controls():
         both("controls-13-start-agents")
         s = play(6, *on, "-qbDo", "startAgents", steps=1, also=lambda s: controls(s).get("bar") == ["Run"])
         check("asked to, the Mac starts them", did(s) == [("startAgents", None)] and controls(s).get("bar") == ["Run"] and controls(s).get("cards") == {}, str(controls(s)))
+    finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_editing():
+    print("editing: the iPad app's canvas edited by touch, with a Mac made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    # The flow `DebugCannedRun` in the app makes up, at the stage where its run has ended, and the edits its
+    # made-up Mac makes to it with the app's own rules. Every launch starts from that flow afresh.
+    on = ("-qbControl", "1")
+    away, gone = "Not connected to your Mac right now.", "That card is no longer in the flow."
+    kinds = ["Agent", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "Approval", "Script", "Flow", "End", "Note"]
+    bar = ["undo", "redo", "add", "select", "tidy", "done"]
+
+    def edit(state):
+        return state.get("edit") or {}
+
+    def controls(state):
+        return state.get("controls") or {}
+
+    def did(state):
+        return [(d["step"], d["refusal"]) for d in controls(state).get("done", [])]
+
+    def play(steps="", *args, stage=3, also=lambda s: True, timeout=40):
+        """Plays the made-up run to a stage, does the steps, and waits for every one that is waited for."""
+        # A step that only waits, or stands in for the Mac, leaves no note that it was done.
+        silent = ("pause", "away", "control:on", "control:off")
+        waited = len([step for step in steps.split(";") if step and not step.startswith("~") and step not in silent])
+        mobile.launch("-qbCannedRun", str(stage), *args, *(("-qbDo", steps) if steps else ()))
+        return mobile.wait(lambda s: s.get("cannedStage") == stage and len(controls(s).get("done", [])) >= waited and also(s),
+                           timeout, f"the app to do {steps or 'nothing'}")
+
+    def answered(state, step):
+        """What the Mac said to one step: None when it was done. "not done" when the step never ran."""
+        return dict(did(state)).get(step, "not done")
+
+    def at(state, name):
+        """Where a card is drawn, and how big."""
+        c = shown_card(state, name)
+        return (c.get("x"), c.get("y"), c.get("width"), c.get("height")) if c else None
+
+    def names(state):
+        return [c["name"] for c in (state.get("canvas") or {}).get("cards", [])]
+
+    def button(state, kind):
+        return next((b for b in edit(state).get("bar", []) if b["id"] == kind), {})
+
+    def sent(state):
+        return edit(state).get("sent", [])
+
+    def both(name):
+        """The same screen in light and in dark."""
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    style = (460, 400, 240, 120)
+    try:
+        # Off, which is how it always starts.
+        s = play("down:title/Both ready;down:grip/Both ready;down:port/Both ready;hold:Both ready;tap:Both ready", *on, "-qbZoomCard", "Both ready", "-qbZoom", "0.8")
+        e = edit(s)
+        check("the app never starts in editing, and offers Edit beside Run when it may control the Mac",
+              e.get("on") is False and [b["id"] for b in e.get("bar", [])] == ["edit"] and controls(s).get("bar") == ["Run"], str(e.get("bar")))
+        check("with editing off no drag is taken: a finger on a title bar, a corner or a dot pans the canvas as before",
+              [d["taken"] for d in e.get("downs", [])] == [False, False, False] and e.get("dragging") is None and e.get("overlay") is None, str(e.get("downs")))
+        check("a held finger brings up nothing, a tap selects as before, and nothing is sent",
+              e.get("menu") is None and e.get("selected") == ["Both ready"] and sent(s) == [] and (s.get("composer") or {}).get("commands") == 0, str(e))
+        check("and VoiceOver is offered no way to edit", "Delete" not in shown_card(s, "Both ready").get("actions", []) and (s["canvas"].get("linkActions") or [[]])[0] == [],
+              str(shown_card(s, "Both ready").get("actions")))
+        both("editing-01-off")
+        s = play("edit:on")
+        check("a device that may only watch has no Edit, and can't turn editing on", edit(s).get("bar") == [] and edit(s).get("on") is False, str(edit(s)))
+
+        # On.
+        s = play("edit:on", *on, "-qbZoomCard", "Both ready", "-qbZoom", "0.8")
+        e = edit(s)
+        check("Edit turns editing on, and the bar becomes Undo, Redo, add, Select, Tidy Up and Done, over the run bar",
+              e.get("on") is True and [b["id"] for b in e.get("bar", [])] == bar and controls(s).get("bar") == ["Run"], str(e.get("bar")))
+        check("with nothing to undo, Undo and Redo are named plainly and can't be pressed",
+              (button(s, "undo").get("title"), button(s, "undo").get("enabled"), button(s, "redo").get("title"), button(s, "redo").get("enabled")) == ("Undo", False, "Redo", False)
+              and all(button(s, k).get("enabled") for k in ("add", "select", "tidy", "done")), str(e.get("bar")))
+        menus = e.get("menus") or {}
+        check("a held finger offers each thing its own menu, in the Mac's words",
+              menus.get("card:Both ready") == ["Run from here…", "Duplicate", "Delete"] and menus.get("card:Start") == ["Duplicate", "Delete"]
+              and menus.get("link:0") == ["Delete Link"] and menus.get("group:Checks") == ["Rename Group…", "Fold into One Card", "Ungroup", "Duplicate", "Delete 2 Cards"],
+              str(menus))
+        check("and on bare canvas the kinds of card, in the order of the Mac's list", menus.get("canvas") == kinds, str(menus.get("canvas")))
+        acts = shown_card(s, "Both ready").get("actions", [])
+        check("VoiceOver can move, link, copy and delete a card, delete a link, and fold, rename and ungroup a group",
+              acts == ["Move left", "Move right", "Move up", "Move down", "Link to…", "Duplicate", "Delete"]
+              and "Link to…" not in shown_card(s, "Sent").get("actions", []) and "Delete" in shown_card(s, "Sent").get("actions", [])
+              and s["canvas"].get("linkActions", [[]])[0] == ["Delete Link"]
+              and s["canvas"].get("groupActions") == {"Checks": ["Fold into One Card", "Rename Group…", "Ungroup"]},
+              f"{acts} {s['canvas'].get('linkActions')} {s['canvas'].get('groupActions')}")
+        both("editing-02-on")
+        s = play("edit:on;edit:off;down:title/Both ready", *on, "-qbZoom", "0.8")
+        check("Done turns it off again", edit(s).get("on") is False and edit(s).get("downs") == [{"meaning": "move:Both ready", "taken": False}], str(edit(s).get("downs")))
+
+        # What a finger comes down on.
+        steps = ("edit:on;zoom:1;down:body/Writer;down:at/-200,-200;down:port/Writer;up;down:grip/Writer;up;down:title/Writer;up;down:group/Checks;up;"
+                 "down:port/Short enough?/no;up;zoom:0.5;down:grip/Start;up;zoom:0.45;down:grip/Start;up;down:body/Writer;up")
+        s = play(steps, *on)
+        downs = [(d["meaning"], d["taken"]) for d in edit(s).get("downs", [])]
+        check("at a zoom where they can be hit, a card is moved by its title bar, resized by its corner and linked from its dots, and its inside pans",
+              downs[:7] == [("body:Writer", False), ("empty", False), ("link:Writer/out", True), ("resize:Writer", True), ("move:Writer", True),
+                            ("moveGroup:Checks", True), ("link:Short enough?/no", True)], str(downs))
+        check("handles are offered from half size up, and below that a drag anywhere on a card moves it",
+              edit(s).get("handlesFromZoom") == 0.5 and downs[7:] == [("resize:Start", True), ("move:Start", True), ("move:Writer", True)], str(downs[7:]))
+        check("and none of that sent anything: a finger that lifts without moving changes nothing", sent(s) == [], str(sent(s)))
+
+        # Moving.
+        s = play("edit:on;down:title/Style guide;to:-117,20,3", *on, "-qbZoomCard", "Style guide", "-qbZoom", "0.8", also=lambda s: edit(s).get("overlay"))
+        e = edit(s)
+        check("a card dragged by its title bar follows the finger at once, from this device's own copy",
+              e.get("dragging") == "move" and (e.get("overlay") or {}).get("cards") == {"Style guide": {"x": 340, "y": 432, "width": 240, "height": 120}}
+              and at(s, "Style guide") == (340, 432, 240, 120), f"{e.get('overlay')} {at(s, 'Style guide')}")
+        check("it lines up with another card's edge as on the Mac, with the Mac's guide line, and sits on the grid the other way",
+              e.get("guides") == [{"vertical": True, "position": 340, "start": 40, "end": 540}], str(e.get("guides")))
+        check("the Mac is sent steps on the way and no last step until the finger lifts",
+              0 < len(sent(s)) <= 3 and set(sent(s)) == {"moveCards:step"} and controls(s).get("waiting") == [], str(sent(s)))
+        both("editing-03-move-guides")
+        s = play("edit:on;zoom:1;down:title/Style guide;to:-117,20,3;mac:move:Both ready:900,480;mac:move:Style guide:0,0", *on, also=lambda s: at(s, "Both ready") == (900, 480, 240, 120))
+        check("a change the Mac makes to another card during a drag shows at once, and the dragged card stays under the finger",
+              at(s, "Both ready") == (900, 480, 240, 120) and at(s, "Style guide") == (340, 432, 240, 120) and edit(s).get("dragging") == "move",
+              f"{at(s, 'Both ready')} {at(s, 'Style guide')}")
+        s = play("edit:on;zoom:1;move:Style guide:-117,20", *on, also=lambda s: button(s, "undo").get("enabled") and edit(s).get("overlay") is None)
+        check("when the finger lifts the Mac is sent one last step and takes it, and the card is where the Mac has it",
+              did(s)[-1] == ("move:Style guide:-117,20", None) and at(s, "Style guide") == (340, 432, 240, 120) and edit(s).get("overlay") is None
+              and sent(s)[-1] == "moveCards:last" and sent(s).count("moveCards:last") == 1, f"{did(s)} {sent(s)} {at(s, 'Style guide')}")
+        check("at most twenty steps a second went, however many times the finger moved", len(sent(s)) <= 5, str(sent(s)))
+        check("and Undo takes the Mac's name for it", (button(s, "undo").get("title"), button(s, "undo").get("enabled")) == ("Undo Move", True), str(button(s, "undo")))
+        s = play("edit:on;zoom:1;down:group/Checks;to:0,120,2;up", *on, also=lambda s: at(s, "Sign off") == (1500, 360, 240, 120) and edit(s).get("overlay") is None)
+        check("a group dragged by its name takes its cards with it", at(s, "Short enough?") == (1200, 360, 240, 140) and at(s, "Sign off") == (1500, 360, 240, 120),
+              f"{at(s, 'Short enough?')} {at(s, 'Sign off')}")
+
+        # What puts things back.
+        s = play(f"edit:on;mac:refuse:{gone};move:Style guide:-117,20", *on, "-qbZoomCard", "Style guide", "-qbZoom", "0.8",
+                 also=lambda s: edit(s).get("overlay") is None)
+        check("a move the Mac refuses goes back to where the Mac has the card, and the Mac's words are shown",
+              did(s)[-1] == ("move:Style guide:-117,20", gone) and at(s, "Style guide") == style and edit(s).get("overlay") is None
+              and controls(s).get("refusal") == gone and edit(s).get("on") is True, f"{did(s)} {at(s, 'Style guide')} {controls(s).get('refusal')}")
+        both("editing-10-refusal")
+        s = play("edit:on;zoom:1;down:title/Style guide;to:-117,20,3;away", *on, "-qbSilent", "1", also=lambda s: s.get("state") == "lookingForMac" and not edit(s).get("on"))
+        check("if the link drops under the finger the drag ends, the card goes back, and editing turns itself off",
+              edit(s).get("on") is False and edit(s).get("overlay") is None and edit(s).get("dragging") is None and at(s, "Style guide") == style
+              and edit(s).get("bar") == [], f"{edit(s)} {at(s, 'Style guide')}")
+        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause;away", *on, "-qbSilent", "1", also=lambda s: did(s)[-1:] == [("move:Style guide:-117,20", away)])
+        check("if it drops while the last step is with the Mac, the card goes back and the person is told",
+              did(s)[-1:] == [("move:Style guide:-117,20", away)] and edit(s).get("overlay") is None and at(s, "Style guide") == style, f"{did(s)} {at(s, 'Style guide')}")
+        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause", *on, "-qbSilent", "1", also=lambda s: (edit(s).get("overlay") or {}).get("settling"))
+        check("until the Mac answers, the card stays where the finger left it and no other can be dragged",
+              (edit(s).get("overlay") or {}).get("settling") is True and at(s, "Style guide") == (340, 432, 240, 120) and controls(s).get("waiting") == ["moveCards"],
+              f"{edit(s).get('overlay')} {controls(s).get('waiting')}")
+        s = play("edit:on;zoom:1;move:Style guide:-117,20;down:title/Start", *on, "-qbSilent", "1", "-qbAnswerWait", "2")
+        check("a drag the Mac never answers isn't left hanging: the card goes back, and the person is told to look on the Mac",
+              answered(s, "move:Style guide:-117,20") == "Your Mac didn't answer. Check the flow on your Mac." and edit(s).get("overlay") is None
+              and at(s, "Style guide") == style and edit(s).get("downs", [])[-1] == {"meaning": "move:Start", "taken": True}, f"{did(s)} {edit(s).get('downs')}")
+        s = play("edit:on;zoom:1;down:title/Style guide;to:-117,20,3;control:off;pause", *on, also=lambda s: not edit(s).get("on"))
+        check("when “Can control” is turned off under the finger, the drag ends and editing turns itself off",
+              edit(s).get("on") is False and edit(s).get("dragging") is None and edit(s).get("overlay") is None and edit(s).get("bar") == [], str(edit(s)))
+        s = play("edit:on;select:on;control:off;pause;control:on;pause", *on, also=lambda s: controls(s).get("canAct"))
+        check("and it stays off when control comes back", edit(s).get("on") is False and edit(s).get("selecting") is False and [b["id"] for b in edit(s).get("bar", [])] == ["edit"],
+              str(edit(s)))
+        s = play("edit:on;viewRun:0", *on, also=lambda s: (s.get("panel") or {}).get("viewedRun"))
+        check("putting an earlier run on show turns editing off", edit(s).get("on") is False and edit(s).get("bar") == [], str(edit(s)))
+        s = play("edit:on;openFlow:Rota", *on, also=lambda s: s.get("openFlow") == "Rota")
+        check("and so does opening another flow", edit(s).get("on") is False, str(edit(s)))
+
+        # Resizing.
+        s = play("edit:on;down:grip/Style guide;to:100,60,3", *on, "-qbZoomCard", "Style guide", "-qbZoom", "0.8", also=lambda s: edit(s).get("overlay"))
+        check("a card dragged by its corner grows under the finger, its corner settling on the grid",
+              edit(s).get("dragging") == "resize" and at(s, "Style guide") == (460, 400, 332, 176) and set(sent(s)) == {"resizeCard:step"}, f"{at(s, 'Style guide')} {sent(s)}")
+        both("editing-04-resize")
+        s = play("edit:on;zoom:1;resize:Style guide:100,60;resize:Writer:-900,-900", *on, also=lambda s: at(s, "Writer") == (340, 40, 320, 200) and edit(s).get("overlay") is None)
+        check("the Mac takes the new size, and a card is never made smaller than its kind allows",
+              at(s, "Style guide") == (460, 400, 332, 176) and at(s, "Writer") == (340, 40, 320, 200) and button(s, "undo").get("title") == "Undo Resize"
+              and sent(s).count("resizeCard:last") == 2, f"{at(s, 'Style guide')} {at(s, 'Writer')} {sent(s)}")
+
+        # Linking.
+        near = ("-qbZoomCard", "Short enough?", "-qbZoom", "0.6")
+        s = play("edit:on;down:port/Both ready;over:Sign off", *on, *near, also=lambda s: (edit(s).get("link") or {}).get("over"))
+        link = edit(s).get("link") or {}
+        check("a link dragged from a dot over a card that would take it lands on that card's input, and the card shows the Mac's outline for it",
+              (link.get("from"), link.get("port"), link.get("over"), link.get("accepts")) == ("Both ready", "out", "Sign off", True)
+              and link.get("points", [[0, 0]])[-1] == [1500, 254] and shown_card(s, "Sign off").get("linkDrop") == "accepts"
+              and shown_card(s, "Sent").get("linkDrop") == "none" and sent(s) == [], f"{link} {shown_card(s, 'Dropped').get('linkDrop')}")
+        both("editing-05-link-accepts")
+        s = play("edit:on;down:port/Both ready;over:Short enough?", *on, *near, also=lambda s: (edit(s).get("link") or {}).get("over"))
+        link = edit(s).get("link") or {}
+        check("over a card that wouldn't, here one it is already linked to, the card shows the other outline, by the Mac's own rules",
+              (link.get("over"), link.get("accepts")) == ("Short enough?", False) and shown_card(s, "Short enough?").get("linkDrop") == "refuses", f"{link}")
+        both("editing-06-link-refuses")
+        s = play("edit:on;zoom:1;link:Both ready:Dropped;down:port/Both ready;to:0,-300;up;link:Short enough?/no:Sent", *on,
+                 also=lambda s: s["canvas"].get("links") == 11 and (s["canvas"].get("selected") or {}).get("link"))
+        check("let go on a card, the Mac is asked for the link and makes it. Let go anywhere else, nothing is asked",
+              answered(s, "link:Both ready:Dropped") is None and did(s)[-1][1] is None and s["canvas"].get("links") == 11 and sent(s) == ["addLink", "addLink"]
+              and button(s, "undo").get("title") == "Undo Link" and (s["canvas"].get("selected") or {}).get("link"), f"{did(s)} {sent(s)} {s['canvas'].get('selected')}")
+        s = play("edit:on;zoom:1;link:Both ready:Start", *on)
+        check("let go on a card that can't take it, the Mac says why in its own words",
+              did(s)[-1] == ("link:Both ready:Start", "A Start card takes no input") and controls(s).get("refusal") == "A Start card takes no input"
+              and s["canvas"].get("links") == 9, str(did(s)))
+        s = play("edit:on;zoom:1;down:port/Start;edge:right:Sent;up", *on, "-qbZoomCard", "Start", also=lambda s: s["canvas"].get("links") == 10, timeout=60)
+        check("held near the canvas's edge the canvas pans under the finger, far enough to reach a card that was off screen",
+              did(s)[-1][1] is None and s["canvas"].get("links") == 10 and s["canvas"]["visible"]["x"] > 400, f"{did(s)} {s['canvas'].get('visible')}")
+
+        # Adding.
+        s = play("edit:on;hold:at/1000,700", *on, "-qbZoom", "0.6", also=lambda s: edit(s).get("menu"))
+        menu = edit(s).get("menu") or {}
+        check("a finger held on bare canvas brings up the kinds of card", menu.get("title") == "Add Card" and [i["title"] for i in menu.get("items", [])] == kinds, str(menu))
+        both("editing-07-add-list")
+        s = play("edit:on;hold:at/1000,700;choose:Prompt;addList;choose:Note;add:script:1000,600", *on,
+                 also=lambda s: len(names(s)) == 11 and edit(s).get("selected") == ["Script"])
+        prompt, script = at(s, "Prompt"), at(s, "Script")
+        check("the one picked goes where the finger was, as one dropped there on the Mac lands", prompt == (880, 686, 240, 96) and script == (880, 586, 240, 120),
+              f"{prompt} {script}")
+        check("the bar's add button offers the same list, and what is picked goes in the middle of what is on screen, clear of the other cards",
+              "Note" in names(s) and inside({k: v for k, v in shown_card(s, "Note").items() if k in ("x", "y", "width", "height")}, s["canvas"]["visible"])
+              and edit(s).get("menu") is None, f"{at(s, 'Note')} {s['canvas'].get('visible')}")
+        check("the new card is selected, as it is on the Mac, and Undo is named for it",
+              edit(s).get("selected") == ["Script"] and button(s, "undo").get("title") == "Undo Add Script" and sent(s) == ["addCard"] * 3, f"{edit(s).get('selected')} {sent(s)}")
+
+        # Menus, deleting, copying.
+        s = play("edit:on;hold:Both ready", *on, "-qbZoomCard", "Both ready", "-qbZoom", "0.8", also=lambda s: edit(s).get("menu"))
+        menu = edit(s).get("menu") or {}
+        check("a finger held on a card selects it and brings up its menu", menu.get("title") == "Both ready" and edit(s).get("selected") == ["Both ready"]
+              and [i["title"] for i in menu.get("items", [])] == ["Run from here…", "Duplicate", "Delete"], str(menu))
+        both("editing-08-card-menu")
+        s = play("edit:on;hold:Both ready;choose:Delete", *on, also=lambda s: edit(s).get("asking"))
+        check("deleting a card that has links is asked about first, and nothing is sent until it is answered",
+              edit(s).get("asking") == "Delete Both ready? The 3 links to it go too. You can undo this." and sent(s) == [] and len(names(s)) == 8, str(edit(s).get("asking")))
+        mobile.shot("editing-08b-delete-asks")
+        s = play("edit:on;delete:Both ready;delete:link/0;duplicate:Style guide", *on, also=lambda s: "Style guide 2" in names(s))
+        check("deleted, the card and its links go, and so does a link by itself",
+              "Both ready" not in names(s) and s["canvas"].get("links") == 5 and [r for _, r in did(s)] == [None] * 4, f"{names(s)} {s['canvas'].get('links')} {did(s)}")
+        check("a copy lands a step down and right of its card, and is selected", at(s, "Style guide 2") == (508, 448, 240, 120) and edit(s).get("selected") == ["Style guide 2"],
+              f"{at(s, 'Style guide 2')} {edit(s).get('selected')}")
+        s = play("edit:on;hold:Both ready;choose:Run from here…", *on, also=lambda s: answered(s, "asked:runFrom:Both ready") is None)
+        check("“Run from here…” on a card's menu is the one in its details, which asks for the message, and sends nothing by itself",
+              answered(s, "asked:runFrom:Both ready") is None and (s.get("panel") or {}).get("page") == "details" and edit(s).get("selected") == ["Both ready"] and sent(s) == [] and (s.get("composer") or {}).get("commands") == 0,
+              str(s.get("panel", {}).get("page")))
+
+        # Selecting.
+        s = play("edit:on;down:at/300,0;select:on;down:at/300,0;to:850,560,3", *on, "-qbZoom", "0.45", also=lambda s: edit(s).get("box"))
+        e = edit(s)
+        check("with Select on, a drag on bare canvas draws the Mac's selection box, and the cards it touches are selected",
+              [d["taken"] for d in e.get("downs", [])] == [False, True] and e.get("dragging") == "box" and e.get("box") == {"x": 300, "y": 0, "width": 850, "height": 560}
+              and e.get("selected") == ["Both ready", "Style guide", "Writer"] and button(s, "select").get("on") is True, f"{e.get('downs')} {e.get('box')} {e.get('selected')}")
+        both("editing-09-select-box")
+        s = play("edit:on;zoom:0.45;select:on;box:300,0,1150,560;tap:Start;tap:Writer;select:off;hold:Style guide", *on, also=lambda s: edit(s).get("menu"))
+        menu = edit(s).get("menu") or {}
+        check("a tap adds a card to what is selected or takes it out, and leaving Select keeps the selection",
+              edit(s).get("selected") == ["Both ready", "Start", "Style guide"] and edit(s).get("selecting") is False and edit(s).get("box") is None, str(edit(s).get("selected")))
+        check("held on one of several selected cards, the menu is about all of them",
+              menu.get("title") == "3 cards" and [i["title"] for i in menu.get("items", [])] == ["Group", "Duplicate", "Delete 3 Cards"], str(menu))
+        s = play("edit:on;zoom:1;select:on;box:300,0,1150,560;select:off;move:Style guide:48,48", *on,
+                 also=lambda s: at(s, "Both ready") == (944, 296, 240, 120) and edit(s).get("overlay") is None)
+        check("dragging one of several selected cards moves them all, and a card that isn't selected stays",
+              at(s, "Style guide") == (504, 456, 240, 120) and at(s, "Writer") == (384, 96, 480, 300) and at(s, "Both ready") == (944, 296, 240, 120)
+              and at(s, "Start") == (40, 240, 240, 120), f"{at(s, 'Style guide')} {at(s, 'Writer')} {at(s, 'Both ready')}")
+
+        # Groups.
+        s = play("edit:on;hold:group/Checks", *on, "-qbZoomCard", "Short enough?", "-qbZoom", "0.7", also=lambda s: edit(s).get("menu"))
+        menu = edit(s).get("menu") or {}
+        check("a finger held on a group's name brings up the group's menu",
+              menu.get("title") == "Checks" and [i["title"] for i in menu.get("items", [])][:3] == ["Rename Group…", "Fold into One Card", "Ungroup"], str(menu))
+        both("editing-11-group-menu")
+        s = play("edit:on;hold:group/Checks;choose:Rename Group…", *on, also=lambda s: edit(s).get("asking"))
+        check("renaming a group asks for the name first", edit(s).get("asking") == "rename:Checks" and sent(s) == [], str(edit(s).get("asking")))
+        s = play("edit:on;group:Start,Writer;fold:Checks:on;rename:Checks:Gate", *on,
+                 also=lambda s: s["canvas"].get("groups") == 2 and shown_card(s, "Sign off").get("hidden") and "group:Gate" in (edit(s).get("menus") or {}))
+        check("cards can be grouped, and a group folded and renamed",
+              [r for _, r in did(s)] == [None] * 4 and s["canvas"].get("groups") == 2 and shown_card(s, "Sign off").get("hidden") is True
+              and (edit(s).get("menus") or {}).get("group:Gate", [])[1:2] == ["Unfold"] and button(s, "undo").get("title") == "Undo Rename Group", f"{did(s)} {edit(s).get('menus')}")
+        s = play("edit:on;ungroup:Checks", *on, also=lambda s: s["canvas"].get("groups") == 0)
+        check("and ungrouped", s["canvas"].get("groups") == 0 and did(s)[-1][1] is None and button(s, "undo").get("title") == "Undo Ungroup", str(did(s)))
+
+        # Undo, Redo, Tidy Up.
+        s = play("edit:on;zoom:1;move:Style guide:48,48;undo", *on, also=lambda s: button(s, "redo").get("enabled") and at(s, "Style guide") == style)
+        check("Undo puts a moved card back, and Redo takes its name",
+              at(s, "Style guide") == style and (button(s, "undo").get("enabled"), button(s, "redo").get("title"), button(s, "redo").get("enabled")) == (False, "Redo Move", True),
+              f"{at(s, 'Style guide')} {edit(s).get('bar')}")
+        s = play("edit:on;zoom:1;move:Style guide:48,48;undo;redo;tidy", *on,
+                 also=lambda s: button(s, "undo").get("title") == "Undo Tidy Up" and s["canvas"].get("fitted"))
+        check("Redo moves it again, and Tidy Up lays the flow out and shows all of it",
+              [r for _, r in did(s)] == [None] * 6 and at(s, "Style guide") not in (style, (504, 456, 240, 120)) and s["canvas"].get("fitted") is True and button(s, "undo").get("title") == "Undo Tidy Up"
+              and sent(s)[-3:] == ["undo", "redo", "tidy"], f"{did(s)} {at(s, 'Style guide')} {sent(s)}")
+        s = play("edit:on;undo", *on)
+        check("with nothing to undo the Mac says so", did(s)[-1] == ("undo", "There is nothing to undo."), str(did(s)))
+        s = play("edit:on;~tidy;pause", *on, "-qbSilent", "1", also=lambda s: controls(s).get("waiting") == ["tidy"])
+        check("while an edit waits for the Mac's answer its own button is off, and the others aren't",
+              button(s, "tidy").get("enabled") is False and button(s, "add").get("enabled") is True, str(edit(s).get("bar")))
+
+        # VoiceOver.
+        s = play("edit:on;voice:Both ready:Move right;voice:Both ready:Move down;voice:Both ready:Link to…", *on, also=lambda s: edit(s).get("menu"))
+        menu = edit(s).get("menu") or {}
+        check("VoiceOver's actions move a card a grid step at a time",
+              at(s, "Both ready") == (924, 264, 240, 120) and sent(s) == ["moveCards:last", "moveCards:last"] and button(s, "undo").get("title") == "Undo Move", f"{at(s, 'Both ready')} {sent(s)}")
+        check("and “Link to…” lists the cards that would take a link from it, by name",
+              menu.get("title") == "Link Both ready to" and [i["title"] for i in menu.get("items", [])] == ["Writer", "Style guide", "Sign off", "Sent", "Dropped"], str(menu))
+        s = play("edit:on;voice:Both ready:Link to…;choose:Sent;voice:Dropped:Delete", *on, also=lambda s: edit(s).get("asking"))
+        check("picking one makes the link, and deleting is still asked about",
+              s["canvas"].get("links") == 10 and sent(s) == ["addLink"] and (edit(s).get("asking") or "").startswith("Delete Dropped?"), f"{sent(s)} {edit(s).get('asking')}")
     finally:
         mobile.appearance("light")
         mobile.quit()
@@ -3045,7 +3440,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels", "controls", "typing")]
+    in_app = [w for w in wanted if w not in ("noclaude", "terminals", "panels", "controls", "typing", "editing")]
     if in_app:
         app = App(project)
         try:
@@ -3085,6 +3480,11 @@ def main():
             scenario_typing()
         except Exception as e:
             check("typing ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "editing" in wanted:
+        try:
+            scenario_editing()
+        except Exception as e:
+            check("editing ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "noclaude" in wanted:
         try:
             scenario_noclaude(project)
