@@ -47,6 +47,8 @@ final class RemoteClient {
     let composer = ComposerModel()
     /// Whether the open flow is being edited from here, and what is under the finger.
     let edit = EditModel()
+    /// The settings being changed from here and not yet taken by the Mac, and what the list of flows is asking.
+    let settings = SettingsModel()
 
     /// How long to look before saying the Mac can't be found. Finding it usually takes well under a second.
     private static let lookLimit: Duration = .seconds(5)
@@ -303,9 +305,15 @@ final class RemoteClient {
         // A welcome starts a new connection, and the mirror forgets what the old one was sent.
         if case .welcome = message { failWaiting() }
         mirror.apply(message).forEach(terminals.receive)
-        if case .answer(let id, let refusal) = message {
+        switch message {
+        case .answer(let id, let refusal):
             giveUps.removeValue(forKey: id)?.cancel()
             answers.removeValue(forKey: id)?.resume(returning: refusal)
+        // The Mac's copy of the flow is what every setting that isn't being written in shows.
+        case .opened, .flow: fieldsFollowMac()
+        // A flow made from here is opened once the Mac lists it.
+        case .library: openNewFlow()
+        default: break
         }
     }
 
@@ -491,6 +499,7 @@ final class RemoteClient {
         controls.clear()
         composer.clear()
         stopEditing()
+        settings.clear()
         terminals.reset()
         canvas.viewports = [:]
         noteMac(notFound: false)

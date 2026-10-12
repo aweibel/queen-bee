@@ -28,6 +28,7 @@ struct ShellView: View {
         .fullScreenCover(item: expanded) { TerminalViewer(key: $0.id) }
         .asksBeforeActing()
         .asksBeforeEditing()
+        .asksAboutFlows()
         #if DEBUG
         .task { if DebugLaunch.show == "settings" { showsSettings = true } }
         #endif
@@ -169,6 +170,7 @@ private struct StackShell: View {
             InspectorPanel()
                 // What a button here or on the canvas asks first comes up over this sheet, not under it.
                 .asksBeforeActing(overSheet: true)
+                .asksAboutFlows(overSheet: true)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
                 .presentationDetents([.medium, .large])
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))

@@ -1,26 +1,52 @@
 import QueenBeeCore
 import SwiftUI
 
-/// The details page: the selected card, link or group, or the flow when nothing is selected.
+/// The details page: the selected card, link or group, or the flow when nothing is selected. With editing
+/// on, what is selected has its settings open to change. Editing is the canvas's own mode, so one switch
+/// governs all of it, and the foot of the page says which way it is set.
 struct DetailsPage: View {
     @Environment(RemoteClient.self) private var client
     let snapshot: RemoteFlowSnapshot
     let run: RunOnShow
+    /// The setting the keyboard is in.
+    @FocusState private var focus: FieldFocus?
 
     var body: some View {
-        ScrollView {
-            let siblings = client.openFlow?.project.flows ?? []
-            if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings) {
-                DetailsView(details: details, card: client.canvas.selection.cardID.flatMap(snapshot.flow.card),
-                            flow: snapshot.flow, run: run, abilities: client.abilities)
-                    // A fresh view for each thing selected, so one card's opened-up text isn't left open on the next.
-                    .id(client.canvas.selection)
-            } else {
-                overview
-                    .padding(Theme.Space.l)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { scroll in
+            ScrollView {
+                let siblings = client.openFlow?.project.flows ?? []
+                let card = client.canvas.selection.cardID.flatMap(snapshot.flow.card)
+                if let form = client.editForm {
+                    EditDetails(form: form, card: card, flow: snapshot.flow, run: run, abilities: client.abilities, focus: $focus)
+                        .id(client.canvas.selection)
+                } else if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings) {
+                    DetailsView(details: details, card: card, flow: snapshot.flow, run: run, abilities: client.abilities)
+                        // A fresh view for each thing selected, so one card's opened-up text isn't left open on the next.
+                        .id(client.canvas.selection)
+                } else {
+                    overview
+                        .padding(Theme.Space.l)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // The box being written in is kept clear of the keyboard and of the foot of the page.
+            .onChange(of: focus) { _, new in
+                guard let new else { return }
+                withAnimation(Theme.Motion.standard) { scroll.scrollTo(new, anchor: .center) }
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { EditFoot(focus: $focus) }
+        .onChange(of: focus) { old, new in client.focusMoved(from: old?.key, to: new?.key) }
+        // What was written for the thing that was selected is sent before the next thing's settings come up.
+        .onChange(of: client.canvas.selection) {
+            focus = nil
+            client.flushFields()
+        }
+        .onChange(of: client.isEditing) { _, isEditing in
+            if !isEditing { focus = nil }
+        }
+        .onDisappear { client.flushFields() }
     }
 
     /// Nothing selected: the flow itself.
@@ -38,13 +64,19 @@ struct DetailsPage: View {
             Text("Tap a card or a link on the canvas to see what it is set to.")
                 .dsSans(Theme.Touch.caption + 1)
                 .foregroundStyle(Theme.inkSecondary.ui)
+            if client.abilities.canAct {
+                Button { client.showFlowSettings() } label: { Label("Flow Settings…", systemImage: "slider.horizontal.3") }
+                    .buttonStyle(.panel())
+                    .accessibilityHint("Renames the flow, and sets how deep its sub-flows go and whether the orchestrator is told when a run ends.")
+            }
         }
     }
 }
 
 /// One card, link or group: a header that names it, then what it is set to, as the Mac's settings panel has
-/// it. Nothing it is set to can be changed here, and the last line says where it can. What a run is waiting
-/// on can be answered here, and a run started at the card, when this device may control the Mac.
+/// it. Nothing it is set to can be changed here: that is `EditDetails`, once Edit is pressed. For a device
+/// that may only watch, the last line says where changes are made. What a run is waiting on can be answered
+/// here, and a run started at the card, when this device may control the Mac.
 private struct DetailsView: View {
     @Environment(RemoteClient.self) private var client
     let details: Details
@@ -87,41 +119,20 @@ private struct DetailsView: View {
                                 lastMessage: flow.links(into: card.id).compactMap { run.messages[$0.id]?.last }.max { $0.date < $1.date }?.text ?? "")
                 }
             }
-            Hairline()
-            Text(Details.changes)
-                .dsSans(Theme.Touch.caption + 1)
-                .foregroundStyle(Theme.inkSecondary.ui)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.m)
+            // A device that may control the Mac is told how at the foot of the page, where Edit is.
+            if !abilities.canAct {
+                Hairline()
+                Text(Details.changes)
+                    .dsSans(Theme.Touch.caption + 1)
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.Space.l)
+                    .padding(.vertical, Theme.Space.m)
+            }
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: details.icon)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.ink.ui)
-                .frame(width: 22)
-                .accessibilityHidden(true)
-            Text(details.title)
-                .dsMono(Theme.Touch.title, .medium)
-                .foregroundStyle(Theme.ink.ui)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: Theme.Space.s)
-            if let state = details.state {
-                Badge(text: state.label.lowercased(), tone: state.tone)
-            } else {
-                Text(details.kind).dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
-            }
-        }
-        .padding(.horizontal, Theme.Space.l)
-        .padding(.vertical, Theme.Space.m)
-        .frame(maxWidth: .infinity, minHeight: Theme.Touch.target, alignment: .leading)
-        .background(Theme.bar.ui)
-        .accessibilityElement(children: .combine)
-    }
+    private var header: some View { DetailsHeader(icon: details.icon, title: details.title, kind: details.kind, state: details.state) }
 }
 
 extension SessionState {
@@ -136,7 +147,7 @@ extension SessionState {
 }
 
 /// One line of the details, drawn for what kind of line it is.
-private struct ItemView: View {
+struct ItemView: View {
     let item: DetailItem
     /// Said under what is waiting, when it can't be answered here.
     let answerLine: String?
@@ -175,6 +186,15 @@ private struct ItemView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.m)
+        case .caution:
+            Label(item.label, systemImage: "exclamationmark.circle")
+                .dsSans(Theme.Touch.caption + 1)
+                .foregroundStyle(Theme.liveInk.ui)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.vertical, Theme.Space.m)
+                .background(Theme.liveTint.ui)
         case .warning:
             Label(item.label, systemImage: "exclamationmark.triangle")
                 .dsSans(Theme.Touch.body, .medium)
@@ -254,7 +274,7 @@ struct LongText: View {
 }
 
 /// What a link carried in the run on show, oldest first, so it reads down the page in the order it happened.
-private struct MessageList: View {
+struct MessageList: View {
     let title: String
     let messages: [LinkMessage]
 

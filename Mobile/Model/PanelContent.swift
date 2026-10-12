@@ -100,6 +100,8 @@ nonisolated struct DetailItem: Equatable {
         case code
         /// A sentence of help.
         case note
+        /// A sentence to take care over: what changing something from here will do.
+        case caution
         /// Something wrong with the card's wiring.
         case warning
         /// The card is holding a message. The value is the message, or the command to be allowed.
@@ -116,7 +118,8 @@ nonisolated struct DetailItem: Equatable {
 }
 
 /// What the details panel says about the selected card, link or group: the Mac's `InspectorView`, with each
-/// setting as words in place of a control. The names and the help are the Mac's.
+/// setting as words in place of a control. The names and the help are the Mac's. With editing on, `EditForm`
+/// takes its place.
 nonisolated struct Details: Equatable {
     var icon: String
     var title: String
@@ -307,7 +310,7 @@ nonisolated struct Details: Equatable {
             items.append(DetailItem(style: .row, label: "Runs", value: "When a file changes"))
             items.append(DetailItem(style: .row, label: "File or folder in the project", value: path.isEmpty ? "No file chosen" : path))
         }
-        // Whether a schedule has been agreed to is kept on the Mac and not sent.
+        // Whether it is on just now is said where it can be changed: see `EditForm`.
         items.append(DetailItem(style: .note, label: "A schedule only runs once it has been turned on on your Mac, and Queen Bee has to be open there."))
         return items
     }

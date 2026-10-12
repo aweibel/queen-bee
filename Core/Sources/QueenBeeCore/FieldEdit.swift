@@ -41,6 +41,9 @@ public struct FieldEdit<Value: Equatable & Sendable>: Equatable, Sendable {
 
     public init(mac: Value) { self.mac = mac }
 
+    /// What the Mac is taken to have: what it just took from here, until its own copy says.
+    private var believed: Value { taken ?? mac }
+
     /// What the field shows.
     public var shown: Value { draft ?? held ?? taken ?? mac }
 
@@ -63,10 +66,10 @@ public struct FieldEdit<Value: Equatable & Sendable>: Equatable, Sendable {
     /// The person changed what is in the field.
     public mutating func write(_ value: Value) {
         guard value != shown else { return }
-        taken = nil
         held = hasFocus ? value : nil
-        if value == mac, state != .sending {
-            // Written back to what the Mac has: there is nothing to send.
+        if value == believed, state != .sending {
+            // Written back to what the Mac has: there is nothing to send. What the Mac has is what it last
+            // took from here, when its own copy of that hasn't arrived yet.
             draft = nil
             state = .untouched
             return
@@ -91,10 +94,10 @@ public struct FieldEdit<Value: Equatable & Sendable>: Equatable, Sendable {
     /// something is already on its way.
     public mutating func send() -> Value? {
         guard state != .sending, let draft else { return nil }
-        guard draft != mac else {
+        guard draft != believed else {
             self.draft = nil
             state = .untouched
-            if hasFocus { held = mac }
+            if hasFocus { held = believed }
             return nil
         }
         inFlight = draft

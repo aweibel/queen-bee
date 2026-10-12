@@ -74,6 +74,29 @@ import Testing
         #expect(f.shown == "Author." && f.isIdle)
     }
 
+    @Test func changedBackBeforeTheMacsCopyArrivesItIsSentAgain() {
+        var f = field("tr a-z A-Z")
+        f.write("tr a-z A-Z | rev")
+        _ = f.send()
+        f.answered(nil)
+        // The Mac has the new command, though its copy of the flow hasn't come. Going back is a change.
+        f.write("tr a-z A-Z")
+        #expect(f.state == .edited && f.send() == "tr a-z A-Z")
+        f.answered(nil)
+        f.macHas("tr a-z A-Z")
+        #expect(f.shown == "tr a-z A-Z" && f.isIdle)
+    }
+
+    @Test func writtenAgainAsTheMacJustTookItThereIsNothingToSend() {
+        var f = field()
+        f.write("Author")
+        _ = f.send()
+        f.answered(nil)
+        f.write("Author!")
+        f.write("Author")
+        #expect(f.state == .untouched && f.send() == nil && f.shown == "Author")
+    }
+
     @Test func whenTheMacsCopyArrivesBeforeItsAnswerNothingIsLeftOver() {
         var f = field()
         f.write("Author")

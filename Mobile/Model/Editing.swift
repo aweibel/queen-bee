@@ -19,6 +19,8 @@ extension RemoteClient {
     /// when this device may no longer act: control was turned off, the link dropped, or an earlier run was put on show.
     func stopEditing() {
         canvas.view?.letGoOfDrag()
+        // What was written in a setting and not sent is sent now, or kept if the Mac can't be reached.
+        flushFields()
         edit.stop()
     }
 
