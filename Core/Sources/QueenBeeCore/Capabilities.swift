@@ -206,6 +206,9 @@ public enum Capabilities {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Where the app keeps a copy of the reference in each project, for the orchestrator to read.
+    public static let projectFile = ".queenbee/CAPABILITIES.md"
+
     /// The reference as it is saved in the repository, with a note on where it comes from.
     public static var file: String {
         "<!-- Written by ./scripts/build.sh from Core/Sources/QueenBeeCore/Capabilities.swift. Don't edit this file: change that one. -->\n\n" + reference

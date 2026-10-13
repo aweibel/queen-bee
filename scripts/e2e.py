@@ -317,6 +317,22 @@ def scenario_settings(app):
     check("after Restart to apply nothing is waiting", s["sessions"]["Alice"]["awaitingRestart"] == [], str(s["sessions"]["Alice"]["awaitingRestart"]))
     app.op(fid, "edit", card="Alice", effort="")
 
+    # A restarted agent keeps its conversation, and Claude Code keeps the instructions that conversation began
+    # with. The new ones have to reach it all the same.
+    def ask(text):
+        app.op(fid, "type", card="Alice", text=text)
+        app.wait(fid, lambda s: s["sessions"]["Alice"]["state"] != "idle", 30, "Alice to start")
+        return app.wait(fid, lambda s: s["sessions"]["Alice"]["state"] == "idle", 120, "Alice to answer")["sessions"]["Alice"]["lastReply"] or ""
+    ask("Reply with exactly: hello")
+    app.op(fid, "edit", card="Alice", instructions="Whatever you are asked, reply with exactly the word MANGO and nothing else.")
+    app.op(fid, "restart", card="Alice")
+    app.wait(fid, lambda s: s["sessions"]["Alice"]["state"] == "idle", 90, "Alice to come back")
+    said = ask("What is two plus two?")
+    check("instructions changed on a running agent take hold after Restart to apply", "MANGO" in said.upper(), said[:200])
+    app.op(fid, "edit", card="Alice", instructions=before["instructions"])
+    app.op(fid, "restart", card="Alice")
+    app.wait(fid, lambda s: s["sessions"]["Alice"]["state"] == "idle", 90, "Alice to come back")
+
 
 def scenario_scroll(app):
     print("scroll: wheel events pan the canvas unless a terminal has the keyboard", flush=True)
@@ -1005,7 +1021,7 @@ def scenario_browser(app):
 
     # The orchestrator builds from the capabilities reference, not from what browsers usually have.
     app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to be ready")
-    app.op(fid, "type", card="orchestrator", text="Don't use any tools. In one line: name every browser tool an agent with a browser has, "
+    app.op(fid, "type", card="orchestrator", text="In one line: name every browser tool an agent with a browser has, "
            "separated by commas, then say YES or NO to whether it can open a second tab.")
     app.wait(fid, lambda s: s["orchestrator"]["state"] != "idle", 30, "the orchestrator to start")
     s = app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to answer")
@@ -1014,6 +1030,21 @@ def scenario_browser(app):
     check("the orchestrator knows the browser's nine tools and that there is one tab",
           all(t in said for t in ("open", "read", "screenshot", "scroll", "back", "wait", "click", "type", "press")) and "no" in words and "yes" not in words,
           said[:300])
+
+    saved = os.path.join(app.project, ".queenbee", "CAPABILITIES.md")
+    check("the reference the orchestrator reads is written into the project",
+          os.path.exists(saved) and "It is one tab per card" in open(saved).read())
+
+    # A session that is resumed keeps its first instructions, so one started by an older version is told what is new.
+    app.op(fid, "restartOrchestrator", forget=True)
+    app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to come back")
+    app.op(fid, "type", card="orchestrator", text="Don't use any tools. When this session started just now, were you given new instructions and told to read a "
+           "capabilities file? Reply with YES or NO, then the file's name.")
+    app.wait(fid, lambda s: s["orchestrator"]["state"] != "idle", 30, "the orchestrator to start")
+    s = app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to answer")
+    said = s["orchestrator"]["lastReply"] or ""
+    check("a resumed orchestrator is handed its current instructions and pointed at the reference",
+          said.strip().upper().startswith("YES") and "CAPABILITIES.md" in said, said[:300])
 
     # A real agent, through Claude Code, the helper and the door.
     tool("open", url=site + "/two.html")

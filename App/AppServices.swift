@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Network
 import Observation
@@ -145,6 +146,7 @@ final class AppServices {
         installPlugin()
         startServer()
         loadRoles()
+        loadTold()
         // Also a backstop for flow files the watcher missed while the app was in the background.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in AppServices.shared.projects.forEach { $0.rescan() } }
@@ -273,6 +275,74 @@ final class AppServices {
         controllers[flowID] = nil
     }
 
+    // MARK: What sessions have been told
+
+    /// What a Claude Code session knows of its instructions. A session that is resumed keeps the instructions it
+    /// was first started with, whatever it is started with now, so anything newer has to be handed to it.
+    private struct Told: Codable {
+        /// The instructions the session was first started with, as a stamp.
+        var born: String?
+        /// The newer instructions handed to it since, as a stamp.
+        var delivered: String?
+        /// The capabilities reference it was last pointed at, as a stamp.
+        var reference: String?
+    }
+
+    @ObservationIgnored private var told: [String: Told] = [:]
+    private var toldURL: URL { supportDirectory.appendingPathComponent("sessions-told.json") }
+
+    private func loadTold() {
+        guard let data = try? Data(contentsOf: toldURL), let saved = try? JSONDecoder().decode([String: Told].self, from: data) else { return }
+        told = saved
+    }
+
+    private func saveTold() {
+        guard let data = try? JSONEncoder().encode(told) else { return }
+        try? data.write(to: toldURL, options: .atomic)
+    }
+
+    static func stamp(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A session is being started for the first time, with these instructions.
+    func noteBorn(session id: String, instructions: String) {
+        told[id] = Told(born: Self.stamp(instructions))
+        saveTold()
+    }
+
+    /// Whether a session that has just started needs to be handed `instructions`, because they aren't the ones
+    /// it was first started with and it hasn't been handed them since. `afresh` is true when the session's
+    /// context was cleared or summarised, which loses whatever it was handed before.
+    func needsInstructions(session id: String, instructions: String, afresh: Bool) -> Bool {
+        let now = Self.stamp(instructions)
+        var record = told[id] ?? Told()
+        guard record.born != now else { return false }
+        guard afresh || record.delivered != now else { return false }
+        record.delivered = now
+        told[id] = record
+        saveTold()
+        return true
+    }
+
+    /// Whether the capabilities reference has changed since this session was last pointed at it.
+    func referenceChanged(forSession id: String, afresh: Bool) -> Bool {
+        let now = Self.stamp(Capabilities.reference)
+        var record = told[id] ?? Told()
+        guard afresh || record.reference != now else { return false }
+        record.reference = now
+        told[id] = record
+        saveTold()
+        return true
+    }
+
+    #if DEBUG
+    /// Makes every session look as if it had been started by an earlier version of the app.
+    func testForgetWhatSessionsWereTold() {
+        told = told.mapValues { _ in Told(born: "an earlier version") }
+    }
+    #endif
+
     // MARK: Socket
 
     /// What each session was told to call itself, and the session key that belongs to.
@@ -338,8 +408,7 @@ final class AppServices {
         let who = parts[1]
         switch request.kind {
         case "hook":
-            controller.handleHook(from: who, payload: request.payload)
-            return [:]
+            return controller.handleHook(from: who, payload: request.payload)
         case "route":
             let deliveries = await controller.handleRoute(from: who, answer: request.payload["answer"]?.stringValue ?? "",
                                                           asked: request.payload["asked"]?.boolValue == true)

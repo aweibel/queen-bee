@@ -11,4 +11,6 @@ Whenever you add, remove or change a card, a card setting, an agent tool or a li
 3. Run `cd Core && swift test`. It fails if a setting in `CardPatch` isn't described, if a described setting can't be set, or if `CAPABILITIES.md` is out of date.
 4. Commit `CAPABILITIES.md` with the change.
 
+The app also writes the reference into each project as `.queenbee/CAPABILITIES.md` when an orchestrator's session starts, and tells the orchestrator to read it when it has changed. A session that is resumed keeps the system prompt it began with, so anything a running session must learn goes through that file or the session-start hook (`FlowController.startContext`), never through the prompt alone.
+
 Don't describe a capability anywhere else: not in the orchestrator's prompt in `ClaudeLauncher.swift`, and not in a tool's description.

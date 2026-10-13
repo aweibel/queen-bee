@@ -29,6 +29,15 @@ import Testing
         ])
     }
 
+    @Test func hookPrintsWhatTheAppWantsPutInFrontOfTheSession() throws {
+        let context: JSONValue = ["hookSpecificOutput": ["hookEventName": "SessionStart", "additionalContext": "Read the reference."]]
+        let result = run(["hook"], stdin: #"{"hook_event_name":"SessionStart","source":"resume"}"#, reply: context)
+        #expect(result.exitCode == 0)
+        #expect(try JSONValue.parse(Data(result.output.utf8)) == context)
+        // Anything else the app answers with stays unprinted, as Claude Code would try to read it.
+        #expect(run(["hook"], stdin: #"{"hook_event_name":"SessionStart"}"#, reply: ["additionalContext": "x"]).output.isEmpty)
+    }
+
     @Test func hookNeverBlocksClaude() {
         let unreachable = run(["hook"], stdin: #"{"hook_event_name":"Stop"}"#, reply: nil)
         #expect(unreachable.output.isEmpty && unreachable.exitCode == 0 && unreachable.sent.count == 1)

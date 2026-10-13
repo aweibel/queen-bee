@@ -259,7 +259,7 @@ public enum Tools {
             name: "add_card",
             description: """
             Add a card to the flow. What each kind does, its settings and its limits are in the capabilities \
-            reference in your instructions. The kinds, with their outputs: \(Capabilities.outputsLine). \
+            reference, \(Capabilities.projectFile) in the project folder. The kinds, with their outputs: \(Capabilities.outputsLine). \
             Only pass the settings that belong to the kind. Leave out x and y to place the card to the right of the \
             others, which is usually what you want. If you do give positions, leave 60 points between cards: the \
             reference gives each kind's size. A card that \

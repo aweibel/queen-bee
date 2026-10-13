@@ -74,6 +74,10 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
 
 ## Known limits
 
+- The orchestrator reads what the app can do from `.queenbee/CAPABILITIES.md` in the project, which the app rewrites
+  each time an orchestrator's session starts. An agent that can write files in the project could change it
+  between starts, which is one more way text from an agent can reach the orchestrator.
+
 - An agent's `read` of a page covers the page itself, not frames from other sites embedded in it. A screenshot
   shows those, and `click` takes a point from a screenshot.
 - When Queen Bee downloads its own browser, that copy doesn't update itself, and it keeps its cookies under a

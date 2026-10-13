@@ -16,7 +16,9 @@ All notable changes to Queen Bee are listed here. The format follows
 ### Fixed
 
 - A link a message is travelling shows its orange dashes again. The line had gone missing while the agent it led to was working, leaving only the arrowhead and the count, and came back green when the run moved on.
-- The orchestrator no longer writes steps for things the app can't do, such as opening a second browser tab. What every card, setting and agent can do is now declared in one place in the code. The orchestrator is given it each time its session starts, its tools take their settings from it, and the build writes it out as `CAPABILITIES.md`. A new card or setting that isn't described there doesn't build or fails the tests.
+- The orchestrator no longer writes steps for things the app can't do, such as opening a second browser tab. What every card, setting and agent can do is now declared in one place in the code. The app writes it into each project as `.queenbee/CAPABILITIES.md` whenever an orchestrator's session starts and tells the orchestrator to read it when it has changed, its tools take their settings from it, and the build writes the same text out as `CAPABILITIES.md` in the repository. A new card or setting that isn't described there doesn't build or fails the tests.
+
+- New instructions reach a session that is resumed. Claude Code keeps the instructions a conversation began with, so an agent restarted with **Restart to apply**, and an orchestrator reopened after an update, went on following the old ones. The app now hands the current ones to the session when it starts.
 
 ### Changed
 

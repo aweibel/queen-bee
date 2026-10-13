@@ -98,6 +98,12 @@ enum TestHarness {
             let point = payload["x"]?.doubleValue.map { CGPoint(x: $0, y: payload["y"]?.doubleValue ?? 0) }
             let focused = controller.canvas?.testBrowserInput(cardID: cardID, at: point, typing: payload["text"]?.stringValue ?? "")
             return ["focused": focused.map(JSONValue.bool) ?? .null, "focusedCard": controller.focusedCardID.map(JSONValue.string) ?? .null]
+        case "restartOrchestrator":
+            // Quits the orchestrator's session and resumes it, as reopening the app does. With `forget`, every
+            // session first looks as if an earlier version of the app had started it.
+            if payload["forget"]?.boolValue == true { AppServices.shared.testForgetWhatSessionsWereTold() }
+            controller.startOrchestrator()
+            return [:]
         case "browserKill":
             // What a browser crash looks like from outside.
             guard let pid = controller.project.browser.testProcessID else { return ["error": "no browser is running"] }

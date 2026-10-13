@@ -1032,6 +1032,10 @@ final class FlowController: ToolHost {
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
         let card = flow.cards[index]
+        // A session with no transcript yet starts with today's instructions, and keeps them for good.
+        if !ClaudeLauncher.transcriptExists(for: card.sessionID!) {
+            services.noteBorn(session: card.sessionID!, instructions: ClaudeLauncher.agentPrompt(flow: flow, card: card))
+        }
         guard let spec = ClaudeLauncher.agent(flow: flow, card: card, sessionID: card.sessionID!, projectRoot: project.root,
                                               services: services, environment: environment) else {
             banner = services.problem
@@ -1043,6 +1047,9 @@ final class FlowController: ToolHost {
     func startOrchestrator() {
         guard let environment = services.environment else { return }
         if flow.orchestratorSessionID.flatMap(UUID.init(uuidString:)) == nil { flow.orchestratorSessionID = UUID().uuidString.lowercased() }
+        if !ClaudeLauncher.transcriptExists(for: flow.orchestratorSessionID!) {
+            services.noteBorn(session: flow.orchestratorSessionID!, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
+        }
         guard let spec = ClaudeLauncher.orchestrator(flow: flow, sessionID: flow.orchestratorSessionID!, projectRoot: project.root,
                                                      services: services, environment: environment) else {
             banner = services.problem
@@ -1079,8 +1086,41 @@ final class FlowController: ToolHost {
     // MARK: Requests from sessions
 
     /// A Claude Code hook fired in one of this flow's sessions.
-    func handleHook(from who: String, payload: JSONValue) {
-        guard let session = sessions[who] else { return }
+    /// Returns what Claude Code should put in front of the session, if anything.
+    @discardableResult
+    func handleHook(from who: String, payload: JSONValue) -> JSONValue {
+        guard let session = sessions[who] else { return [:] }
+        let context = payload["hook_event_name"]?.stringValue == "SessionStart" ? startContext(for: who, session: session, payload: payload) : [:]
+        applyHook(from: who, session: session, payload: payload)
+        return context
+    }
+
+    /// What a session that has just started needs telling. Claude Code keeps a resumed session's first
+    /// instructions and ignores the ones it is restarted with, so newer ones are handed over here. The
+    /// orchestrator is also pointed at the capabilities reference, which the app has just written out.
+    private func startContext(for who: String, session: TerminalSession, payload: JSONValue) -> JSONValue {
+        guard let id = session.claudeSessionID else { return [:] }
+        let source = payload["source"]?.stringValue ?? ""
+        let afresh = source == "clear" || source == "compact"
+        var parts: [String] = []
+        let instructions = who == Self.orchestratorKey ? ClaudeLauncher.orchestratorPrompt(flow: flow)
+            : flow.card(who).map { ClaudeLauncher.agentPrompt(flow: flow, card: $0) }
+        if let instructions, services.needsInstructions(session: id, instructions: instructions, afresh: afresh) {
+            parts.append("[Queen Bee] Your instructions have changed since this conversation began. These are the current ones. They replace the earlier ones wherever the two differ.\n\n\(instructions)")
+        }
+        if who == Self.orchestratorKey {
+            let file = project.root.appendingPathComponent(Capabilities.projectFile)
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(Capabilities.file.utf8).write(to: file, options: .atomic)
+            if services.referenceChanged(forSession: id, afresh: afresh) {
+                parts.append("[Queen Bee] The app's capabilities reference is the file \(Capabilities.projectFile) in this folder. The app has just written it from its own code, and you have not read this version. Read the whole file with the Read tool before you answer or build anything. It replaces what you remember about the app's cards, settings, tools and limits, and anything said about them earlier in this conversation.")
+            }
+        }
+        guard !parts.isEmpty else { return [:] }
+        return ["hookSpecificOutput": ["hookEventName": "SessionStart", "additionalContext": .string(parts.joined(separator: "\n\n"))]]
+    }
+
+    private func applyHook(from who: String, session: TerminalSession, payload: JSONValue) {
         let event = payload["hook_event_name"]?.stringValue ?? ""
         let type = payload["notification_type"]?.stringValue
             ?? ((payload["message"]?.stringValue ?? "").localizedCaseInsensitiveContains("permission") ? "permission_prompt" : nil)

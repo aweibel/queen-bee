@@ -36,6 +36,9 @@ public enum HelperCommand {
         guard let payload = try? JSONValue.parse(stdin) else { return (output(fallback), 0) }
         let request = WireRequest(kind: kind, session: environment["QB_SESSION"] ?? "", payload: payload)
         guard let reply = try? send(request) else { return (output(fallback), 0) }
+        // A hook prints nothing, unless the app has something for Claude Code to put in front of the session,
+        // which it sends in the shape Claude Code reads.
+        if kind == "hook", reply["hookSpecificOutput"] != nil { return (Data((reply.text() + "\n").utf8), 0) }
         return (output(reply.text()), 0)
     }
 
