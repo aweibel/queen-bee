@@ -98,6 +98,9 @@ enum TestHarness {
             let point = payload["x"]?.doubleValue.map { CGPoint(x: $0, y: payload["y"]?.doubleValue ?? 0) }
             let focused = controller.canvas?.testBrowserInput(cardID: cardID, at: point, typing: payload["text"]?.stringValue ?? "")
             return ["focused": focused.map(JSONValue.bool) ?? .null, "focusedCard": controller.focusedCardID.map(JSONValue.string) ?? .null]
+        case "rename":
+            controller.rename(to: payload["name"]?.stringValue ?? "")
+            return [:]
         case "restartOrchestrator":
             // Quits the orchestrator's session and resumes it, as reopening the app does. With `forget`, every
             // session first looks as if an earlier version of the app had started it.
@@ -297,6 +300,7 @@ enum TestHarness {
             "results": .object(results),
             "sessions": .object(sessions),
             "orchestrator": describe(controller.sessions[FlowController.orchestratorKey]),
+            "orchestratorNeedsRestart": .bool(controller.orchestratorNeedsRestart),
             "banner": controller.banner.map(JSONValue.string) ?? .null,
             "problem": AppServices.shared.problem.map(JSONValue.string) ?? .null,
             "marks": .object(marks),

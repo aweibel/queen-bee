@@ -49,6 +49,9 @@ final class TerminalSession: NSObject {
     /// The card settings this session was started with. A running session keeps these until
     /// it restarts, whatever the card says now.
     private(set) var launched: AgentSettings?
+    /// The standing instructions this session was started with. The orchestrator has no card settings, so this
+    /// is how the app tells that its instructions have changed since.
+    private(set) var launchedInstructions: String?
     /// The Claude Code session id this terminal was started with.
     private(set) var claudeSessionID: String?
     @ObservationIgnored var onExit: ((Int32?) -> Void)?
@@ -79,9 +82,10 @@ final class TerminalSession: NSObject {
 
     var isLive: Bool { state != .notStarted && state != .exited }
 
-    func start(_ spec: LaunchSpec, settings: AgentSettings? = nil) {
+    func start(_ spec: LaunchSpec, settings: AgentSettings? = nil, instructions: String? = nil) {
         guard !isLive else { return }
         launched = settings
+        launchedInstructions = instructions
         claudeSessionID = spec.sessionID
         state = .starting
         view.startProcess(executable: spec.executable, args: spec.arguments, environment: spec.environment,

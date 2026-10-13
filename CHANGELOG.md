@@ -13,6 +13,8 @@ All notable changes to Queen Bee are listed here. The format follows
 - Every agent with a browser in a project shares one set of sign-ins, kept apart from your own browser. **Clear browser data** in a flow's settings forgets them.
 - `./scripts/e2e.py browser nobrowser` checks the browser against a small site served on the Mac, with a real agent.
 
+- A running orchestrator can be restarted from its panel, keeping its conversation. When the flow has been renamed since it started, the button reads **Restart to apply**.
+
 ### Fixed
 
 - A link a message is travelling shows its orange dashes again. The line had gone missing while the agent it led to was working, leaving only the arrowhead and the count, and came back green when the run moved on.

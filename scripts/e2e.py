@@ -1046,6 +1046,17 @@ def scenario_browser(app):
     check("a resumed orchestrator is handed its current instructions and pointed at the reference",
           said.strip().upper().startswith("YES") and "CAPABILITIES.md" in said, said[:300])
 
+    # Renaming the flow changes what the orchestrator should call itself, which it only learns on a restart.
+    check("an orchestrator started for this flow as it is has nothing to apply", app.state(fid)["orchestratorNeedsRestart"] is False)
+    app.op(fid, "rename", name="Surfing")
+    check("renaming the flow marks the orchestrator as needing a restart", app.state(fid)["orchestratorNeedsRestart"] is True)
+    app.op(fid, "restartOrchestrator")
+    s = app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to come back")
+    check("restarting a running orchestrator brings it back with nothing left to apply", s["orchestratorNeedsRestart"] is False)
+    app.op(fid, "rename", name="Browser")
+    app.op(fid, "restartOrchestrator")
+    app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to come back")
+
     # A real agent, through Claude Code, the helper and the door.
     tool("open", url=site + "/two.html")
     app.op(fid, "type", card="Surfer", text=f"Use the browser in your card to open {site}/index.html and tell me the word in capital letters in its heading.")

@@ -1055,7 +1055,14 @@ final class FlowController: ToolHost {
             banner = services.problem
             return
         }
-        freshSession(for: Self.orchestratorKey).start(spec)
+        freshSession(for: Self.orchestratorKey).start(spec, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
+    }
+
+    /// The orchestrator is running with instructions that are no longer the flow's, because the flow was renamed
+    /// or became a sub-flow since it started.
+    var orchestratorNeedsRestart: Bool {
+        guard let session = sessions[Self.orchestratorKey], session.isLive, let launched = session.launchedInstructions else { return false }
+        return launched != ClaudeLauncher.orchestratorPrompt(flow: flow)
     }
 
     /// A terminal that has run a process doesn't take a second one, so a restart gets a new terminal.

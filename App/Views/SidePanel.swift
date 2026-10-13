@@ -126,6 +126,18 @@ struct SidePanel: View {
             if session.state == .exited || session.state == .notStarted {
                 Button(session.state == .exited ? "Restart" : "Start") { controller.startOrchestrator() }
                     .controlSize(.small)
+            } else if controller.orchestratorNeedsRestart {
+                Button("Restart to apply") { controller.startOrchestrator() }
+                    .controlSize(.small)
+                    .help("This flow was renamed or moved since the orchestrator started, and it still goes by the old details. It keeps its conversation so far.")
+            } else {
+                Button { controller.startOrchestrator() } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .medium)).frame(width: 16, height: 16).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.inkSecondary.ui)
+                .help(session.state == .working ? "Restart the orchestrator. This interrupts what it is doing now. It keeps its conversation so far."
+                                                : "Restart the orchestrator. It keeps its conversation so far and reads the app's capabilities again.")
             }
         }
         .padding(.trailing, Theme.Space.m)
