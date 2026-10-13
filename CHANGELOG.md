@@ -16,7 +16,7 @@ All notable changes to Queen Bee are listed here. The format follows
 ### Fixed
 
 - A link a message is travelling shows its orange dashes again. The line had gone missing while the agent it led to was working, leaving only the arrowhead and the count, and came back green when the run moved on.
-- The orchestrator is told which tools an agent's browser has and what it can't do, such as open a second tab, so it no longer writes steps for tools that don't exist.
+- The orchestrator no longer writes steps for things the app can't do, such as opening a second browser tab. What every card, setting and agent can do is now declared in one place in the code. The orchestrator is given it each time its session starts, its tools take their settings from it, and the build writes it out as `CAPABILITIES.md`. A new card or setting that isn't described there doesn't build or fails the tests.
 
 ### Changed
 

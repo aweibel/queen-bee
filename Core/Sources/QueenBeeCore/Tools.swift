@@ -258,35 +258,11 @@ public enum Tools {
         ToolDefinition(
             name: "add_card",
             description: """
-            Add a card to the flow. The kinds, with the names of their outputs:
-            - agent: a live Claude Code agent that does work. Output: out (its reply when a turn ends).
-            - start: holds the command a run begins with. Output: out. Takes no input.
-            - if: checks the message. Outputs: yes, no.
-            - switch: Claude picks the one branch that fits the message. Outputs: one per branch name, plus other.
-            - and: waits for a message from every card linked into it, then passes them on together. Output: out.
-            - or: passes on the first message that reaches it in a run and drops later ones. Output: out.
-            - prompt: rewrites the message from a template. Output: out.
-            - loop: checks the message. Outputs: done (the check holds, or max_tries is used up) and again.
-            - end: records the final answer and saves it to a file if save_to is set. No outputs.
-            - note: text for people. Carries no messages and cannot be linked.
-            - approval: holds the message until the person approves or rejects it. They can edit it first. \
-            Outputs: approved, rejected. Put one before anything that can't be taken back, such as sending an email.
-            - flow: runs another flow in this project as one step, giving it the message as its command. \
-            Outputs: done (with that flow's final answer) and fail. To make a new sub-flow, use \
-            create_subflow, which also adds this card for you. To reuse a flow that exists, set "flow" to the name of \
-            one of the other_flows that get_flow lists. Never write flow files yourself. \
-            Sub-flows only nest as deep as the person allows on the flow at the top: get_flow gives \
-            sub_flow_levels_left for this flow. At 0 it can't have a Flow card. other_flows only lists flows that \
-            fit, and an edit that would go deeper is refused. Don't try to work round it. A flow that isn't below yours \
-            can only be linked in by the person: ask them.
-            - script: runs a shell command in the project folder, with the message on its standard input and in \
-            $QB_MESSAGE. Outputs: pass (it exited with 0) and fail. What it printed is passed on. The person is \
-            asked to allow a command they did not type themselves the first time a run reaches it.
-            A Start card may carry a schedule the person set; you can't set one, and changing a scheduled Start card's \
-            command switches its schedule off until the person turns it back on. \
+            Add a card to the flow. What each kind does, its settings and its limits are in the capabilities \
+            reference in your instructions. The kinds, with their outputs: \(Capabilities.outputsLine). \
             Only pass the settings that belong to the kind. Leave out x and y to place the card to the right of the \
-            others, which is usually what you want. An agent card is 560 points wide and 380 tall, and the other \
-            cards are about 240 by 100, so if you do give positions leave 60 points between cards. A card that \
+            others, which is usually what you want. If you do give positions, leave 60 points between cards: the \
+            reference gives each kind's size. A card that \
             would land on another is moved right until it is clear. Returns the new card's id, position and \
             outputs. Then connect it with add_link.
             """,
@@ -317,10 +293,8 @@ public enum Tools {
         ToolDefinition(
             name: "add_link",
             description: """
-            Link one card's output to another card's input, so messages travel that way during a run. Output names: \
-            agent, start, and, or and prompt cards have out; if has yes and no; loop has done and again; switch has \
-            one per branch plus other; approval has approved and rejected; script has pass and fail; flow has done \
-            and fail. Leave port out to use the card's first output. Start and note cards take no \
+            Link one card's output to another card's input, so messages travel that way during a run. The kinds, \
+            with their outputs: \(Capabilities.outputsLine). Leave port out to use the card's first output. Start and note cards take no \
             input, end and note cards have no outputs, and a card cannot link to itself. max_passes is how many \
             times the link may fire in one run, which is what makes a loop between cards end.
             """,
@@ -374,24 +348,7 @@ public enum Tools {
 
     private static let cardProperty: JSONValue = ["type": "string", "description": "The card's name or id."]
 
-    private static let settingProperties: [String: JSONValue] = [
-        "instructions": ["type": "string", "description": "agent: a standing brief the agent always follows. Name the files and folders it reads and writes. It finds files with ls, find and grep in the shell, which need no approval, so don't forbid the shell outright."],
-        "model": ["type": "string", "description": "agent: a model alias or id, such as opus, sonnet or haiku. An empty string goes back to the person's default."],
-        "effort": ["type": "string", "description": "agent: low, medium, high, xhigh or max. An empty string goes back to the model's default."],
-        "permission_mode": ["type": "string", "description": "agent: manual, acceptEdits, plan or auto. An empty string goes back to the person's default."],
-        "cwd": ["type": "string", "description": "agent: the folder the agent works in. An empty string goes back to the project folder."],
-        "browser": ["type": "boolean", "description": .string("agent: true gives the agent a web browser in its card, which the person can watch and use too, and makes the card twice as wide. Turn it on only for an agent whose work needs the web. " + BrowserTools.summary + " Write the agent's instructions, and any test of its browser, around those tools only.")],
-        "command": ["type": "string", "description": "start: the message a run begins with. script: the shell command to run."],
-        "check": ["type": "string", "enum": .array(CheckKind.allCases.map { .string($0.rawValue) }),
-                  "description": "if, loop: how value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value."],
-        "value": ["type": "string", "description": "if, loop: the statement, text or pattern the check tests."],
-        "max_tries": ["type": "integer", "minimum": 1, "maximum": 50, "description": "loop: tries before it gives up and takes done. Defaults to 3."],
-        "branches": ["type": "array", "items": ["type": "string"], "description": "switch: the branch names. Each one becomes an output."],
-        "template": ["type": "string", "description": "prompt: the rewritten message. {{message}} becomes the incoming message and {{from}} the name of the agent it came from."],
-        "save_to": ["type": "string", "description": "end: a file to save the final answer to, relative to the project folder. Not inside .git, .claude or .queenbee."],
-        "text": ["type": "string", "description": "note: the note's text. approval: what the person should check before approving."],
-        "flow": ["type": "string", "description": "flow: the name of the flow to run, one of other_flows from get_flow."],
-    ]
+    private static let settingProperties = Capabilities.settingSchemas
 
     private static func schema(_ properties: [String: JSONValue], required: [String] = [], withSettings: Bool = false) -> JSONValue {
         var all = withSettings ? properties.merging(settingProperties) { own, _ in own } : properties
@@ -407,12 +364,7 @@ private struct Arguments: Sendable {
 
     /// Which kinds each setting belongs to. A setting passed for another kind is refused rather than dropped,
     /// so the orchestrator finds out instead of believing the change was made.
-    private static let settings: [(key: String, kinds: Set<CardKind>)] = [
-        ("instructions", [.agent]), ("model", [.agent]), ("effort", [.agent]), ("permission_mode", [.agent]), ("cwd", [.agent]),
-        ("browser", [.agent]),
-        ("command", [.start, .script]), ("check", [.ifElse, .loop]), ("value", [.ifElse, .loop]), ("max_tries", [.loop]),
-        ("branches", [.switchCard]), ("template", [.prompt]), ("save_to", [.end]), ("text", [.note, .approval]), ("flow", [.flow]),
-    ]
+    private static let settings = Capabilities.settingKinds
 
     private func value(_ key: String) -> JSONValue? {
         guard let value = values[key], !value.isNull else { return nil }

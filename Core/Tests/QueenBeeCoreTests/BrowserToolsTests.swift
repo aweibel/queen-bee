@@ -145,13 +145,6 @@ actor FakeBrowser: BrowserToolHost {
         #expect(BrowserTools.allowedWithoutAsking.count == 6)
     }
 
-    @Test func theOrchestratorIsToldEveryToolAndWhatTheBrowserCannotDo() throws {
-        for tool in BrowserTools.definitions { #expect(BrowserTools.summary.contains(tool.name)) }
-        #expect(BrowserTools.summary.contains("one tab per card"))
-        let setting = try #require(Tools.definitions.first { $0.name == "add_card" }?.inputSchema["properties"]?["browser"]?["description"]?.stringValue)
-        #expect(setting.contains(BrowserTools.summary))
-    }
-
     // MARK: The tool server
 
     @Test func theBrowserServerListsOnlyBrowserTools() async throws {

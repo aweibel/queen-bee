@@ -1003,6 +1003,18 @@ def scenario_browser(app):
     check("an agent without a browser is given no browser tools", "--mcp-config" not in without and "--allowedTools" not in without, str(without)[:300])
     check("no secret is on the command line", not any("#" in a and fid in a for a in with_browser))
 
+    # The orchestrator builds from the capabilities reference, not from what browsers usually have.
+    app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to be ready")
+    app.op(fid, "type", card="orchestrator", text="Don't use any tools. In one line: name every browser tool an agent with a browser has, "
+           "separated by commas, then say YES or NO to whether it can open a second tab.")
+    app.wait(fid, lambda s: s["orchestrator"]["state"] != "idle", 30, "the orchestrator to start")
+    s = app.wait(fid, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to answer")
+    said = (s["orchestrator"]["lastReply"] or "").lower()
+    words = "".join(c if c.isalpha() else " " for c in said).split()
+    check("the orchestrator knows the browser's nine tools and that there is one tab",
+          all(t in said for t in ("open", "read", "screenshot", "scroll", "back", "wait", "click", "type", "press")) and "no" in words and "yes" not in words,
+          said[:300])
+
     # A real agent, through Claude Code, the helper and the door.
     tool("open", url=site + "/two.html")
     app.op(fid, "type", card="Surfer", text=f"Use the browser in your card to open {site}/index.html and tell me the word in capital letters in its heading.")

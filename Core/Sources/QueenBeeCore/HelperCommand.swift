@@ -4,13 +4,14 @@ import Foundation
 /// and guard messages, and the orchestrator runs it as its tool server. Every mode forwards to the app.
 public enum HelperCommand {
     static let usage = """
-    usage: qb <hook|route|sent|may-send|mcp|browser-mcp>
+    usage: qb <hook|route|sent|may-send|mcp|browser-mcp|capabilities>
       hook      forward a Claude Code hook's JSON (stdin) to Queen Bee
       route     send a finished turn's reply (stdin) and print the deliveries to make
       sent      report how a delivery went (stdin)
       may-send  ask whether this session may message another (stdin) and print the answer
       mcp       relay tool-server messages between stdin and stdout
       browser-mcp  the same, for the browser in an agent's card
+      capabilities  print what the app can do, as CAPABILITIES.md holds it
 
     """
 
@@ -75,6 +76,12 @@ public enum HelperCommand {
         }
         // FileHandle writes straight through, so each reply reaches Claude Code without waiting in a buffer.
         func print(_ data: Data) { try? FileHandle.standardOutput.write(contentsOf: data) }
+
+        // The build writes CAPABILITIES.md from this, so the file is never edited by hand.
+        if arguments.first == "capabilities" {
+            print(Data(Capabilities.file.utf8))
+            exit(0)
+        }
 
         if let kind = arguments.first, kind == "mcp" || kind == "browser-mcp" {
             runMCP(kind: kind, environment: environment,
