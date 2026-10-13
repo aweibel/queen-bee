@@ -28,6 +28,8 @@ cd Core && swift test    # under a second; run it before every pull request
 ./scripts/e2e.py         # about seven minutes; starts real Claude Code sessions on Haiku, which uses your account
 ```
 
+A new card, card setting or agent tool is described in `Core/Sources/QueenBeeCore/Capabilities.swift`, which the orchestrator's instructions and `CAPABILITIES.md` are made from. `./scripts/build.sh` rewrites `CAPABILITIES.md`; commit it with your change. The unit tests fail if it is out of date.
+
 The unit tests run on every pull request. The end-to-end script does not, because it needs a signed-in
 Claude Code. Run it, or the scenarios near your change (`./scripts/e2e.py guard loop`), when you touch sessions,
 hand-offs, the canvas or the engine, and say in the pull request which ones you ran.

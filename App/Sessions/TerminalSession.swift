@@ -49,6 +49,9 @@ final class TerminalSession: NSObject {
     /// The card settings this session was started with. A running session keeps these until
     /// it restarts, whatever the card says now.
     private(set) var launched: AgentSettings?
+    /// The standing instructions this session was started with. The orchestrator has no card settings, so this
+    /// is how the app tells that its instructions have changed since.
+    private(set) var launchedInstructions: String?
     /// The Claude Code session id this terminal was started with.
     private(set) var claudeSessionID: String?
     @ObservationIgnored var onExit: ((Int32?) -> Void)?
@@ -79,9 +82,10 @@ final class TerminalSession: NSObject {
 
     var isLive: Bool { state != .notStarted && state != .exited }
 
-    func start(_ spec: LaunchSpec, settings: AgentSettings? = nil) {
+    func start(_ spec: LaunchSpec, settings: AgentSettings? = nil, instructions: String? = nil) {
         guard !isLive else { return }
         launched = settings
+        launchedInstructions = instructions
         claudeSessionID = spec.sessionID
         state = .starting
         view.startProcess(executable: spec.executable, args: spec.arguments, environment: spec.environment,
@@ -164,6 +168,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
     var effort: String
     var permissionMode: String
     var folder: String
+    var browser: Bool
 
     init(_ card: QueenBeeCore.Card) {
         name = card.name
@@ -172,6 +177,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
         effort = card.effort ?? ""
         permissionMode = card.permissionMode ?? ""
         folder = card.cwd ?? ""
+        browser = card.browser == true
     }
 
     /// What differs from `other`, named as the settings panel names it.
@@ -183,6 +189,7 @@ nonisolated struct AgentSettings: Equatable, Sendable {
         if effort != other.effort { changed.append("effort") }
         if permissionMode != other.permissionMode { changed.append("permissions") }
         if folder != other.folder { changed.append("folder") }
+        if browser != other.browser { changed.append("browser") }
         return changed
     }
 }

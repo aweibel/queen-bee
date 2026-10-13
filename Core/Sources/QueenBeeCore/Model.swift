@@ -68,6 +68,8 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
     public var sessionID: String?
     /// The saved role the agent was made from, if any: an id from the app's own list of roles.
     public var role: String?
+    /// The card has a web browser beside its terminal, which the agent can use. Nil means it doesn't.
+    public var browser: Bool?
 
     // Start
     /// The command a run begins with.
@@ -258,6 +260,7 @@ public struct CardPatch: Equatable, Sendable {
     public var effort: String?
     public var permissionMode: String?
     public var cwd: String?
+    public var browser: Bool?
     public var command: String?
     public var check: CheckKind?
     public var value: String?

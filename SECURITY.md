@@ -48,6 +48,18 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   card at a flow already below its own or at a sub-flow nothing uses yet; linking any other flow in is yours to do.
 - **The orchestrator can edit and run the flow without asking.** Its tools are pre-approved. Text an agent reads
   from the web or a file can end up in front of the orchestrator, so the usual prompt-injection caution applies.
+- **An agent's browser is a real browser.** An agent card with its Browser switch on drives a hidden Chromium-based
+  browser. Opening a page, reading it, taking a screenshot, scrolling, going back and waiting need no approval.
+  Clicking, typing and pressing keys go through Claude Code's approval and the card's permission mode. An agent
+  reaches only the tab of its own card, and only while the switch is on. The browser opens `http` and `https`
+  addresses only, never `file:` or `chrome:`, and it downloads nothing. The app controls it over a private pipe,
+  not a debugging port, so other software can't drive it through the app. Its profile, with any sign-ins you make
+  in a card, is in `~/Library/Application Support/QueenBee/browser/`, one per project, apart from your own
+  browser. Every agent with a browser in that project is signed in to whatever you signed in to there.
+- **A web page can try to steer an agent.** What an agent reads on a page goes into its conversation. The agent is
+  told that a page is something it found and never a request from you, and acting on a page needs approval, but
+  neither is a guarantee. An agent that reads the web and can also run shell commands without asking is the
+  riskiest combination: give such a card a permission mode that asks.
 - **The app's socket is local.** The helper talks to the app over a unix socket in
   `~/Library/Application Support/QueenBee/`, a folder only your account can open. Each session has its own secret,
   and only the orchestrator's secret unlocks the flow-editing tools. That keeps an agent from using those tools through
@@ -61,6 +73,16 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   with the project's Developer ID certificate, checked up to Apple's root.
 
 ## Known limits
+
+- The orchestrator reads what the app can do from `.queenbee/CAPABILITIES.md` in the project, which the app rewrites
+  each time an orchestrator's session starts. An agent that can write files in the project could change it
+  between starts, which is one more way text from an agent can reach the orchestrator.
+
+- An agent's `read` of a page covers the page itself, not frames from other sites embedded in it. A screenshot
+  shows those, and `click` takes a point from a screenshot.
+- When Queen Bee downloads its own browser, that copy doesn't update itself, and it keeps its cookies under a
+  fixed key instead of one from your keychain. A browser you installed yourself has neither limit.
+- A page that asks for a file to be chosen, the camera, or a passkey can't be answered in a card's browser.
 
 - The session plugin is copied to Application Support at launch, where another program running as you could change it.
 - A flow's regular-expression checks run as written. A pathological pattern can stall a run.

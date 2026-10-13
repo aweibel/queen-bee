@@ -151,6 +151,18 @@ actor FakeHost: ToolHost {
         #expect(card.instructions == "You write haiku" && card.model == "opus" && card.effort == "high")
         #expect(card.permissionMode == "plan" && card.cwd == "/tmp/work")
 
+        // The browser switch is an agent setting, and get_flow reports it.
+        #expect(card.browser == nil)
+        let switched = await Tools.call(name: "update_card", arguments: ["card": "Writer", "browser": true], host: host)
+        #expect(!switched.isError)
+        #expect(await host.flow.resolveCard("Writer")?.browser == true)
+        let seen = try JSONValue.parse(Data(await Tools.call(name: "get_flow", arguments: [:], host: host).text.utf8))
+        #expect(seen["cards"]?.arrayValue?.first?["browser"] == true)
+        let wrongKind = await Tools.call(name: "add_card", arguments: ["kind": "note", "browser": true], host: host)
+        #expect(wrongKind.isError && wrongKind.text.contains("browser"))
+        let notAFlag = await Tools.call(name: "update_card", arguments: ["card": "Writer", "browser": "maybe"], host: host)
+        #expect(notAFlag.isError)
+
         _ = await Tools.call(name: "add_card", arguments: ["kind": "loop", "name": "Polish", "check": "not-contains", "value": "TODO", "max_tries": 5], host: host)
         card = try #require(await host.flow.resolveCard("Polish"))
         #expect(card.check == .notContains && card.value == "TODO" && card.maxTries == 5)

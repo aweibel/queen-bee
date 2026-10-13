@@ -53,7 +53,12 @@ final class LinkLayerView: NSView {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        marching.frame = bounds
+        // The layer is only as large as the links it draws, and keeps the view's own coordinates. One the size
+        // of the whole canvas is too large to be drawn at all, and the live links went missing.
+        let box = live.isEmpty ? .zero : live.boundingBoxOfPath.insetBy(dx: -4, dy: -4)
+        marching.anchorPoint = .zero
+        marching.bounds = box
+        marching.position = box.origin
         marching.path = live.isEmpty ? nil : live
         marching.strokeColor = Theme.live.cg(in: effectiveAppearance)
         CATransaction.commit()

@@ -6,6 +6,7 @@ struct FlowSettingsView: View {
     let controller: FlowController
     @State private var name = ""
     @State private var limit = ""
+    @State private var cleared = false
     private var services: AppServices { AppServices.shared }
 
     var body: some View {
@@ -97,6 +98,17 @@ struct FlowSettingsView: View {
                     .tint(Theme.select.ui)
             }
             text("When on, the orchestrator is sent what each run did and replies about it. That reply uses its model, so turning this off makes runs cheaper.")
+
+            line("Browser data for \(controller.project.name)") {
+                Button(cleared ? "Cleared" : "Clear browser data") {
+                    cleared = true
+                    Task { await controller.project.browser.clearData() }
+                }
+                .buttonStyle(.panel())
+                .disabled(cleared || !controller.project.browser.hasData)
+                .help("Signs the agents' browser out of every site and forgets the pages it has kept. It covers every flow in this project.")
+            }
+            text("Agent cards with a browser share one set of sign-ins across this project, kept apart from your own browser.")
         }
         .frame(width: InspectorView.width)
         .foregroundStyle(Theme.ink.ui)

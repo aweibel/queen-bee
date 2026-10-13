@@ -281,6 +281,14 @@ private struct CardSettings: View {
                       selection: card.permissionMode ?? "") { v in patch { $0.permissionMode = v } }
                 .help("Claude Code's permission mode. Manual asks before each action, Accept edits changes files without asking, Plan only plans and changes nothing, and Auto decides for itself.")
         }
+        row("Browser") {
+            Toggle("", isOn: Binding(get: { card.browser == true }, set: { on in patch { $0.browser = on } }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Theme.select.ui)
+                .help("Gives this agent a web browser in its card. You can watch what it does there and use the browser yourself. The agent can look at pages freely, and asks before it clicks or types unless its permissions say otherwise.")
+        }
     }
 
     /// The saved role the agent comes from. A card that has drifted from its role can go back
