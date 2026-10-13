@@ -13,6 +13,11 @@ All notable changes to Queen Bee are listed here. The format follows
 - Every agent with a browser in a project shares one set of sign-ins, kept apart from your own browser. **Clear browser data** in a flow's settings forgets them.
 - `./scripts/e2e.py browser nobrowser` checks the browser against a small site served on the Mac, with a real agent.
 
+### Fixed
+
+- A link a message is travelling shows its orange dashes again. The line had gone missing while the agent it led to was working, leaving only the arrowhead and the count, and came back green when the run moved on.
+- The orchestrator is told which tools an agent's browser has and what it can't do, such as open a second tab, so it no longer writes steps for tools that don't exist.
+
 ### Changed
 
 - The README's screenshots are retaken at twice the size, on a fuller flow with a sub-flow, a script check and an approval, and there is a new one of a run waiting at an Approval card.

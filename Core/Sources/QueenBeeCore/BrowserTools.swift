@@ -36,6 +36,23 @@ public enum BrowserTools {
     /// The tool names as Claude Code spells them, for its list of tools allowed without asking.
     public static var allowedWithoutAsking: [String] { lookingTools.map { "mcp__\(serverName)__\($0)" } }
 
+    /// What an agent's browser can and can't do, for the orchestrator, which writes agents' instructions without
+    /// ever seeing their tools. The tool names come from the definitions, so this can't fall behind them.
+    public static var summary: String {
+        """
+        An agent with a browser has exactly these browser tools: \(definitions.map(\.name).joined(separator: ", ")). \
+        open goes to an http or https address. read returns the page as an outline in which each part that can be \
+        acted on has a number. click takes one of those numbers, or a point from a screenshot. type fills a numbered \
+        text box, replacing what was there, or picks a choice in a drop-down list, and can press Return after. \
+        press sends one key. scroll, back, wait and screenshot do what they say. \
+        The browser is one tab per card: there are no tools to open, switch or close tabs or windows, and a link \
+        that would open a new window opens in the same tab. It can't download or upload files, and read doesn't \
+        see inside frames embedded from other sites. open, read, screenshot, scroll, back and wait never ask the \
+        person. click, type and press ask the person first unless the agent's permission mode lets them through. \
+        Sign-ins are shared by the agents with a browser in the project and are made by the person, in the card.
+        """
+    }
+
     /// The longest a `wait` may take.
     static let longestWait = 30.0
 

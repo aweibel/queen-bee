@@ -380,7 +380,7 @@ public enum Tools {
         "effort": ["type": "string", "description": "agent: low, medium, high, xhigh or max. An empty string goes back to the model's default."],
         "permission_mode": ["type": "string", "description": "agent: manual, acceptEdits, plan or auto. An empty string goes back to the person's default."],
         "cwd": ["type": "string", "description": "agent: the folder the agent works in. An empty string goes back to the project folder."],
-        "browser": ["type": "boolean", "description": "agent: true gives the agent a web browser in its card, which the person can watch and use too, and makes the card twice as wide. Turn it on only for an agent whose work needs the web."],
+        "browser": ["type": "boolean", "description": .string("agent: true gives the agent a web browser in its card, which the person can watch and use too, and makes the card twice as wide. Turn it on only for an agent whose work needs the web. " + BrowserTools.summary + " Write the agent's instructions, and any test of its browser, around those tools only.")],
         "command": ["type": "string", "description": "start: the message a run begins with. script: the shell command to run."],
         "check": ["type": "string", "enum": .array(CheckKind.allCases.map { .string($0.rawValue) }),
                   "description": "if, loop: how value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value."],

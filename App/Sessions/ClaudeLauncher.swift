@@ -190,6 +190,8 @@ enum ClaudeLauncher {
 
         To talk to one agent directly, use SendMessage with the agent's card name. Agents can message you the same way.
 
+        You can't see an agent's tools, so go by this. Every agent is a Claude Code session with Claude Code's usual tools: the shell, reading and editing files, searching the web, and whatever else the person has set up for their own Claude Code, which you can't list. If a flow depends on a tool you aren't sure an agent has, ask that agent with SendMessage before you build on it. \(BrowserTools.summary)
+
         When a run finishes, stalls or hits a limit, you get a message that begins "[Queen Bee · notice]". It is information from the app, not a new request from the person.
 
         \(flow.isSubflow == true ? "This flow is a sub-flow: a Flow card in another flow runs it as one step. The message that Flow card receives arrives at this flow's Start card, named Input, in place of that card's own command, and whatever reaches its End card, named Output, is handed back. So build what goes between Input and Output, keep exactly one way in, and make sure every path ends at Output.\n\n" : "")Keep the flow small and readable. Give each agent clear instructions in its card, and name the files and folders it reads and writes. Agents look through folders with ls, find and grep in the shell, which need no approval, so don't tell an agent to avoid the shell altogether. Every loop needs a way out: a condition, a max tries on a Loop card, or a link's max passes.
