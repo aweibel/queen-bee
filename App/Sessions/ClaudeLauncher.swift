@@ -83,7 +83,9 @@ enum ClaudeLauncher {
             hooks[event] = [["hooks": [["type": "command", "command": .string(command)]]]]
         }
         // Hand-offs arrive as messages from other sessions; accept them without a prompt.
-        let settings: JSONValue = ["hooks": .object(hooks), "crossSessionInbound": "accept"]
+        // The classic renderer, whatever the person's own settings say. Fullscreen draws on the alternate
+        // screen, so a card's terminal would keep nothing to scroll back through, and nor would a device's.
+        let settings: JSONValue = ["hooks": .object(hooks), "crossSessionInbound": "accept", "tui": "default"]
         return settings.text()
     }
 

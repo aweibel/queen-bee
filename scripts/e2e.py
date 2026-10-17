@@ -4312,8 +4312,14 @@ def scenario_mirror(app):
         check(what, c["equal"] and also(c), detail)
         return c
 
+    # A person's own "tui": "fullscreen" would put Claude Code on the alternate screen, which keeps no scroll-back.
+    launch = app.op(fid, "launchArguments", card="Alice")["arguments"]
+    given = json.loads(launch[launch.index("--settings") + 1]) if "--settings" in launch else {}
+    check("sessions start with Claude Code's classic renderer, whatever the person's settings say", given.get("tui") == "default", str(given.get("tui")))
     seconds, alone = count_to(1, 200)
     print(f"        no mirror: {seconds:.1f}s, app at {alone:.1f}% of a processor", flush=True)
+    real = app.op(fid, "terminal", card="Alice")
+    check("the Mac's own terminal keeps the earlier output to scroll back through", real.get("scrollback", 0) > 0, f"{real.get('scrollback')} lines")
     # The mirror joins late: the first reply is already on screen.
     app.op(fid, "mirror", card="Alice")
     time.sleep(2)
