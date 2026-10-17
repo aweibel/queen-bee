@@ -4876,6 +4876,20 @@ PAGE_TWO = """<!doctype html><html><head><title>Page Two</title></head><body><h1
 PAGE_BIG = """<!doctype html><html><head><title>Waiting</title></head><body style="margin:0">
 <button style="position:fixed;inset:0;width:100%;height:100%" onclick="this.remove();document.title='Clicked';document.getElementById('box').focus()">Big</button>
 <input id="box" oninput="document.title='Clicked '+this.value"></body></html>"""
+# A box to type into at a known place, which a form sends on with Return.
+PAGE_FORM = """<!doctype html><html><head><title>Form</title></head><body style="margin:0;font-family:sans-serif">
+<form action="/echo.html" method="get"><input name="q" aria-label="Find" style="position:fixed;left:10px;top:10px;width:300px;height:40px"></form>
+<p style="position:fixed;left:10px;top:80px">Words to copy from the page</p></body></html>"""
+# A page that changes every frame, for counting how many pictures of it a device is sent.
+PAGE_MOVING = """<!doctype html><html><head><title>Moving</title></head><body style="font-family:sans-serif">
+<h1 id="n">0</h1><div id="b" style="width:80px;height:80px;background:#2f6fed;position:relative"></div>
+<script>let n=0;(function f(){n++;document.getElementById('n').textContent=n;document.getElementById('b').style.left=(n*4%400)+'px';
+requestAnimationFrame(f)})()</script></body></html>"""
+# Noise drawn afresh every frame, which no JPEG of a usual quality fits into the limit.
+PAGE_NOISE = """<!doctype html><html><head><title>Noise</title></head><body style="margin:0">
+<canvas id="c" style="width:100vw;height:100vh"></canvas><script>const c=document.getElementById('c');c.width=innerWidth*2;c.height=innerHeight*2;
+const x=c.getContext('2d');(function f(){const d=x.createImageData(c.width,c.height);const a=new Uint32Array(d.data.buffer);
+for(let i=0;i<a.length;i++)a[i]=(Math.random()*0xffffffff)|0xff000000;x.putImageData(d,0,0);requestAnimationFrame(f)})()</script></body></html>"""
 PAGE_ECHO = """<!doctype html><html><head><title>Results</title></head><body><h1>Results</h1>
 <p id="out"></p><script>document.getElementById('out').textContent='You searched for '+new URLSearchParams(location.search).get('q')</script></body></html>"""
 
@@ -4884,7 +4898,8 @@ def serve_pages():
     """A small site on this Mac for the browser to visit. Returns its address."""
     folder = tempfile.mkdtemp(prefix="qb-site-")
     atexit.register(shutil.rmtree, folder, ignore_errors=True)
-    for name, text in (("index.html", PAGE_ONE), ("two.html", PAGE_TWO), ("echo.html", PAGE_ECHO), ("big.html", PAGE_BIG)):
+    for name, text in (("index.html", PAGE_ONE), ("two.html", PAGE_TWO), ("echo.html", PAGE_ECHO), ("big.html", PAGE_BIG),
+                       ("form.html", PAGE_FORM), ("moving.html", PAGE_MOVING), ("noise.html", PAGE_NOISE)):
         with open(os.path.join(folder, name), "w") as out:
             out.write(text)
 
@@ -5086,6 +5101,366 @@ def scenario_browser(app):
           cleared["hasData"] is False and not after["isError"] and "about:blank" in after["text"], str(cleared) + after["text"][:200])
 
 
+def scenario_browser_remote(app):
+    print("browser-remote: a paired device sees a card's browser while it has it on screen, and with control uses it", flush=True)
+    site = serve_pages()
+    fid = BROWSER["id"]
+    surfer = next(c["id"] for c in BROWSER["cards"] if c["name"] == "Surfer")
+    plain = next(c["id"] for c in BROWSER["cards"] if c["name"] == "Plain")
+    app.open_flow(BROWSER)
+    # The browser scenario may have left the switch off in the flow's file.
+    app.op(fid, "edit", card="Surfer", browser=True)
+
+    def tool(name, **arguments):
+        return app.op(fid, "browserTool", card="Surfer", name=name, arguments=arguments)
+
+    def surfing():
+        return app.state(fid)["sessions"]["Surfer"]["browser"]
+
+    tool("open", url=site + "/big.html")
+    app.wait(fid, lambda s: (s["sessions"]["Surfer"]["browser"] or {}).get("title") == "Waiting", 20, "the page to open")
+    check("Remote turns on", app.op("app", "remote-on").get("on") is True)
+    offer = app.op("app", "remote-pair")
+    device = Device("--code", offer["code"], "--pair-port", str(int(offer["port"])), "--flow", fid, "--seconds", "900")
+    sent = [0]
+
+    def fire(**fields):
+        """Sends one use of Surfer's browser, or another card's with `card`, and returns its id."""
+        sent[0] += 1
+        device.tell(json.dumps({"id": sent[0], "do": "browser", "flow": fid, "card": surfer, **fields}))
+        return sent[0]
+
+    def ask(**fields):
+        """The same, and the Mac's answer to it."""
+        time.sleep(0.06)
+        n = fire(**fields)
+        return device.until(lambda m: m["type"] == "answer" and m["id"] == n, 30)
+
+    def done(answer):
+        return answer is not None and answer["refusal"] is None
+
+    def frames_since(mark):
+        return [m for m in device.seen[mark:] if m["type"] == "browserFrame"]
+
+    def page_after(mark, test, timeout=20):
+        return next((m for m in device.seen[mark:] if m["type"] == "browserPage" and m["card"] == surfer and test(m)), None) \
+            or device.until(lambda m: m["type"] == "browserPage" and m["card"] == surfer and test(m), timeout)
+
+    def drain(seconds):
+        """Reads what comes for a while, so it is in `seen`."""
+        device.until(lambda m: False, seconds)
+
+    def sessions():
+        return (app.op("app", "remote-state").get("browsers") or [{}])[0]
+
+    try:
+        paired = device.until("paired")
+        device_id = paired["device"]
+        device.tell(str(int(app.op("app", "remote-port", device=device_id)["port"])))
+        check("the device is let in to watch only", (device.until("welcome") or {}).get("canControl") is False, str(device.seen[-3:]))
+        device.until("opened")
+        drain(2)
+        check("a device that hasn't said it has a browser card on screen is sent no pictures of it",
+              not [m for m in device.seen if m["type"] in ("browserFrame", "browserPage")], str([m["type"] for m in device.seen][-8:]))
+
+        # Watching.
+        mark = len(device.seen)
+        device.tell(f"watch {fid} {surfer}")
+        page = page_after(mark, lambda m: True)
+        check("watching a card sends what its bar shows: the address and the title",
+              page is not None and page["url"].endswith("/big.html") and page["title"] == "Waiting" and page["notice"] is None, str(page))
+        frame = device.until("browserFrame", 10)
+        b = surfing()
+        check("and a picture of its page at once, though the page isn't changing", frame is not None and frame["jpeg"] and frame["card"] == surfer, str(frame))
+        check("with the page's size, which a device maps its taps to, and the picture at twice that",
+              frame is not None and abs(frame["pageWidth"] - b["pageWidth"]) < 1 and abs(frame["width"] - 2 * frame["pageWidth"]) <= 2,
+              f"{frame} against {b['pageWidth']}x{b['pageHeight']}")
+        check("the Mac counts the device as watching the card", b["watchers"] == 1 and sessions().get("watching") == [surfer], str(sessions()))
+        check("a watch-only device may watch", True)
+
+        # A page that changes all the time is sent at most ten times a second.
+        tool("open", url=site + "/moving.html")
+        drain(1)
+        mark = len(device.seen)
+        cpu0, bytes0, at0 = cpu_seconds(app.pid), sessions().get("bytes", 0), time.time()
+        drain(5)
+        took = time.time() - at0
+        cpu1, bytes1 = cpu_seconds(app.pid), sessions().get("bytes", 0)
+        got = frames_since(mark)
+        rate = len(got) / took
+        check("a page that changes every frame is sent at most ten pictures a second", 5 <= rate <= 10.5, f"{len(got)} in {took:.1f}s")
+        check("each at most 200 KB", all(m["bytes"] <= 200_000 for m in got), str(max([m["bytes"] for m in got] or [0])))
+        print(f"        watching one moving card: {rate:.1f} pictures a second, {(bytes1 - bytes0) / took / 1024:.0f} KB/s sent, "
+              f"the Mac app used {100 * (cpu1 - cpu0) / took:.0f}% of a core", flush=True)
+        device.tell(f"watch {fid} -")
+        drain(1)
+        cpu2, at2 = cpu_seconds(app.pid), time.time()
+        mark = len(device.seen)
+        drain(4)
+        print(f"        not watching: the Mac app used {100 * (cpu_seconds(app.pid) - cpu2) / (time.time() - at2):.0f}% of a core", flush=True)
+        check("once the card is off the device's screen, no more pictures come", not frames_since(mark), str(len(frames_since(mark))))
+        check("and the Mac stops counting it as watched", surfing()["watchers"] == 0 and sessions().get("watching") == [], str(sessions()))
+
+        # A picture too big for the limit is made smaller, and one the device can't take yet is dropped for the next.
+        tool("open", url=site + "/noise.html")
+        device.tell(f"watch {fid} {surfer}")
+        drain(3)
+        noisy = [m for m in device.seen if m["type"] == "browserFrame"][-5:]
+        check("a picture of a page too busy for the limit is made smaller to fit", noisy and all(m["bytes"] <= 200_000 for m in noisy),
+              str([(m["bytes"], m["width"]) for m in noisy]))
+        app.op("app", "remote-reset-queued")
+        before = sessions()
+        device.tell("pause 6")
+        time.sleep(6.5)
+        after = sessions()
+        drain(2)
+        check("a device that stops reading doesn't have pictures queued for it: what waits on the Mac stays under two pictures",
+              after.get("mostQueued", 1e9) < 2 * 270_000 + 50_000, f"{after}")
+        print(f"        while the device read nothing for 6 s: {after['frames'] - before['frames']} pictures went into the network, "
+              f"{after['dropped'] - before['dropped']} were dropped for newer ones, at most {after['mostQueued'] / 1024:.0f} KB waited on the Mac", flush=True)
+        check("and once it reads again the pictures come again", device.until("browserFrame", 5) is not None)
+
+        # Watching only: nothing done in the page.
+        tool("open", url=site + "/big.html")
+        app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Waiting", 20, "the big button page")
+        for fields in (dict(act="press", x=120, y=90), dict(act="release", x=120, y=90), dict(act="text", text="no"), dict(act="key", name="Enter"),
+                       dict(act="navigate", text=site + "/two.html"), dict(act="reload"), dict(act="copy")):
+            answer = ask(**fields)
+            check(f"a watch-only device's {fields['act']} is refused", answer is not None and "can only watch" in (answer["refusal"] or ""), str(answer))
+        fire(act="move", x=10, y=10)
+        time.sleep(1)
+        check("and the page is as it was", surfing()["title"] == "Waiting" and "big.html" in surfing()["url"], str(surfing()))
+
+        # With control.
+        app.op("app", "remote-control", device=device_id, on=True)
+        device.until("control", 10)
+        check("a click from the device lands on the page at the point it names",
+              done(ask(act="press", x=120, y=90)) and done(ask(act="release", x=120, y=90)), str(device.seen[-2:]))
+        deadline = time.time() + 10
+        while not surfing()["title"].startswith("Clicked") and time.time() < deadline:
+            time.sleep(0.3)
+        check("and the page changes, and the Mac's card has its new title", surfing()["title"] == "Clicked",
+              f"{surfing()['title']}; the page says {tool('read')['text'][:120]!r}")
+        mark = len(device.seen)
+        check("typing from the device reaches the box the click put the keyboard in", done(ask(act="text", text="hi Bee")))
+        page = page_after(mark, lambda m: m["title"] == "Clicked hi Bee", 10)
+        check("and the device is told the page's new title", page is not None, str(device.seen[-3:]))
+        log = app.state(fid)["log"]
+        check("the Mac's log says the device used the card's browser, once", sum("Test device used Surfer's browser" in line for line in log) == 1, str(log[-4:]))
+
+        mark = len(device.seen)
+        check("an address typed on the device opens", done(ask(act="navigate", text=site + "/form.html")))
+        check("and the device's bar follows it", page_after(mark, lambda m: m["url"].endswith("/form.html") and m["title"] == "Form") is not None,
+              str([m for m in device.seen[mark:] if m["type"] == "browserPage"][-2:]))
+        ask(act="press", x=100, y=30)
+        ask(act="release", x=100, y=30)
+        ask(act="text", text="red apples")
+        mark = len(device.seen)
+        check("Return pressed on the device sends the form", done(ask(act="key", name="Enter")))
+        page = page_after(mark, lambda m: "echo.html" in m["url"] and m["title"] == "Results" and m["canGoBack"])
+        read = tool("read")["text"]
+        check("and what was typed reached the box", page is not None and "You searched for red apples" in read, read[:300])
+        check("the bar says there is a page to go back to", page is not None and page["canGoBack"] is True and page["canGoForward"] is False, str(page))
+        mark = len(device.seen)
+        check("Back goes back", done(ask(act="back")) and page_after(mark, lambda m: m["url"].endswith("/form.html")) is not None)
+        mark = len(device.seen)
+        check("Forward goes forward", done(ask(act="forward")) and page_after(mark, lambda m: "echo.html" in m["url"] and m["canGoForward"] is False) is not None)
+        mark = len(device.seen)
+        check("Reload loads the page again", done(ask(act="reload")) and page_after(mark, lambda m: m["loading"] is True, 10) is not None,
+              str([m for m in device.seen[mark:] if m["type"] == "browserPage"]))
+        fire(act="wheel", x=100, y=100, dx=0, dy=200)
+        fire(act="move", x=50, y=50)
+
+        ask(act="navigate", text=site + "/form.html")
+        app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Form", 15, "the form page")
+        time.sleep(0.5)
+        check("⌘A from the device selects the page", done(ask(act="selectAll")))
+        mark = len(device.seen)
+        answer = ask(act="copy")
+        copied = next((m for m in device.seen[mark:] if m["type"] == "browserCopied"), None)
+        check("Copy sends the device the page's selected text, before its answer",
+              done(answer) and copied is not None and "Words to copy from the page" in copied["text"], str(copied))
+
+        title = surfing()["title"]
+        for bad in ("javascript:document.title='Hacked'", "javascript:alert(1)", "file:///etc/passwd", "chrome://settings", "data:text/html,hi"):
+            answer = ask(act="navigate", text=bad)
+            check(f"the address bar on the device refuses {bad.split(':')[0]}: addresses", answer is not None and "http" in (answer["refusal"] or ""), str(answer))
+        time.sleep(1)
+        check("and the page is where it was", surfing()["title"] == title and "form.html" in surfing()["url"], str(surfing()))
+        long = ask(act="text", text="a" * 5000)
+        check("more than 4 KB typed at once is refused", long is not None and "too much" in (long["refusal"] or ""), str(long))
+        check("a card with no browser can't be used",
+              "has no browser" in ((ask(card=plain, act="reload") or {}).get("refusal") or ""))
+        device.tell(f"watch {fid} -")
+        drain(1)
+        check("a card the device isn't watching can't be used from it",
+              "isn't on this device's screen" in ((ask(act="press", x=5, y=5) or {}).get("refusal") or ""))
+    finally:
+        device.stop()
+        app.op("app", "remote-on", on=False)
+
+
+def scenario_browser_mobile(app):
+    print("browser-mobile: a card's browser on the iPad, from the real Mac: the picture, the address, a tap and typing", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    site = serve_pages()
+    fid = BROWSER["id"]
+    app.open_flow(BROWSER)
+    app.op(fid, "edit", card="Surfer", browser=True)
+    app.op(fid, "browserTool", card="Surfer", name="open", arguments={"url": site + "/big.html"})
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+
+    def surfing():
+        return app.state(fid)["sessions"]["Surfer"]["browser"]
+
+    def on_device(state):
+        return ((state.get("browsers") or {}).get("cards") or {}).get("Surfer") or {}
+
+    try:
+        app.op("app", "remote-on")
+        pair_port, device_port = free_port(), free_port()
+        offer = app.op("app", "remote-pair", pairPort=pair_port, devicePort=device_port)
+        mobile.launch("-qbHost", "127.0.0.1", "-qbPairPort", str(pair_port), "-qbPairCode", offer["code"], "-qbDevicePort", str(device_port))
+        s = mobile.wait(lambda s: s.get("state") == "connected" and s.get("flows"), 40, "the app to pair and connect")
+        check("the iPad pairs and connects", s.get("state") == "connected", str(s)[:300])
+        app.op("app", "remote-control", device=s.get("device", ""), on=True)
+        # Zoomed in on the card: zoomed out as far as its overview, a card shows no page and is sent none.
+        mobile.launch("-qbOpen", "Browser", "-qbZoomCard", "Surfer", "-qbDo", "wait:open;browserOpen:Surfer;wait:tap;browserTap:Surfer:120:90;browserType:Surfer:hi Bee")
+        s = mobile.wait(lambda s: shown_card(s, "Surfer").get("browserShows") is True, 40, "the card to show the page")
+        card = shown_card(s, "Surfer")
+        check("the card on the canvas shows a picture of its page, beside its terminal",
+              card.get("browserShows") is True and card.get("hasTerminal") is True and bool(card.get("browserPage")), str(card)[:400])
+        check("the Mac sends it because the card is on the iPad's screen", surfing()["watchers"] == 1, str(surfing()))
+        mobile.shot("browser-mobile-1-canvas")
+        mobile.go("open")
+        s = mobile.wait(lambda s: (s.get("browsers") or {}).get("expanded") == "Surfer" and on_device(s).get("hasPicture"), 40, "the browser to open full screen")
+        address = (s.get("browsers") or {}).get("address") or ""
+        check("full screen, the bar shows the page's address", address.endswith("/big.html") and on_device(s).get("title") == "Waiting",
+              f"{address} {s.get('browsers')} now {time.time() % 1000:.2f}")
+        check("and the picture is the page at the Mac's size", abs(on_device(s).get("pageWidth", 0) - surfing()["pageWidth"]) < 1, f"{on_device(s)} {surfing()}")
+        mobile.shot("browser-mobile-2-full-screen")
+        mobile.go("tap")
+        s = mobile.wait(lambda s: len((s.get("controls") or {}).get("done", [])) >= 2, 30, "the tap and the typing")
+        done = [(d["step"], d["refusal"]) for d in (s.get("controls") or {}).get("done", [])]
+        deadline = time.time() + 10
+        while time.time() < deadline and surfing()["title"] != "Clicked hi Bee":
+            time.sleep(0.5)
+        read = app.op(fid, "browserTool", card="Surfer", name="read", arguments={})["text"]
+        check("a tap at a point of the page on the iPad clicks that point on the Mac's page", all(r is None for _, r in done) and "Clicked" in surfing()["title"],
+              f"{done} {surfing()['title']}")
+        check("and typing on the iPad reaches the box the click put the keyboard in", 'value "hi Bee"' in read and surfing()["title"] == "Clicked hi Bee", read[:200])
+        s = mobile.wait(lambda s: on_device(s).get("title") == "Clicked hi Bee", 10, "the iPad's bar to follow")
+        check("and the iPad is told the page's new title", on_device(s).get("title") == "Clicked hi Bee", str(on_device(s)))
+        mobile.shot("browser-mobile-3-typed")
+        mobile.quit()
+        deadline = time.time() + 15
+        while time.time() < deadline and surfing()["watchers"] != 0:
+            time.sleep(0.5)
+        check("once the iPad has gone, the Mac sends it nothing more", surfing()["watchers"] == 0, str(surfing()))
+    finally:
+        mobile.quit()
+        app.op("app", "remote-on", on=False)
+
+
+def scenario_browser_canned():
+    print("browser-canned: a card's browser on the iPad in each of its states, with a Mac made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    on = ("-qbControl", "1")
+    full = ("-qbExpandBrowser", "Surfer")
+
+    def b(state):
+        return state.get("browsers") or {}
+
+    def surfer(state):
+        return (b(state).get("cards") or {}).get("Surfer") or {}
+
+    def done(state):
+        return [(d["step"], d["refusal"]) for d in (state.get("controls") or {}).get("done", [])]
+
+    def play(state, *args, steps="", until=lambda s: True, timeout=40):
+        waited = len([x for x in steps.split(";") if x])
+        mobile.launch("-qbCannedBrowser", state, *args, *(("-qbDo", steps) if steps else ()))
+        return mobile.wait(lambda s: s.get("openFlowCards") == 2 and len(done(s)) >= waited and until(s), timeout, f"the browser {state} {steps}")
+
+    def both(name):
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    try:
+        # The page on the canvas, watched only.
+        s = play("frames", until=lambda s: shown_card(s, "Surfer").get("browserShows") is True)
+        card = shown_card(s, "Surfer")
+        check("an agent card with a browser is split as on the Mac: terminal on the left, page on the right",
+              card.get("browserShows") is True and card.get("hasTerminal") is True
+              and card["browserPage"]["x"] > card["terminalPlace"]["x"] + card["terminalPlace"]["width"] - 2, str(card)[:400])
+        check("the device tells the Mac it has the card on screen", b(s).get("told") == ["Surfer"], str(b(s)))
+        check("and the page's address and title come with it", surfer(s).get("url") == "https://shop.example.com/" and surfer(s).get("title") == "Example Shop", str(surfer(s)))
+        check("VoiceOver hears the page's title, and that it is a picture of the page on the Mac",
+              "Browser showing Example Shop, a picture of the page on your Mac" in card.get("spoken", ""), card.get("spoken", ""))
+        both("browser-1-canvas")
+
+        # Full screen, watching only.
+        s = play("frames", *full, steps="browserTap:Surfer:90:103;browserType:Surfer:no", until=lambda s: b(s).get("expanded") == "Surfer" and surfer(s).get("hasPicture"))
+        check("the full-screen view shows the page and its address", b(s).get("address") == "https://shop.example.com/" and b(s).get("stage"), str(b(s))[:300])
+        check("a device that may only watch can't use the page", b(s).get("canAct") is False and s.get("browserSent") == [], str(s.get("browserSent")))
+        check("and nothing it tries leaves for the Mac", done(s)[0][1] == "the page can't be tapped", str(done(s)))
+        both("browser-2-full-watch-only")
+
+        # Full screen, with control.
+        steps = "browserTap:Surfer:90:103;browserTap:Surfer:170:157;browserType:Surfer:tote;browserKey:Surfer:Enter;browserCopy:Surfer;browserGo:Surfer:javascript:alert(1);browserBack:Surfer"
+        s = play("frames", *on, *full, steps=steps, until=lambda s: b(s).get("expanded") == "Surfer", timeout=60)
+        sent = s.get("browserSent") or []
+        check("with control, a tap clicks the page: a press and a release at the page's point",
+              sent[:4] == ["mouse pressed", "mouse released", "mouse pressed", "mouse released"], str(sent))
+        check("typing goes as text, and Enter as the key", "text" in sent and "key Enter" in sent and sent.index("text") < sent.index("key Enter"), str(sent))
+        check("Return sent the form, so after Back there is a page to go forward to", surfer(s).get("canGoForward") is True, str(surfer(s)))
+        check("Copy put the page's selected text on the clipboard", surfer(s).get("copied") == "Large tote bag, £24", str(surfer(s)))
+        check("an address that isn't a web address is refused before it leaves", any("javascript" in st and r and "http" in r for st, r in done(s)) and "navigate" not in sent,
+              str(done(s)))
+        check("Back goes", "back" in sent and all(r is None for st, r in done(s) if st.startswith("browserBack")), str(done(s)))
+        both("browser-3-full-control")
+
+        s = play("frames", *on, *full, "-qbBrowserKeys", "1", until=lambda s: b(s).get("catching") is True and surfer(s).get("hasPicture"))
+        check("the keyboard can be brought up to type into the page", b(s).get("catching") is True, str(b(s))[:200])
+        both("browser-4-keyboard")
+
+        # The Mac's notices, each with its button.
+        notices = [("notStarted", "Starting the browser…", None), ("starting", "Starting the browser…", None),
+                   ("failed", "The browser didn't answer in time.", "Try again"), ("missing", "download a copy", "Download"),
+                   ("downloading", "Downloading the browser… 45%", None), ("stopped", "Browser stopped", "Restart")]
+        for state, words, offer in notices:
+            s = play(state, *on, *full, until=lambda s: words in (surfer(s).get("notice") or "") and b(s).get("expanded") == "Surfer")
+            check(f"{state}: the full-screen view shows the Mac's notice", words in (surfer(s).get("notice") or ""), str(surfer(s)))
+            check(f"{state}: with its button", surfer(s).get("offer") == offer, str(surfer(s)))
+            if state in ("missing", "stopped"):
+                both(f"browser-5-{state}")
+            else:
+                mobile.shot(f"browser-5-{state}-light")
+        s = play("missing", *on, until=lambda s: "download a copy" in (surfer(s).get("notice") or ""))
+        both("browser-6-canvas-missing")
+        s = play("missing", *on, *full, steps="browserOffer:Surfer", until=lambda s: "Downloading" in (surfer(s).get("notice") or ""))
+        check("Download takes up the Mac's offer, and the card says it is downloading", "Downloading" in (surfer(s).get("notice") or ""), str(surfer(s)))
+    finally:
+        mobile.quit()
+
+
 def scenario_nobrowser(project):
     print("nobrowser: a card says so when there is no browser on the Mac for it to use", flush=True)
     support = SUPPORT + "-nb"
@@ -5136,7 +5511,9 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "nobrowser", "terminals", "panels", "controls", "typing", "editing", "settings-edit", "parity")]
+    wanted = [w.replace("-", "_") if w in ("browser-remote", "browser-mobile") else w for w in wanted]
+    in_app = [w for w in wanted if w not in ("noclaude", "nobrowser", "terminals", "panels", "controls", "typing", "editing", "settings-edit", "parity",
+                                             "browser-canned")]
     if in_app:
         app = App(project)
         try:
@@ -5147,7 +5524,8 @@ def main():
                     check(f"{name} ran to the end", False, f"{type(e).__name__}: {e}"[:500])
                 if name == "deep":
                     continue
-                flow_id = (GUARD if name in ("scroll", "settings", "remote", "mirror", "mobile") else FLOWS[name])["id"]
+                flow_id = (GUARD if name in ("scroll", "settings", "remote", "mirror", "mobile")
+                           else BROWSER if name.startswith("browser") else FLOWS[name])["id"]
                 if name == "subflow":
                     app.op(INNER["id"], "close")
                 # Guard's sessions are shared by the scenarios that follow it on the same flow.
@@ -5191,6 +5569,11 @@ def main():
             scenario_parity()
         except Exception as e:
             check("parity ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "browser-canned" in wanted:
+        try:
+            scenario_browser_canned()
+        except Exception as e:
+            check("browser-canned ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "nobrowser" in wanted:
         try:
             scenario_nobrowser(project)
