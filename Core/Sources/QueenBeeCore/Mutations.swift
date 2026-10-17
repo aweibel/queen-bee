@@ -14,7 +14,11 @@ public enum FlowError: Error, Equatable, CustomStringConvertible, LocalizedError
 }
 
 extension Card {
-    public static func minimumWidth(for card: Card) -> Double { card.kind == .agent ? 320 : 180 }
+    public static func minimumWidth(for card: Card) -> Double {
+        guard card.kind == .agent else { return 180 }
+        // A card with a browser holds a terminal and a page side by side.
+        return card.browser == true ? 640 : 320
+    }
 }
 
 extension Link {
@@ -232,6 +236,12 @@ extension Flow {
                 card.permissionMode = Self.setOrCleared(mode)
             }
             if let cwd = patch.cwd { card.cwd = Self.setOrCleared(cwd) }
+            if let browser = patch.browser, browser != (card.browser == true) {
+                card.browser = browser ? true : nil
+                // The browser takes the card's right half, so the terminal keeps the room it had. A patch that
+                // also sets the width has said how wide the card should be.
+                if patch.width == nil { card.width = browser ? card.width * 2 : card.width / 2 }
+            }
         case .start, .script:
             if let command = patch.command { card.command = command }
         case .ifElse, .loop:

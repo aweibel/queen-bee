@@ -562,6 +562,8 @@ final class FlowController: ToolHost {
         if historyTask != nil { saveHistory() }
         sessions.values.forEach { $0.terminate() }
         sessions.removeAll()
+        browserCards.forEach { project.browser.release("\(flow.id)/\($0)") }
+        browserCards.removeAll()
         isOpen = false
         isClosed = true
     }
@@ -681,6 +683,11 @@ final class FlowController: ToolHost {
             sessions[id] = nil
         }
         heldBack.formIntersection(agentIDs)
+        // A card that was deleted, or had its Browser switch turned off, gives its tab back.
+        for id in browserCards where flow.card(id)?.browser != true {
+            browserCards.remove(id)
+            project.browser.release("\(flow.id)/\(id)")
+        }
         switch selection {
         case .card(let id) where flow.card(id) == nil: selection = .none
         case .link(let id) where !flow.links.contains(where: { $0.id == id }): selection = .none
@@ -947,6 +954,19 @@ final class FlowController: ToolHost {
         }
     }
 
+    // MARK: Browsers
+
+    /// The cards of this flow that have been given a tab in the project's browser. The canvas asks for tabs
+    /// while it draws, so this is kept out of what it watches: noting a tab here must not make it draw again.
+    @ObservationIgnored private var browserCards: Set<String> = []
+
+    /// The browser tab of an agent card whose Browser switch is on, or nil for any other card.
+    func browserTab(forCard id: String) -> BrowserTab? {
+        guard !isClosed, let card = flow.card(id), card.kind == .agent, card.browser == true else { return nil }
+        browserCards.insert(id)
+        return project.browser.tab(for: "\(flow.id)/\(id)")
+    }
+
     // MARK: Sessions
 
     /// The session behind an agent card, or behind the orchestrator for `orchestratorKey`.
@@ -980,6 +1000,7 @@ final class FlowController: ToolHost {
         patch.effort = launched.effort
         patch.permissionMode = launched.permissionMode
         patch.cwd = launched.folder
+        patch.browser = launched.browser
         update(id, patch)
     }
 
@@ -999,6 +1020,10 @@ final class FlowController: ToolHost {
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
         let card = flow.cards[index]
+        // A session with no transcript yet starts with today's instructions, and keeps them for good.
+        if !ClaudeLauncher.transcriptExists(for: card.sessionID!) {
+            services.noteBorn(session: card.sessionID!, instructions: ClaudeLauncher.agentPrompt(flow: flow, card: card))
+        }
         guard let spec = ClaudeLauncher.agent(flow: flow, card: card, sessionID: card.sessionID!, projectRoot: project.root,
                                               services: services, environment: environment) else {
             banner = services.problem
@@ -1010,12 +1035,22 @@ final class FlowController: ToolHost {
     func startOrchestrator() {
         guard let environment = services.environment else { return }
         if flow.orchestratorSessionID.flatMap(UUID.init(uuidString:)) == nil { flow.orchestratorSessionID = UUID().uuidString.lowercased() }
+        if !ClaudeLauncher.transcriptExists(for: flow.orchestratorSessionID!) {
+            services.noteBorn(session: flow.orchestratorSessionID!, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
+        }
         guard let spec = ClaudeLauncher.orchestrator(flow: flow, sessionID: flow.orchestratorSessionID!, projectRoot: project.root,
                                                      services: services, environment: environment) else {
             banner = services.problem
             return
         }
-        freshSession(for: Self.orchestratorKey).start(spec)
+        freshSession(for: Self.orchestratorKey).start(spec, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
+    }
+
+    /// The orchestrator is running with instructions that are no longer the flow's, because the flow was renamed
+    /// or became a sub-flow since it started.
+    var orchestratorNeedsRestart: Bool {
+        guard let session = sessions[Self.orchestratorKey], session.isLive, let launched = session.launchedInstructions else { return false }
+        return launched != ClaudeLauncher.orchestratorPrompt(flow: flow)
     }
 
     /// A terminal that has run a process doesn't take a second one, so a restart gets a new terminal.
@@ -1046,8 +1081,41 @@ final class FlowController: ToolHost {
     // MARK: Requests from sessions
 
     /// A Claude Code hook fired in one of this flow's sessions.
-    func handleHook(from who: String, payload: JSONValue) {
-        guard let session = sessions[who] else { return }
+    /// Returns what Claude Code should put in front of the session, if anything.
+    @discardableResult
+    func handleHook(from who: String, payload: JSONValue) -> JSONValue {
+        guard let session = sessions[who] else { return [:] }
+        let context = payload["hook_event_name"]?.stringValue == "SessionStart" ? startContext(for: who, session: session, payload: payload) : [:]
+        applyHook(from: who, session: session, payload: payload)
+        return context
+    }
+
+    /// What a session that has just started needs telling. Claude Code keeps a resumed session's first
+    /// instructions and ignores the ones it is restarted with, so newer ones are handed over here. The
+    /// orchestrator is also pointed at the capabilities reference, which the app has just written out.
+    private func startContext(for who: String, session: TerminalSession, payload: JSONValue) -> JSONValue {
+        guard let id = session.claudeSessionID else { return [:] }
+        let source = payload["source"]?.stringValue ?? ""
+        let afresh = source == "clear" || source == "compact"
+        var parts: [String] = []
+        let instructions = who == Self.orchestratorKey ? ClaudeLauncher.orchestratorPrompt(flow: flow)
+            : flow.card(who).map { ClaudeLauncher.agentPrompt(flow: flow, card: $0) }
+        if let instructions, services.needsInstructions(session: id, instructions: instructions, afresh: afresh) {
+            parts.append("[Queen Bee] Your instructions have changed since this conversation began. These are the current ones. They replace the earlier ones wherever the two differ.\n\n\(instructions)")
+        }
+        if who == Self.orchestratorKey {
+            let file = project.root.appendingPathComponent(Capabilities.projectFile)
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Data(Capabilities.file.utf8).write(to: file, options: .atomic)
+            if services.referenceChanged(forSession: id, afresh: afresh) {
+                parts.append("[Queen Bee] The app's capabilities reference is the file \(Capabilities.projectFile) in this folder. The app has just written it from its own code, and you have not read this version. Read the whole file with the Read tool before you answer or build anything. It replaces what you remember about the app's cards, settings, tools and limits, and anything said about them earlier in this conversation.")
+            }
+        }
+        guard !parts.isEmpty else { return [:] }
+        return ["hookSpecificOutput": ["hookEventName": "SessionStart", "additionalContext": .string(parts.joined(separator: "\n\n"))]]
+    }
+
+    private func applyHook(from who: String, session: TerminalSession, payload: JSONValue) {
         let event = payload["hook_event_name"]?.stringValue ?? ""
         let type = payload["notification_type"]?.stringValue
             ?? ((payload["message"]?.stringValue ?? "").localizedCaseInsensitiveContains("permission") ? "permission_prompt" : nil)
@@ -1816,8 +1884,8 @@ final class FlowController: ToolHost {
     }
 
     /// An armed schedule runs with nobody watching, so it is tied to what the person agreed to.
-    /// When the orchestrator changes a Start card's command, or an agent's brief, folder or
-    /// permissions, every schedule in the flow goes off until the person turns it on again.
+    /// When the orchestrator changes a Start card's command, or an agent's brief, folder,
+    /// permissions or browser, every schedule in the flow goes off until the person turns it on again.
     /// The orchestrator putting a command back as it was puts the schedule back on.
     ///
     /// A change from a paired device, which is named here, is held to more: see `disarmSchedules(changedFrom:byDevice:)`.
@@ -1828,6 +1896,7 @@ final class FlowController: ToolHost {
         let agentsChanged = flow.cards.contains { card in
             guard card.kind == .agent, let was = old.card(card.id) else { return card.kind == .agent }
             return card.instructions != was.instructions || card.cwd != was.cwd || card.permissionMode != was.permissionMode
+                || (card.browser == true) != (was.browser == true)
         }
         guard agentsChanged else { return }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }

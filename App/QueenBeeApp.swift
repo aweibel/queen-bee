@@ -199,12 +199,12 @@ enum LaunchArguments {
     /// `--welcome` shows the first-run walk-through in a test copy, which otherwise skips it.
     static var welcome: Bool { CommandLine.arguments.contains("--welcome") }
 
-    /// `--open <folder>` adds that folder to the sidebar and shows its first flow.
-    static func takeFolder() -> String? {
-        guard !used else { return nil }
+    /// `--open <folder>` adds that folder to the sidebar and shows its first flow. Given more than
+    /// once, every folder is added and the first one's flow is shown.
+    static func takeFolders() -> [String] {
+        guard !used else { return [] }
         used = true
         let args = CommandLine.arguments
-        guard let i = args.firstIndex(of: "--open"), i + 1 < args.count else { return nil }
-        return args[i + 1]
+        return args.indices.filter { args[$0] == "--open" && $0 + 1 < args.count }.map { args[$0 + 1] }
     }
 }

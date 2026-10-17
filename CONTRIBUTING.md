@@ -53,6 +53,8 @@ To put the app on a real device, follow [the README](README.md#install-it-on-you
 bundle id go in `Mobile/Local.xcconfig`, which git ignores. Never commit that file, and never put a team id in
 `project.yml` or `Mobile/Config.xcconfig`.
 
+A new card, card setting or agent tool is described in `Core/Sources/QueenBeeCore/Capabilities.swift`, which the orchestrator's instructions and `CAPABILITIES.md` are made from. `./scripts/build.sh` rewrites `CAPABILITIES.md`; commit it with your change. The unit tests fail if it is out of date.
+
 The unit tests run on every pull request, and so does a build of the iPad and iPhone app for the Simulator. The end-to-end script does not, because it needs a signed-in
 Claude Code. Run it, or the scenarios near your change (`./scripts/e2e.py guard loop`), when you touch sessions,
 hand-offs, the canvas or the engine, and say in the pull request which ones you ran.

@@ -272,7 +272,11 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
             scrollView.minMagnification = Self.minZoom
         }
         // The minimap draws where the window is looking, so panning is published as well as zooming.
-        if let controller, !controller.viewport.equalTo(scrollView.documentVisibleRect) { controller.viewport = scrollView.documentVisibleRect }
+        if let controller, !controller.viewport.equalTo(scrollView.documentVisibleRect) {
+            controller.viewport = scrollView.documentVisibleRect
+            // A card's browser only streams its page while the card is in view.
+            cardViews.values.forEach { ($0 as? AgentCardView)?.updateBrowserVisibility() }
+        }
         let zoom = Double(scrollView.magnification)
         if let controller, abs(controller.zoom - zoom) > 0.004 {
             controller.zoom = zoom
@@ -359,6 +363,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
                 if controller.awaitingAnswer.contains(card.id) { context.waiting = "awaiting answer" }
                 if let used = controller.runUsage(forCard: card.id), !used.isZero { context.cost = used.price }
                 agentView.attach(terminal: session.view)
+                agentView.attach(browser: controller.browserTab(forCard: card.id))
             }
             if card.kind == .start { context.isArmed = controller.isArmed(card) }
             if !view.isCurrent(card: card, context: context) { view.update(card: card, context: context) }
@@ -486,7 +491,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         if responder is NSText { return true }
         var view = responder as? NSView
         while let v = view {
-            if v is TerminalView { return true }
+            if v is TerminalView || v is BrowserPageView { return true }
             view = v.superview
         }
         return false
@@ -566,7 +571,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         NSCursor.arrow.set()
     }
 
-    /// A scroll over a terminal that doesn't have the keyboard pans the canvas. Returns
+    /// A scroll over a terminal or a card's browser that doesn't have the keyboard pans the canvas. Returns
     /// whether it did; when it didn't, the event goes on to whatever is under it.
     private func panInsteadOfScrolling(_ event: NSEvent, atWindowPoint point: NSPoint) -> Bool {
         guard let terminal = terminal(atWindowPoint: point), !isFocused(terminal) else { return false }
@@ -580,7 +585,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         // converting into its own coordinates would look for the terminal at the mirrored spot.
         var view = content.hitTest(content.superview?.convert(point, from: nil) ?? point)
         while let v = view {
-            if v is TerminalView { return v }
+            if v is TerminalView || v is BrowserPageView { return v }
             view = v.superview
         }
         return nil
@@ -800,6 +805,27 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
     // MARK: Test support
 
     #if DEBUG
+
+    /// A click at a point in a card's browser half and then some typing, sent as the events a mouse and
+    /// keyboard would send.
+    func testBrowserInput(cardID: String, at point: CGPoint?, typing text: String) -> Bool {
+        guard let page = (cardViews[cardID] as? AgentCardView)?.browserPane?.page, let window else { return false }
+        let spot = page.convert(point ?? .zero, to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] where point != nil {
+            guard let event = NSEvent.mouseEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
+            if type == .leftMouseDown { page.mouseDown(with: event) } else { page.mouseUp(with: event) }
+        }
+        for character in text {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                guard let event = NSEvent.keyEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                   windowNumber: window.windowNumber, context: nil, characters: String(character),
+                                                   charactersIgnoringModifiers: String(character), isARepeat: false, keyCode: 0) else { return false }
+                if type == .keyDown { page.keyDown(with: event) } else { page.keyUp(with: event) }
+            }
+        }
+        return window.firstResponder === page
+    }
 
     func testFocus(cardID: String?) {
         if let cardID, let terminal = controller?.sessions[cardID]?.view {

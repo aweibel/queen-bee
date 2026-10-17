@@ -6,9 +6,9 @@ Queen Bee is a work in progress. It is open source, and [contributions are welco
 
 Each agent is a live `claude` session in a terminal that sits on the canvas. You can click into any of them and type. Logic cards (If / Else, Switch, And, Or, Prompt, Loop until, Approval, Script, Flow, End) route each agent's finished reply to the next cards. Every flow also has an orchestrator, a Claude Code session docked beside the canvas that can edit the flow, run it and talk to the agents.
 
-![A finished run: cards the run passed through carry a check and a count, and travelled links are green](docs/queen-bee-flight-plan-light.jpg)
+![A finished run of a flow with three agents, a sub-flow, a script check and an approval: cards the run passed through carry a check and a count, and travelled links are green](docs/queen-bee-flight-plan-light.png)
 
-The app follows light and dark. [The same run in dark](docs/queen-bee-flight-plan-dark.jpg).
+The app follows light and dark. [The same run in dark](docs/queen-bee-flight-plan-dark.png).
 
 ## Install
 
@@ -59,11 +59,15 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - **Add Project Folder…** at the foot of the sidebar adds a folder. Each folder lists its flows, and **+** beside its name makes a new one.
 - The first time you open the app, a short walk-through explains agents, logic cards and the orchestrator. **Help → Welcome to Queen Bee** shows it again.
 
-  ![The walk-through's second step: every agent is a live terminal](docs/queen-bee-first-run.jpg)
+  ![The walk-through's second step: every agent is a live Claude Code](docs/queen-bee-first-run.png)
 
 - An empty flow shows a note pointing at the orchestrator: describe the flow you want there and it builds it. Close the note to build by hand.
 - The **palette** at the canvas's top-left holds the card types. Click one to add it, or drag it to where you want it. Rest the pointer on one to read what it does. Each agent card starts its own Claude Code session.
 - An **Approval** card stops a run until you approve, edit or reject the message. A **Script** card runs a shell command and goes out Pass or Fail; a command you didn't type yourself asks before it first runs. A **Flow** card runs another flow as one step: double-click it to open that flow, or to make a new sub-flow with an Input and an Output, and use the names in the title bar to go back. Sub-flows can hold Flow cards of their own, three levels deep unless you change the limit in the top flow's settings (the sliders button in the toolbar).
+
+  ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
+
+- Turn on **Browser** in an agent's settings to give it a web browser in its card: terminal on the left, the live page on the right. The agent opens and reads pages by itself and asks before it clicks or types, unless its permissions say otherwise. Click into the page to use it yourself, for instance to sign in to a site; agents with a browser in the same project share those sign-ins, and **Clear browser data** in the flow's settings forgets them. It uses Chrome, Chromium, Edge or Brave if one is installed, and offers to download a browser of its own if not.
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
 - An agent's settings can be saved as a **role**, which then sits under Agent in the palette for any flow.
@@ -211,6 +215,8 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 
 - `Core/` is a Swift package with no UI: the flow model, the file store, the routing engine, the orchestrator's tools and the socket messages. `cd Core && swift test` runs its tests.
 - `App/` is the SwiftUI and AppKit app. The canvas is an `NSScrollView` with magnification, and each terminal is a SwiftTerm view inside a card. `App/Design/Tokens.swift` holds every colour, type size, spacing step and timing the views use.
+- `App/Browser/` runs a hidden Chromium for agent cards that have a browser, one per project, and controls it over a private pipe with the Chrome DevTools Protocol. Each card has a tab: the page is streamed into the card as pictures, and the agent's tools are served by `qb browser-mcp`.
+- `Core/Sources/QueenBeeCore/Capabilities.swift` is the one place that says what each card and each agent can do. The app writes it into each project as `.queenbee/CAPABILITIES.md` for the orchestrator to read, its tools take their settings from it, and the build writes it out as [CAPABILITIES.md](CAPABILITIES.md). A capability added anywhere else doesn't build or fails the tests.
 - `Helper/` builds `qb`, a small binary inside the app bundle. Claude Code hooks, the plugin and the orchestrator's tool server all run it, and it talks to the app over a unix socket in `~/Library/Application Support/QueenBee/`.
 - `Mobile/` is the iPad and iPhone app. It links the same `Core/` package for the messages, the flow model and the link routes, draws the canvas with UIKit and the panels with SwiftUI, and feeds each terminal the output the Mac sends. `Mobile/Design/Tokens.swift` mirrors the Mac's tokens value for value.
 - `Plugin/qb-link/` is the plugin the app loads into every session. When an agent's turn ends it asks the app where the reply goes and sends it there as a Claude Code session message.
@@ -218,7 +224,7 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 357 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to and the keys it sends
+cd Core && swift test        # 357 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to the keys it sends and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
@@ -238,7 +244,7 @@ The iPad and iPhone app is checked in the iOS Simulator by seven scenarios that 
 
 ## Launch flags
 
-- `--open <folder>` opens that project folder in the first window.
+- `--open <folder>` opens that project folder in the first window. Give it more than once to open several.
 - `--float` keeps the window above others without taking focus. Terminals stop painting in a hidden window, so a check that looks at the window needs it.
 - `--welcome` shows the first-run walk-through in a test copy, which otherwise skips it.
 - `--testing` turns on the test harness and lets a second copy of the app run. `QB_SUPPORT_DIR` in the environment moves that copy's socket and plugin.

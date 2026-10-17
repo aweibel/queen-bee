@@ -60,6 +60,57 @@ import Testing
         #expect(sw.height >= Card.minimumHeight(for: sw))
     }
 
+    @Test func turningTheBrowserOnDoublesAnAgentsWidthAndOffHalvesIt() throws {
+        var flow = Flow(name: "F")
+        let agent = try flow.addCard(kind: .agent, name: "Writer")
+        #expect(agent.browser == nil && agent.width == 560)
+        var patch = CardPatch()
+        patch.browser = true
+        let on = try flow.updateCard("Writer", patch: patch)
+        #expect(on.browser == true && on.width == 1120)
+        // Saying it again changes nothing.
+        #expect(try flow.updateCard("Writer", patch: patch).width == 1120)
+        patch.browser = false
+        let off = try flow.updateCard("Writer", patch: patch)
+        #expect(off.browser == nil && off.width == 560)
+        #expect(try flow.updateCard("Writer", patch: patch).width == 560)
+    }
+
+    @Test func aBrowserCardIsNeverTooNarrowForBothHalves() throws {
+        var flow = Flow(name: "F")
+        var patch = CardPatch()
+        patch.browser = true
+        patch.width = 200
+        let made = try flow.addCard(kind: .agent, name: "Writer", patch: patch)
+        #expect(made.browser == true && made.width == 640)
+        // A width given with the switch is the width the card gets.
+        patch.width = 900
+        #expect(try flow.updateCard("Writer", patch: patch).width == 900)
+        patch = CardPatch()
+        patch.browser = false
+        patch.width = 900
+        #expect(try flow.updateCard("Writer", patch: patch).width == 900)
+    }
+
+    @Test func onlyAnAgentCanHaveABrowser() throws {
+        var flow = Flow(name: "F")
+        var patch = CardPatch()
+        patch.browser = true
+        let note = try flow.addCard(kind: .note, name: "N", patch: patch)
+        #expect(note.browser == nil && note.width == 240)
+    }
+
+    @Test func theBrowserSettingSurvivesSavingAndAnOldFileHasItOff() throws {
+        var flow = Flow(name: "F")
+        var patch = CardPatch()
+        patch.browser = true
+        _ = try flow.addCard(kind: .agent, name: "Writer", patch: patch)
+        let data = try JSONEncoder().encode(flow)
+        #expect(try JSONDecoder().decode(Flow.self, from: data).cards[0].browser == true)
+        let old = try JSONDecoder().decode(Card.self, from: Data(#"{"id":"a","kind":"agent","name":"A","x":0,"y":0,"width":560,"height":380}"#.utf8))
+        #expect(old.browser == nil)
+    }
+
     @Test func emptyAgentSettingsClearToNil() throws {
         var flow = Flow(name: "F")
         var patch = CardPatch()

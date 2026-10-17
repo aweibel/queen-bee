@@ -2,7 +2,7 @@ import Foundation
 
 /// One message from the helper binary to the app.
 public struct WireRequest: Codable, Equatable, Sendable {
-    /// hook, route, sent, may-send or mcp.
+    /// hook, route, sent, may-send, mcp or browser-mcp.
     public var kind: String
     /// Which session the helper is running for, from `QB_SESSION`. The app puts a secret in it when it
     /// starts the session, so the value can't be made up by another session.

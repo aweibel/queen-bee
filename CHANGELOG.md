@@ -20,6 +20,29 @@ All notable changes to Queen Bee are listed here. The format follows
 - What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
 - Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
 
+## [0.4.0] - 2026-10-13
+
+### Added
+
+- An agent card can have a web browser in it. Turn on **Browser** in the card's settings and the card doubles in width: the terminal on the left, a live page on the right. The agent gets tools to open an address, read the page, take a screenshot, scroll, go back, wait, click, type and press a key. You can click, scroll and type in the page yourself, for instance to sign in. The orchestrator can turn the switch on when it builds a flow.
+- The browser is a Chromium-based browser already on the Mac (Chrome, Chromium, Edge or Brave), run hidden. With none installed, the card offers to download Chrome for Testing, about 150 MB, for Queen Bee's own use.
+- Every agent with a browser in a project shares one set of sign-ins, kept apart from your own browser. **Clear browser data** in a flow's settings forgets them.
+- `./scripts/e2e.py browser nobrowser` checks the browser against a small site served on the Mac, with a real agent.
+
+- A running orchestrator can be restarted from its panel, keeping its conversation. When the flow has been renamed since it started, the button reads **Restart to apply**.
+
+### Fixed
+
+- A link a message is travelling shows its orange dashes again. The line had gone missing while the agent it led to was working, leaving only the arrowhead and the count, and came back green when the run moved on.
+- The orchestrator no longer writes steps for things the app can't do, such as opening a second browser tab. What every card, setting and agent can do is now declared in one place in the code. The app writes it into each project as `.queenbee/CAPABILITIES.md` whenever an orchestrator's session starts and tells the orchestrator to read it when it has changed, its tools take their settings from it, and the build writes the same text out as `CAPABILITIES.md` in the repository. A new card or setting that isn't described there doesn't build or fails the tests.
+
+- New instructions reach a session that is resumed. Claude Code keeps the instructions a conversation began with, so an agent restarted with **Restart to apply**, and an orchestrator reopened after an update, went on following the old ones. The app now hands the current ones to the session when it starts.
+
+### Changed
+
+- The README's screenshots are retaken at twice the size, on a fuller flow with a sub-flow, a script check and an approval, and there is a new one of a run waiting at an Approval card.
+- `--open` can be given more than once, to open several project folders at launch.
+
 ## [0.3.4] - 2026-10-12
 
 These come from an outside security review of 0.3.3.
@@ -166,7 +189,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.1...v0.3.2

@@ -11,6 +11,8 @@ final class ProjectModel {
     private(set) var controllers: [FlowController] = []
     /// Flow files that couldn't be read. Listed, never written.
     private(set) var unreadable: [URL] = []
+    /// The browser the project's agent cards share. It only starts when a card with a browser needs it.
+    @ObservationIgnored private(set) lazy var browser = BrowserHost(projectRoot: root, support: AppServices.shared.supportDirectory)
 
     var name: String { root.lastPathComponent }
 
@@ -122,5 +124,6 @@ final class ProjectModel {
     func close() {
         watcher?.stop()
         controllers.forEach { $0.shutDown(); AppServices.shared.unregister(flowID: $0.flow.id) }
+        browser.terminate()
     }
 }

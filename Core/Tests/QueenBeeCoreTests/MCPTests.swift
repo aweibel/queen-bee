@@ -13,7 +13,7 @@ import Testing
         #expect(reply["error"] == nil)
         #expect(reply["result"]?["protocolVersion"] == "2025-03-26")
         #expect(reply["result"]?["capabilities"] == ["tools": [:]])
-        #expect(reply["result"]?["serverInfo"] == ["name": "queenbee", "version": "0.3.4"])
+        #expect(reply["result"]?["serverInfo"] == ["name": "queenbee", "version": "0.4.0"])
     }
 
     @Test func initializeDefaultsTheProtocolVersion() async throws {
