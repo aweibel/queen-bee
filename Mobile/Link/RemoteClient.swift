@@ -69,8 +69,8 @@ final class RemoteClient {
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
     /// Stands in for the link when a test has no Mac: it is handed each command in place of one.
     @ObservationIgnored var debugOutbox: ((_ id: Int, _ command: RemoteCommand) -> Void)?
-    /// And is told which flow the device asks to see, as the Mac would be.
-    @ObservationIgnored var debugOpener: ((_ flowID: String?) -> Void)?
+    /// And is told which flow the device asks to see, as the Mac would be, with what the device had of the one it left.
+    @ObservationIgnored var debugOpener: ((_ flowID: String?, _ leaving: RemoteFlowSnapshot?) -> Void)?
     /// Every command that left for the Mac, in order, for a test to see that nothing else did.
     private(set) var debugSent: [RemoteCommand] = []
     #endif
@@ -415,6 +415,9 @@ final class RemoteClient {
 
     /// Shows a flow, or none. What was on show goes at once, and the new flow follows when the Mac sends it.
     func open(_ flowID: String?) {
+        #if DEBUG
+        let leaving = mirror.snapshot
+        #endif
         // A question about the flow that was open is not one about the next, and nor is editing it.
         if flowID != mirror.openFlowID {
             controls.asking = nil
@@ -425,7 +428,7 @@ final class RemoteClient {
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
         if state == .connected { link?.send(.open(flowID: flowID)) }
         #if DEBUG
-        if state == .connected, link == nil { debugOpener?(flowID) }
+        if state == .connected, link == nil { debugOpener?(flowID, leaving) }
         #endif
     }
 

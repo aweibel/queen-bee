@@ -20,6 +20,11 @@ import QueenBeeCore
 /// What is typed for a session that is running shows up in that session's terminal, as it would once the
 /// program echoed it. With `-qbStale 1` the sessions have ended without the device being told, so typing is refused.
 /// It makes the edits it is asked for too, to its own copy of the flow, and sends the flow back: see `MadeUpEdits`.
+///
+/// With `-qbParity 1` it has what stage 4's controls need besides: more flows that can be opened, among them a
+/// sub-flow under a Flow card, a flow with two Start cards and an empty one; a pinned flow, card names for Find,
+/// sub-flow costs and the running run's cost; the project's browser; and the settings each agent's session
+/// doesn't have yet.
 enum DebugCannedRun {
     static var isWanted: Bool { wanted > 0 }
     private static var wanted: Int { UserDefaults.standard.integer(forKey: "qbCannedRun") }
@@ -37,6 +42,14 @@ enum DebugCannedRun {
     private static let screens = [writer: (cols: 58, rows: 16), orchestrator: (cols: 40, rows: 30)]
 
     static let flowID = "canned10"
+    /// The flow the device has open, which the made-up Mac sends its changes for.
+    private static var openID = flowID
+    /// What the device had of each flow it left, to send again when it comes back to one.
+    private static var left: [String: RemoteFlowSnapshot] = [:]
+    static var isParity: Bool { UserDefaults.standard.bool(forKey: "qbParity") }
+    /// The flows only `-qbParity 1` has, besides its Flow card's sub-flow.
+    static let newsletter = "other001", speakers = "other003", spelling = "other004"
+    private static let spellCheck = "spell001"
     private static let start = "start001", writer = "writer01", style = "style001", both = "both0001"
     private static let short = "short001", sign = "sign0001", sent = "sent0001", dropped = "drop0001"
     private static let orchestrator = TerminalRegistry.orchestratorKey
@@ -91,6 +104,10 @@ enum DebugCannedRun {
             Link(id: "l8", from: sign, port: "rejected", to: dropped),
         ])
         flow.groups = [CardGroup(id: "group001", name: "Checks", cardIDs: [short, sign])]
+        if isParity {
+            // A Flow card that runs a sub-flow, off to one side so it is in no run.
+            flow.cards.append(card(spellCheck, .flow, "Spell check", 1200, 520, 240, 120) { $0.flowRef = spelling })
+        }
 
         // Times count back from now, so the runs are today's and their lengths are fixed.
         let now = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 / 60).rounded(.down) * 60)
@@ -146,7 +163,8 @@ enum DebugCannedRun {
             // With `-qbFromDevice 1` the command is one a device wrote, which is allowed at the Mac and nowhere else.
             holds: [PendingHold(id: "hold0001", cardID: style, kind: .script, text: command, from: "Start", command: "cat docs/style.md", needsAllow: true,
                                 allowOnMac: UserDefaults.standard.bool(forKey: "qbFromDevice") ? true : nil)],
-            results: [:], usage: usage, sessions: sessions, awaitingAnswer: [], banner: nil)
+            results: [:], usage: usage, sessions: sessions, awaitingAnswer: [], banner: nil,
+            runUsage: isParity ? [writer: Usage(cost: 0.13, input: 400, output: 360, cacheRead: 12_000, cacheWrite: 1_500)] : [:])
         var messages: [String: [LinkMessage]] = [
             "l0": [LinkMessage(date: at(began - 6), from: "Start", text: command)],
             "l1": [LinkMessage(date: at(began - 12), from: "Start", text: command)],
@@ -170,20 +188,55 @@ enum DebugCannedRun {
 
         client.debugOutbox = { id, command in answer(client, id, command) }
         client.debugTake(.welcome(RemoteWelcome(version: Remote.version, macName: "Example Mac", canControl: UserDefaults.standard.bool(forKey: "qbControl"))))
-        let summary = RemoteFlowSummary(id: flowID, name: flow.name, isSubflow: false, activity: .needsYou)
-        // Others beside it, so the list of flows has every kind of row. Only the first can be opened.
+        var summary = RemoteFlowSummary(id: flowID, name: flow.name, isSubflow: false, activity: .needsYou)
+        // Others beside it, so the list of flows has every kind of row. Only the first can be opened, unless `-qbParity 1`.
         func other(_ n: Int, _ name: String, _ activity: FlowActivity = .quiet, isSubflow: Bool = false) -> RemoteFlowSummary {
             RemoteFlowSummary(id: "other00\(n)", name: name, isSubflow: isSubflow, activity: activity)
         }
+        var flows = [other(1, "Monthly newsletter", .running), other(2, "Reading list", .failed), other(3, "Thank the speakers"),
+                     other(4, "Check the spelling", isSubflow: true)]
+        var openable: [Flow] = []
+        var browser = RemoteBrowserState()
+        if isParity {
+            // A flow with two Start cards, an empty one, and the sub-flow the Flow card runs, all of which can be opened.
+            let newsletter = Flow(id: Self.newsletter, name: "Monthly newsletter", cards: [
+                card("nstart01", .start, "Start", 40, 40) { $0.command = "Write this month's newsletter." },
+                card("nweek001", .start, "Weekly", 40, 240) { $0.command = "Write a short reminder." },
+                card("nwrap001", .prompt, "Wrap", 400, 140, 240, 96) { $0.template = "Dear members, {{message}}" },
+                card("ndone001", .end, "Done", 760, 140),
+            ], links: [Link(id: "n0", from: "nstart01", to: "nwrap001"), Link(id: "n1", from: "nweek001", to: "nwrap001"),
+                       Link(id: "n2", from: "nwrap001", to: "ndone001")])
+            var spelling = Flow(id: Self.spelling, name: "Check the spelling", cards: [
+                card("sin00001", .start, "Input", 40, 120) { $0.command = "A note to check." },
+                card("sout0001", .end, "Output", 400, 120),
+            ], links: [Link(id: "s0", from: "sin00001", to: "sout0001")])
+            spelling.isSubflow = true
+            let speakers = Flow(id: Self.speakers, name: "Thank the speakers")
+            openable = [newsletter, spelling, speakers]
+            summary.cardNames = Remote.listedNames(of: flow)
+            summary.usage = Usage(cost: 0.71, input: 3_100, output: 2_030, cacheRead: 103_000, cacheWrite: 15_500)
+            summary.usageWithSubflows = Usage(cost: 0.83, input: 3_500, output: 2_330, cacheRead: 111_000, cacheWrite: 16_500)
+            flows[0].cardNames = Remote.listedNames(of: newsletter)
+            flows[1].pinned = true
+            flows[1].cardNames = ["Shelf", "Borrowed"]
+            flows[3].parentID = flowID
+            flows[3].cardNames = Remote.listedNames(of: spelling)
+            flows[3].usage = Usage(cost: 0.12, input: 400, output: 300, cacheRead: 8_000, cacheWrite: 1_000)
+            flows[3].usageWithSubflows = flows[3].usage
+            browser = RemoteBrowserState(status: .running, browser: "Google Chrome", hasData: true)
+        }
         let library = RemoteLibrary(projects: [
-            RemoteProject(id: "p", name: "Book club", flows: [summary, other(1, "Monthly newsletter", .running), other(2, "Reading list", .failed),
-                                                             other(3, "Thank the speakers"), other(4, "Check the spelling", isSubflow: true)]),
+            RemoteProject(id: "p", name: "Book club", flows: [summary] + flows, browser: browser),
             RemoteProject(id: "q", name: "Allotment society", flows: [other(5, "Seed order with a long name that runs on"), other(6, "Rota")]),
         ], roles: [RemoteRole(id: "role0001", name: "Note writer"), RemoteRole(id: "role0002", name: "Proof reader")])
-        let mac = MadeUpEdits(flow: flow, library: library)
+        var mac = MadeUpEdits(flow: flow, library: library)
+        mac.isFull = isParity
+        mac.park(openable)
         client.debugTake(.library(library))
         client.open(flowID)
         client.debugTake(.opened(RemoteFlowSnapshot(flow: flow, run: run, edit: mac.state, log: log, messages: messages, runs: [first, second])))
+        // From here, a flow the device opens is sent by the made-up Mac.
+        client.debugOpener = { id, leaving in open(client, id, leaving: leaving) }
         current = run
         edits = mac
         told = (flow, mac.state, 0, library)
@@ -280,7 +333,10 @@ enum DebugCannedRun {
             try? await Task.sleep(for: .milliseconds(150))
             guard var run = current else { return }
             var refusal: String?
+            var logLines: [([LogLine], Bool)] = []
+            var clearsHistory = false
             let gone = "That is no longer waiting for an answer."
+            let running = "A run is already going. Stop it before starting another."
             func held(_ id: String, _ kind: CardKind) -> Bool { run.holds.contains { $0.id == id && $0.kind == kind && (kind == .approval || $0.needsAllow) } }
             if !client.mirror.canControl {
                 refusal = Remote.watchOnlyRefusal
@@ -306,6 +362,60 @@ enum DebugCannedRun {
                     run.holds.removeAll { $0.id == holdID }
                 case .startSession(_, let cardID):
                     run.sessions[cardID] = .starting
+                    if cardID == orchestrator { run.orchestratorNeedsRestart = false } else { edits?.startedSession(cardID) }
+                case .runFromStart(_, let cardID):
+                    let flow = edits?.flow
+                    if run.isRunning {
+                        refusal = running
+                    } else if let card = flow?.card(cardID), card.kind == .start {
+                        if (card.command ?? "").isEmpty || (flow?.links(from: cardID).isEmpty ?? true) {
+                            refusal = "Nothing to run yet: give \(card.name) something to start with and link it to a card."
+                        }
+                        run.isRunning = true
+                        run.marks = [cardID: RunMark()]
+                        run.linkPasses = [:]
+                        run.results = [:]
+                        logLines.append(([LogLine(date: Date(), text: "Run started at \(card.name)")], false))
+                    } else {
+                        refusal = "Only a Start card starts a run."
+                    }
+                case .retry(_, let cardID):
+                    let name = edits?.flow.card(cardID)?.name ?? "a card"
+                    if run.isRunning {
+                        refusal = running
+                    } else if run.marks[cardID]?.failed != true {
+                        refusal = "The last run didn't stop at \(name), so there is nothing to retry."
+                    } else {
+                        run.isRunning = true
+                        run.marks[cardID]?.failed = false
+                        logLines.append(([LogLine(date: Date(), text: "\(DeviceIdentity.deviceName) retried \(name)")], false))
+                    }
+                case .clearLog:
+                    if client.mirror.snapshot?.log.isEmpty ?? true {
+                        refusal = "The log is already empty."
+                    } else {
+                        logLines.append(([LogLine(date: Date(), text: "\(DeviceIdentity.deviceName) cleared the log")], true))
+                        clearsHistory = true
+                    }
+                case .dismissBanner:
+                    if run.banner == nil { refusal = "There is no message to close." }
+                    run.banner = nil
+                case .stopAgents(let id) where id == openID:
+                    if !run.isRunning, !run.sessions.values.contains(where: { $0 != .notStarted }) {
+                        refusal = "None of this flow's agents is running."
+                    }
+                    run.isRunning = false
+                    run.holds = []
+                    for key in run.sessions.keys { run.sessions[key] = .notStarted }
+                case .stopAgents(let id):
+                    // Only a flow the list shows as running has anything to stop, here.
+                    if client.mirror.library?.projects.flatMap(\.flows).first(where: { $0.id == id })?.activity != .running {
+                        refusal = "None of this flow's agents is running."
+                    } else {
+                        edits?.setActivity(id, .quiet)
+                    }
+                case .armSchedule, .pin, .updateRole, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser:
+                    refusal = edits?.housekeeping(command)
                 case .openOnMac:
                     for key in [writer, orchestrator] where (run.sessions[key] ?? .notStarted) == .notStarted { run.sessions[key] = .starting }
                 case .prompt(_, let key, let text):
@@ -320,8 +430,12 @@ enum DebugCannedRun {
                 }
             }
             if refusal == nil {
+                if let mac = edits { run.awaitingRestart = mac.awaitingRestart(run.sessions) }
                 current = run
-                client.debugTake(.run(id: flowID, state: run))
+                client.debugTake(.run(id: openID, state: run))
+                for (lines, reset) in logLines { client.debugTake(.log(id: openID, lines: lines, reset: reset)) }
+                if clearsHistory { client.debugTake(.history(id: openID, runs: [])) }
+                tellFlow(client)
             }
             client.debugTake(.answer(id: id, refusal: refusal))
         }
@@ -342,23 +456,51 @@ enum DebugCannedRun {
         }
     }
 
-    /// Sends the device the flow and its Undo and Redo, if either has changed since it was last sent them.
+    /// Sends the device the flow and its Undo and Redo, if either has changed since it was last sent them, and
+    /// what its agents' sessions don't have yet.
     private static func tellFlow(_ client: RemoteClient) {
         guard let mac = edits, var sent = told else { return }
         if mac.flow != sent.flow {
             sent.flow = mac.flow
             sent.revision += 1
-            client.debugTake(.flow(id: flowID, revision: sent.revision, flow: mac.flow))
+            client.debugTake(.flow(id: openID, revision: sent.revision, flow: mac.flow))
         }
         if mac.state != sent.edit {
             sent.edit = mac.state
-            client.debugTake(.edit(id: flowID, state: mac.state))
+            client.debugTake(.edit(id: openID, state: mac.state))
+        }
+        if var run = current, mac.awaitingRestart(run.sessions) != run.awaitingRestart {
+            run.awaitingRestart = mac.awaitingRestart(run.sessions)
+            current = run
+            client.debugTake(.run(id: openID, state: run))
         }
         if mac.library != sent.library {
             sent.library = mac.library
             client.debugTake(.library(mac.library))
         }
         told = sent
+    }
+
+    /// The device asked for another flow. The made-up Mac sends it, if it has it, as the real one does.
+    private static func open(_ client: RemoteClient, _ id: String?, leaving: RemoteFlowSnapshot?) {
+        if var kept = leaving, kept.flow.id == openID {
+            if let current { kept.run = current }
+            left[openID] = kept
+        }
+        guard let id, var mac = edits, mac.switchTo(id) else { return }
+        let was = left[id]
+        // A flow that hasn't been open before has no run, and none of its sessions has been started.
+        let run = was?.run ?? RemoteRunState(isRunning: false, marks: [:], linkPasses: [:], liveLinkIDs: [], handOffs: 0, holds: [], results: [:],
+                                             usage: [:], sessions: [:], awaitingAnswer: [], banner: nil)
+        openID = id
+        current = run
+        edits = mac
+        told = (mac.flow, mac.state, 0, mac.library)
+        let snapshot = RemoteFlowSnapshot(flow: mac.flow, run: run, edit: mac.state, log: was?.log ?? [], messages: was?.messages ?? [:], runs: was?.runs ?? [])
+        Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            client.debugTake(.opened(snapshot))
+        }
     }
 
     /// Something a test has the made-up Mac do by itself, as if someone were sitting at it:
@@ -368,11 +510,49 @@ enum DebugCannedRun {
     ///   accept                 stop refusing
     ///   set:<card>:<setting>=<text>
     ///                          change one of a card's settings: name, instructions, command, template, text or value
+    ///   fail:<card>            end the run, stopped at that card
+    ///   banner:<words>         put a message at the top of the flow
+    ///   browser:<status>[:<words>]
+    ///                          the project's browser is idle, running, missing, downloading, stopped or failed, for these words
+    ///   needsRestart           the flow was renamed under its orchestrator, which is running
     static func macDoes(_ what: String, _ client: RemoteClient) {
         guard var mac = edits else { return }
         let parts = what.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
         let card = parts.count > 1 ? mac.flow.cards.first { $0.name == parts[1] } : nil
+        func changeRun(_ change: (inout RemoteRunState) -> Void) {
+            guard var run = current else { return }
+            change(&run)
+            current = run
+            client.debugTake(.run(id: openID, state: run))
+        }
         switch parts[0] {
+        case "fail":
+            guard let card else { return }
+            changeRun { run in
+                run.isRunning = false
+                run.holds = []
+                var mark = run.marks[card.id] ?? RunMark()
+                mark.failed = true
+                mark.arrivals = max(1, mark.arrivals)
+                run.marks[card.id] = mark
+            }
+            return
+        case "banner":
+            changeRun { $0.banner = parts.dropFirst().joined(separator: ":") }
+            return
+        case "needsRestart":
+            changeRun { run in
+                run.sessions[orchestrator] = .idle
+                run.orchestratorNeedsRestart = true
+            }
+            return
+        case "browser":
+            let words = parts.count > 2 ? parts[2] : nil
+            mac.setBrowser { browser in
+                browser.status = RemoteBrowserState.Status(rawValue: parts.count > 1 ? parts[1] : "") ?? .idle
+                browser.problem = browser.status == .failed ? words ?? "The browser couldn't start." : nil
+                browser.progress = browser.status == .downloading ? RemoteBrowserState.step(Double(words ?? "") ?? 0.45) : nil
+            }
         case "move":
             let place = (parts.count > 2 ? parts[2] : "").split(separator: ",").compactMap { Double($0) }
             guard let card, place.count == 2 else { return }

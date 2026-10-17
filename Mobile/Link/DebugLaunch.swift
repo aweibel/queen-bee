@@ -46,6 +46,8 @@ import UIKit
 ///                                         approve:<card>[:<text>] | reject:<card>[:<note>]
 ///                                         allow:<card> | dontRun:<card> | start:<card>
 ///                                         runFrom:<card>:<text>
+///                                         runStart:<card> | retry:<card> | revert:<card> | orchestrator
+///                                       The steps for stage 4's other controls are in `DebugParity`.
 ///                                       and, with a made-up run, control:on | control:off | away | pause.
 ///                                       A step that names a card waits until that card has something to
 ///                                       answer. One that starts with ~ isn't waited for.
@@ -249,6 +251,10 @@ enum DebugLaunch {
         case "allow": return hold(.script).map { (.allow(holdID: $0.id), "") }
         case "dontRun": return hold(.script).map { (.dontRun(holdID: $0.id), "") }
         case "start": return card.map { (.startAgent(cardID: $0.id), "") }
+        case "runStart": return card.map { (.runFromStart(cardID: $0.id), "") }
+        case "retry": return card.map { (.retry(cardID: $0.id), "") }
+        case "revert": return card.map { (.revert(cardID: $0.id), "") }
+        case "orchestrator": return (.startOrchestrator, "")
         default: return nil
         }
     }
@@ -274,6 +280,13 @@ enum DebugLaunch {
                     client.controls.debugNote(step, await work())
                 case _ where DebugSettings.step(step, in: client) != nil:
                     guard let work = DebugSettings.step(step, in: client) else { continue }
+                    if isWaitedFor {
+                        client.controls.debugNote(step, await work())
+                    } else {
+                        Task { client.controls.debugNote(step, await work()) }
+                    }
+                case _ where DebugParity.step(step, in: client) != nil:
+                    guard let work = DebugParity.step(step, in: client) else { continue }
                     if isWaitedFor {
                         client.controls.debugNote(step, await work())
                     } else {
@@ -640,6 +653,7 @@ enum DebugLaunch {
             fields["composer"] = composerState(client)
             fields["edit"] = DebugEditing.state(client)
             fields["settings"] = DebugSettings.state(client)
+            fields["parity"] = DebugParity.state(client)
         } onChange: {
             Task { @MainActor in report(client) }
         }
