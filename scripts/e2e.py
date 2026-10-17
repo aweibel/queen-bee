@@ -684,12 +684,12 @@ def remote_edits(app, device, send, ask, done, refused, since):
           and by_id(on_disk(lambda f: by_id(f, aid).get("permissionMode") == "plan"), aid).get("model") == "haiku", str(by_id(on_disk(), aid)))
     check("and no session was started for it", app.state(edits)["sessions"]["Agent"]["state"] == "notStarted", str(app.state(edits)["sessions"]))
 
-    # Schedules: set from a device they are off, and a change from a device turns them off.
+    # Schedules: set from a device they are off until turned on, and a change from a device turns them off.
     every5 = {"kind": "interval", "minutes": 5, "hour": 9, "minute": 0, "weekdays": [2], "path": ""}
     check("it can set a Start card's schedule", done(e("patchCard", card=start, patch={"trigger": every5}))
           and (by_id(on_disk(lambda f: by_id(f, start).get("trigger")), start).get("trigger") or {}).get("minutes") == 5, str(by_id(on_disk(), start)))
     s = app.state(edits)
-    check("and it arrives switched off: a schedule can't be turned on from a device", s["armed"] == [] and s["scheduled"] == 0, f"{s['armed']} {s['scheduled']}")
+    check("and it arrives switched off: setting a schedule doesn't turn it on", s["armed"] == [] and s["scheduled"] == 0, f"{s['armed']} {s['scheduled']}")
     check("a schedule on a card that isn't a Start card is refused", refused(e("patchCard", card=wrap, patch={"trigger": every5}), "Only a Start card"),
           str(device.seen[-1:]))
     mark = len(device.seen)
@@ -1051,6 +1051,322 @@ def remote_edits(app, device, send, ask, done, refused, since):
           and not [k for k in app.state(guard)["sessions"] if k.startswith("Agent")], str(list(app.state(guard)["sessions"])))
 
 
+# What a device pastes: a Script card, and an agent that comes with a folder, a session, a permission mode
+# that skips checks and a schedule's worth of nothing. Only the Script and the agent's own settings may arrive.
+PASTED = {
+    "cards": [
+        {"id": "pscript", "kind": "script", "name": "Pasted", "x": 0.0, "y": 1200.0, "width": 240.0, "height": 120.0,
+         "command": "echo pasted from afar"},
+        {"id": "pagent", "kind": "agent", "name": "Pasted agent", "x": 400.0, "y": 1200.0, "width": 560.0, "height": 380.0,
+         "instructions": "Reply with exactly: PASTED", "model": "haiku", "cwd": "/tmp", "permissionMode": "bypassPermissions",
+         "sessionID": "0b0b0b0b-0000-4000-8000-000000000000"},
+    ],
+    "links": [{"id": "plink", "from": "pscript", "port": "pass", "to": "pagent", "maxPasses": 3}],
+}
+
+# Two agents, never opened on the Mac, so neither starts. Reckless came in its file with a permission mode
+# that skips checks, which nothing on the Mac or a device can set.
+ROLES = flow("Roles", [
+    card("agent", "Careful", 0, 0, instructions="Check twice.", permissionMode="plan", effort="high"),
+    card("agent", "Reckless", 600, 0, instructions="Do anything.", permissionMode="bypassPermissions"),
+], [])
+
+
+def remote_parity(app, device, send, ask, done, refused, since):
+    """Stage 4: the rest of what the Mac's buttons do, from a device that may control the Mac, each checked against
+    the Mac's own state and the files it saves. The agents here are Guard's, which are running already, and Apifail's
+    one, whose model doesn't exist, so it costs nothing."""
+    guard, doors, edits, apifail = GUARD["id"], DOORS["id"], EDITS["id"], APIFAIL["id"]
+    alice = next(c["id"] for c in GUARD["cards"] if c["name"] == "Alice")
+    d = {c["name"]: c["id"] for c in DOORS["cards"]}
+    start, shout = d["Start"], d["Shout"]
+    project = next(m for m in reversed(device.seen) if m["type"] == "library")["projects"][0]
+
+    def by_id(f, cid):
+        return next(c for c in f["cards"] if c["id"] == cid)
+
+    def named(f, name):
+        return next((c for c in f["cards"] if c["name"] == name), None)
+
+    def lib(mark, test, timeout=10):
+        return since(mark, lambda m: m["type"] == "library" and test(m), timeout)
+
+    def told_run(mark, flow_id, test, timeout=20):
+        return since(mark, lambda m: m["type"] == "run" and m["flow"] == flow_id and test(m), timeout)
+
+    def macs():
+        return app.op(guard, "macState")
+
+    def opened(fid, name):
+        device.tell(f"open {fid}")
+        return device.until(lambda m: m["type"] == "opened" and m["name"] == name)
+
+    # Runs from a named Start card, and the log.
+    opened(doors, "Doors")
+    check("a run from a card that isn't a Start card is refused", refused(ask("runFromStart", card=shout), "Only a Start card"), str(device.seen[-1:]))
+    check("it can start a run from a named Start card", done(ask("runFromStart", card=start)), str(device.seen[-1:]))
+    h = held(app, doors, "Check it")
+    check("and the run goes from that card, as the Mac's own Run from This Start does",
+          h[0]["text"] == "HELLO FROM AFAR" and "Run started from Test device" in app.state(doors)["log"], str(h))
+    check("and a second is refused in the Mac's words while it goes", refused(ask("runFromStart", card=start), "already going"), str(device.seen[-1:]))
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the run to stop")
+    check("Retry is refused on a card the run didn't stop at, where the Mac offers none", refused(ask("retry", card=shout), "didn't stop at"),
+          str(device.seen[-1:]))
+    mark = len(device.seen)
+    check("it can clear the log", done(ask("clearLog")), str(device.seen[-1:]))
+    s = app.state(doors)
+    check("and the log and the earlier runs are emptied, and the new log says which device did it",
+          s["log"] == ["Test device cleared the log"] and s["runs"] == [], f"{s['log'][-3:]} {len(s['runs'])}")
+    check("and the device is sent the log afresh", since(mark, lambda m: m["type"] == "log" and m["reset"]) is not None, str(device.seen[-3:]))
+    if app.state(doors)["banner"] is None:
+        check("closing a message that isn't there is refused", refused(ask("dismissBanner"), "no message to close"), str(device.seen[-1:]))
+
+    # Schedules: turned on from a device, off again by a device's edit, and a scheduled run still asks about a
+    # Script command a device wrote.
+    every_minute = {"kind": "interval", "minutes": 1, "hour": 9, "minute": 0, "weekdays": [2], "path": ""}
+    check("a schedule set from a device arrives switched off", done(ask("patchCard", card=start, patch={"trigger": every_minute}))
+          and app.state(doors)["armed"] == [], str(app.state(doors)["armed"]))
+    check("turning on a schedule that isn't there is refused", refused(ask("armSchedule", card=d["Done"], on=True), "Only a Start card"),
+          str(device.seen[-1:]))
+    mark = len(device.seen)
+    check("it can turn the schedule on", done(ask("armSchedule", card=start, on=True)), str(device.seen[-1:]))
+    s = app.state(doors)
+    check("and the Mac has it on, and says which device turned it on", s["armed"] == ["Start"] and s["scheduled"] == 1
+          and "Test device turned the schedule on for Start" in s["log"], f"{s['armed']} {s['log'][-3:]}")
+    check("and the device is told it is on", since(mark, lambda m: m["type"] == "edit" and m["flow"] == doors and m["armed"] == [start]) is not None,
+          str(device.seen[-3:]))
+    check("a device's change to what the flow does turns it off again", done(ask("patchCard", card=shout, patch={"command": "tr a-z A-Z | rev"}))
+          and app.state(doors)["armed"] == [] and "Test device" in (app.state(doors)["banner"] or ""), str(app.state(doors)["banner"]))
+    mark = len(device.seen)
+    check("it can close the message at the top of the flow", done(ask("dismissBanner")) and app.state(doors)["banner"] is None,
+          str(app.state(doors)["banner"]))
+    check("and the device is told it has gone", told_run(mark, doors, lambda m: m["banner"] is None) is not None, str(device.seen[-3:]))
+    check("and it can turn the schedule on again", done(ask("armSchedule", card=start, on=True)) and app.state(doors)["armed"] == ["Start"],
+          str(app.state(doors)["armed"]))
+    mark = len(device.seen)
+    try:
+        s = app.wait(doors, lambda s: s["holds"] and s["holds"][0]["card"] == "Shout", 100, "the scheduled run to reach Shout")
+        check("a run the schedule starts stops at a Script command a device wrote, for Allow on the Mac",
+              s["holds"][0]["needsAllow"] and s["holds"][0]["allowOnMac"] and any(line.startswith("Starting Start: on schedule") for line in s["log"]),
+              f"{s['holds']} {s['log'][-3:]}")
+        told = told_run(mark, doors, lambda m: m["holds"] and m["holds"][0]["kind"] == "script")
+        check("and the device is told, and can't allow it", told is not None and told["holds"][0]["allowOnMac"]
+              and refused(ask("allowScript", hold=told["holds"][0]["id"]), "Allow it on your Mac"), str(device.seen[-1:]))
+    except TimeoutError as e:
+        check("a run the schedule starts stops at a Script command a device wrote, for Allow on the Mac", False, str(e)[:300])
+    ask("stop")
+    app.wait(doors, lambda s: not s["isRunning"], 20, "the scheduled run to stop")
+    check("it can turn the schedule off", done(ask("armSchedule", card=start, on=False)))
+    s = app.state(doors)
+    check("and the Mac has it off and no time for it, and says which device turned it off",
+          s["armed"] == [] and s["scheduled"] == 0 and "Test device turned the schedule off for Start" in s["log"], f"{s['armed']} {s['log'][-3:]}")
+    check("and the schedule itself is left as it was", (by_id(saved_flow(app, doors), start).get("trigger") or {}).get("minutes") == 1,
+          str(by_id(saved_flow(app, doors), start)))
+    ask("patchCard", card=start, patch={"removesTrigger": True})
+    check("with no schedule there is nothing to turn on", refused(ask("armSchedule", card=start, on=True), "no schedule to turn on"), str(device.seen[-1:]))
+
+    # The orchestrator: restart, and "Restart to apply" after the flow is renamed.
+    check("it can restart the orchestrator", done(ask("startSession", card="orchestrator"))
+          and "Test device restarted the orchestrator" in app.state(doors)["log"], str(app.state(doors)["log"][-2:]))
+    app.wait(doors, lambda s: s["orchestrator"]["state"] == "idle", 120, "the orchestrator to be back")
+    mark = len(device.seen)
+    ask("renameFlow", name="Doors renamed")
+    told = told_run(mark, doors, lambda m: m["orchestratorNeedsRestart"], 20)
+    check("the device is told when the orchestrator needs a restart to apply the flow's new details",
+          told is not None and app.state(doors)["orchestratorNeedsRestart"], str(device.seen[-3:]))
+    mark = len(device.seen)
+    check("and it can restart it to apply them", done(ask("startSession", card="orchestrator"))
+          and "Test device restarted the orchestrator, so it has the flow's new details" in app.state(doors)["log"], str(app.state(doors)["log"][-2:]))
+    try:
+        app.wait(doors, lambda s: s["orchestrator"]["state"] == "idle" and not s["orchestratorNeedsRestart"], 120, "the orchestrator to apply them")
+        check("and then it has them, and the device is told", told_run(mark, doors, lambda m: not m["orchestratorNeedsRestart"]) is not None, str(device.seen[-3:]))
+    except TimeoutError as e:
+        check("and then it has them, and the device is told", False, str(e)[:300])
+    ask("renameFlow", name="Doors")
+
+    # Retry, and Stop Its Agents, on a flow whose one agent's model doesn't exist.
+    opened(apifail, "Apifail")
+    broken = next(c["id"] for c in APIFAIL["cards"] if c["name"] == "Broken")
+    check("it can run a flow with an agent", done(ask("run", flow=apifail)), str(device.seen[-1:]))
+    try:
+        s = app.wait(apifail, lambda s: not s["isRunning"] and s["marks"].get("Broken", {}).get("failed"), 150, "Broken to fail")
+        runs = len(s["runs"])
+        check("and the device is told where the run stopped", any(m["type"] == "run" and m["flow"] == apifail and broken in m["failed"] for m in device.seen)
+              or told_run(len(device.seen), apifail, lambda m: broken in m["failed"]) is not None, str(device.seen[-2:]))
+        check("Retry is refused on a card the run didn't stop at", refused(ask("retry", flow=apifail, card=next(c["id"] for c in APIFAIL["cards"] if c["name"] == "Start")),
+                                                                          "didn't stop at"), str(device.seen[-1:]))
+        check("it can retry the card the run stopped at", done(ask("retry", flow=apifail, card=broken)), str(device.seen[-1:]))
+        # Broken's session is the one that failed, and whether it fails again is up to it, so the run is stopped here.
+        s = app.wait(apifail, lambda s: s["isRunning"] and "Run started at Broken" in s["log"], 30, "the retried run to start")
+        check("and a new run starts there with the message it was given, and the log says which device retried it",
+              "Test device retried Broken" in s["log"], str(s["log"][-4:]))
+        ask("stop", flow=apifail)
+        s = app.wait(apifail, lambda s: not s["isRunning"], 30, "the retried run to stop")
+        check("and once it ends it is in the list of runs, as one that began at Broken", len(s["runs"]) > runs
+              and s["runs"][-1]["command"].startswith("From Broken: "), str(s["runs"][-1:]))
+    except TimeoutError as e:
+        check("it can retry the card the run stopped at", False, str(e)[:300])
+    check("it can stop the flow's agents", done(ask("stopAgents", flow=apifail)), str(device.seen[-1:]))
+    s = app.wait(apifail, lambda s: s["sessions"]["Broken"]["state"] == "notStarted", 20, "Broken's session to end")
+    check("and the session ends, and the log says which device stopped it", "Test device stopped this flow's agents" in s["log"]
+          and s["orchestrator"]["state"] == "notStarted", str(s["log"][-2:]))
+    check("and with none running it is refused", refused(ask("stopAgents", flow=apifail), "None of this flow's agents"), str(device.seen[-1:]))
+
+    # Undo beside "Restart to apply", on Guard's Alice, who is running.
+    opened(guard, "Guard")
+    mark = len(device.seen)
+    ask("patchCard", flow=guard, card=alice, patch={"effort": "high"})
+    told = told_run(mark, guard, lambda m: m["awaitingRestart"].get(alice) == ["effort"])
+    check("the device is told what an agent's session isn't using yet, as the Mac's Not in use yet line lists it",
+          told is not None and app.state(guard)["sessions"]["Alice"]["awaitingRestart"] == ["effort"], str(device.seen[-2:]))
+    mark = len(device.seen)
+    check("it can put the settings back to what the agent is using", done(ask("revertSettings", flow=guard, card=alice))
+          and "effort" not in by_id(saved_flow(app, guard, lambda f: "effort" not in by_id(f, alice)), alice), str(by_id(saved_flow(app, guard), alice)))
+    check("and nothing is waiting on a restart then, and the device is told", app.state(guard)["sessions"]["Alice"]["awaitingRestart"] == []
+          and told_run(mark, guard, lambda m: alice not in m["awaitingRestart"]) is not None, str(device.seen[-2:]))
+    check("with nothing to put back it is refused", refused(ask("revertSettings", flow=guard, card=alice), "nothing to undo"), str(device.seen[-1:]))
+
+    # Pasting into a flow that is open on the Mac, with its agents running.
+    before = {c["id"] for c in saved_flow(app, guard)["cards"]}
+    check("it can paste cards", done(ask("paste", flow=guard, fragment=PASTED, at=[100.0, 1500.0])), str(device.seen[-1:]))
+    f = saved_flow(app, guard, lambda f: len(f["cards"]) == len(before) + 2)
+    new = [c for c in f["cards"] if c["id"] not in before]
+    script = next((c for c in new if c["kind"] == "script"), {})
+    agent = next((c for c in new if c["kind"] == "agent"), {})
+    check("and the Mac saves copies with ids of its own, where the device put them, with the link between them",
+          len(new) == 2 and not {c["id"] for c in new} & {"pscript", "pagent"} and (script.get("x"), script.get("y")) == (100, 1500)
+          and any(l["from"] == script.get("id") and l["to"] == agent.get("id") and l["port"] == "pass" for l in f["links"]), str(new)[:400])
+    check("and the pasted agent brings no folder, session or permission mode that skips checks",
+          "cwd" not in agent and "sessionID" not in agent and "permissionMode" not in agent and agent.get("instructions") == "Reply with exactly: PASTED", str(agent))
+    time.sleep(4)
+    check("and it doesn't start by itself", app.state(guard)["sessions"]["Pasted agent"]["state"] == "notStarted", str(app.state(guard)["sessions"].get("Pasted agent")))
+    mark = len(device.seen)
+    ask("runFrom", flow=guard, card=script.get("id", ""), text="from the paste")
+    h = held(app, guard, "Pasted")
+    hold = told_run(mark, guard, lambda m: m["holds"])
+    check("and the pasted Script card's command waits to be allowed on the Mac", h[0]["needsAllow"] and h[0]["allowOnMac"]
+          and hold is not None and refused(ask("allowScript", flow=guard, hold=hold["holds"][0]["id"]), "Allow it on your Mac"), f"{h} {device.seen[-1:]}")
+    ask("stop", flow=guard)
+    app.wait(guard, lambda s: not s["isRunning"], 20, "the run of the pasted card to stop")
+    ask("deleteItems", flow=guard, cards=[c["id"] for c in new], links=[])
+    saved_flow(app, guard, lambda f: len(f["cards"]) == len(before))
+    check("pasting nothing, or somewhere that is nowhere, is refused", refused(ask("paste", flow=guard, fragment={"cards": [], "links": []}), "nothing to paste")
+          and refused(ask("paste", flow=guard, fragment=PASTED, at=[1e9, 0.0]), "off the edge"), str(device.seen[-2:]))
+
+    # The Browser switch, on an agent of a flow the Mac hasn't opened, so no browser starts.
+    aid = next(c["id"] for c in saved_flow(app, edits)["cards"] if c["kind"] == "agent")
+    width = by_id(saved_flow(app, edits), aid)["width"]
+    check("it can turn an agent's browser on", done(ask("patchCard", flow=edits, card=aid, patch={"browser": True}))
+          and by_id(saved_flow(app, edits, lambda f: by_id(f, aid).get("browser")), aid).get("browser") is True
+          and by_id(saved_flow(app, edits), aid)["width"] == width * 2, str(by_id(saved_flow(app, edits), aid)))
+    check("and off again", done(ask("patchCard", flow=edits, card=aid, patch={"browser": False}))
+          and "browser" not in by_id(saved_flow(app, edits, lambda f: "browser" not in by_id(f, aid)), aid), str(by_id(saved_flow(app, edits), aid)))
+
+    # Roles.
+    write(app.project, 90, ROLES)
+    roles = ROLES["id"]
+    careful = next(c["id"] for c in ROLES["cards"] if c["name"] == "Careful")
+    reckless = next(c["id"] for c in ROLES["cards"] if c["name"] == "Reckless")
+    mark = len(device.seen)
+    check("a flow written into the project is listed", lib(mark, lambda m: "Roles" in m["flows"]) is not None, str(device.seen[-1:])[:200])
+    had = macs()["roles"]
+    check("a role that would skip permission checks is refused", refused(ask("saveRole", flow=roles, card=reckless, name="Anything goes"), "can't skip permission checks")
+          and macs()["roles"] == had, str(device.seen[-1:]))
+    mark = len(device.seen)
+    check("it can save an agent's settings as a new role", done(ask("saveRole", flow=roles, card=careful, name="Double checker")), str(device.seen[-1:]))
+    role = next((r for r in macs()["roles"] if r["name"] == "Double checker"), None)
+    check("and the Mac keeps it, with what the card holds", role is not None and (role["instructions"], role["permissionMode"], role["effort"]) == ("Check twice.", "plan", "high"),
+          str(macs()["roles"]))
+    rid = (role or {}).get("id", "")
+    check("and ties the card to it", by_id(saved_flow(app, roles, lambda f: by_id(f, careful).get("role")), careful).get("role") == rid,
+          str(by_id(saved_flow(app, roles), careful)))
+    told = lib(mark, lambda m: any(r["id"] == rid and r["instructions"] == "Check twice." and r["permissionMode"] == "plan" for r in m["roleInfo"]))
+    check("and the device is told what the role holds", told is not None, str(device.seen[-1:])[:300])
+    check("a card that has a role is not saved as another", refused(ask("saveRole", flow=roles, card=careful, name="Again"), "already has the role"), str(device.seen[-1:]))
+    check("and a role is not given a name another has", refused(ask("saveRole", flow=edits, card=aid, name="double CHECKER"), "already has a role called"),
+          str(device.seen[-1:]))
+    check("it can add an agent made from the role", done(ask("addRoleCard", flow=edits, role=rid, x=1500.0, y=1500.0)), str(device.seen[-1:]))
+    made = named(saved_flow(app, edits, lambda f: named(f, "Double checker")), "Double checker") or {}
+    check("and it has the role's settings, and is tied to it", made.get("role") == rid and made.get("instructions") == "Check twice."
+          and made.get("permissionMode") == "plan", str(made))
+    ask("patchCard", flow=roles, card=careful, patch={"instructions": "Check three times."})
+    check("it can update the role from the card", done(ask("updateRole", flow=roles, role=rid, card=careful))
+          and next(r for r in macs()["roles"] if r["id"] == rid)["instructions"] == "Check three times.", str(macs()["roles"]))
+    check("and a card that already had the role keeps what it had", named(saved_flow(app, edits), "Double checker").get("instructions") == "Check twice.",
+          str(named(saved_flow(app, edits), "Double checker")))
+    check("a role is only updated from a card that has it", refused(ask("updateRole", flow=edits, role=rid, card=aid), "doesn't have the role"), str(device.seen[-1:]))
+    check("it can delete the role", done(ask("deleteRole", role=rid)) and not any(r["id"] == rid for r in macs()["roles"]), str(macs()["roles"]))
+    check("and the cards made from it keep their settings", named(saved_flow(app, edits), "Double checker").get("instructions") == "Check twice.")
+    check("and a role that is gone can't be used or deleted", refused(ask("deleteRole", role=rid), "no longer on your Mac")
+          and refused(ask("addRoleCard", flow=edits, role=rid, x=0.0, y=0.0), "no longer on your Mac"), str(device.seen[-2:]))
+    log = app.state(edits)["log"] + app.state(roles)["log"] + app.state(guard)["log"]
+    check("and the logs say which device did each", "Test device saved Careful as the role Double checker" in log
+          and "Test device updated the role Double checker from Careful" in log and "Test device deleted the role Double checker" in log, str(log[-6:]))
+
+    # A Flow card's New sub-flow. Edits allows one level below it: it was set so earlier.
+    ask("addCard", flow=edits, kind="flow", x=1500.0, y=200.0)
+    fc = next(c["id"] for c in saved_flow(app, edits, lambda f: any(c["kind"] == "flow" for c in f["cards"]))["cards"] if c["kind"] == "flow")
+    wrap = next(c["id"] for c in EDITS["cards"] if c["name"] == "Wrap")
+    check("New sub-flow is refused on a card that isn't a Flow card", refused(ask("newSubflow", flow=edits, card=wrap, name=""), "Only a Flow card"),
+          str(device.seen[-1:]))
+    mark = len(device.seen)
+    check("it can make a new sub-flow for a Flow card", done(ask("newSubflow", flow=edits, card=fc, name="Made below")), str(device.seen[-1:]))
+    told = lib(mark, lambda m: "Made below" in m["flows"])
+    below = (told or {}).get("flowIDs", {}).get("Made below", "")
+    f = saved_flow(app, below)
+    check("and the Mac saves it with its Input and Output, as a sub-flow the card runs",
+          f is not None and f.get("isSubflow") and sorted(c["name"] for c in f["cards"]) == ["Input", "Output"]
+          and by_id(saved_flow(app, edits, lambda f: by_id(f, fc).get("flowRef")), fc).get("flowRef") == below, str(f)[:300])
+    check("and the device is told it sits under the flow that runs it", told is not None and told["parents"].get("Made below") == edits, str(told)[:300])
+    check("and the Mac goes on showing what it showed", app.op("app", "remote-state")["selected"] == guard)
+    check("and a Flow card that runs a flow already is refused", refused(ask("newSubflow", flow=edits, card=fc, name=""), "already runs"), str(device.seen[-1:]))
+    ask("addCard", flow=below, kind="flow", x=300.0, y=400.0)
+    deeper = next(c["id"] for c in saved_flow(app, below, lambda f: any(c["kind"] == "flow" for c in f["cards"]))["cards"] if c["kind"] == "flow")
+    files = set(flows_on_disk(app))
+    check("and one past the limit of the flow at the top is refused in the Mac's words",
+          refused(ask("newSubflow", flow=below, card=deeper, name=""), "limit") and set(flows_on_disk(app)) == files, str(device.seen[-1:]))
+    ask("deleteItems", flow=edits, cards=[fc], links=[])
+    ask("deleteFlow", flow=below)
+
+    # Pins, and what else the flow list carries.
+    mark = len(device.seen)
+    check("it can pin a flow", done(ask("pin", flow=edits, on=True)) and edits in macs()["pinned"], str(macs()["pinned"]))
+    told = lib(mark, lambda m: "Edits" in m["pinned"])
+    check("and the device is told", told is not None, str(device.seen[-1:])[:200])
+    check("and what each flow's cards are called, and what each has cost", told is not None and "Wrapper" in told["cardNames"].get("Edits", [])
+          and all(len(n) <= 60 for names in told["cardNames"].values() for n in names) and all(len(c) == 2 for c in told["costs"].values()),
+          str((told or {}).get("cardNames", {}).get("Edits")))
+    mark = len(device.seen)
+    check("and unpin it", done(ask("pin", flow=edits, on=False)) and edits not in macs()["pinned"]
+          and lib(mark, lambda m: "Edits" not in m["pinned"]) is not None, str(macs()["pinned"]))
+
+    # The project's browser. None has run in this project, and none is downloaded here: the offer to download is
+    # only made when a card needs a browser and the Mac has none, and nothing here gets that far.
+    state = macs()
+    told = next(m for m in reversed(device.seen) if m["type"] == "library")
+    check("the device is told the state of the project's browser", told["browsers"][0]["status"] == "idle" and told["browsers"][0]["hasData"] is False
+          and state["browser"] == "idle", f"{told['browsers']} {state['browser']}")
+    check("clearing browser data there is none of is refused, as the Mac's button is greyed out",
+          refused(ask("clearBrowserData", project=project), "no browser data") and macs()["browserData"] is False, str(device.seen[-1:]))
+    check("restarting a browser that hasn't stopped is refused", refused(ask("restartBrowser", project=project), "isn't stopped"), str(device.seen[-1:]))
+    check("and downloading one is refused while the Mac makes no such offer, and nothing is downloaded",
+          refused(ask("installBrowser", project=project), "isn't offering") and macs()["browser"] == "idle"
+          and not os.path.exists(os.path.join(app.support, "browser-app")), str(device.seen[-1:]))
+    mark = len(device.seen)
+    app.op(guard, "browserMakeData")
+    check("the device is told when the browser has kept something", lib(mark, lambda m: m["browsers"][0]["hasData"]) is not None, str(device.seen[-1:])[:200])
+    mark = len(device.seen)
+    check("and it can clear it", done(ask("clearBrowserData", project=project)), str(device.seen[-1:]))
+    deadline = time.time() + 10
+    while macs()["browserData"] and time.time() < deadline:
+        time.sleep(0.3)
+    check("and the Mac forgets it, and tells the device", macs()["browserData"] is False and lib(mark, lambda m: not m["browsers"][0]["hasData"]) is not None,
+          str(macs()))
+    check("and the log says which device did", any(line.startswith("Test device cleared the browser data of") for line in app.state(guard)["log"]),
+          str(app.state(guard)["log"][-3:]))
+
+
 def remote_control(app, device, device_id):
     """What a device may do to the Mac: nothing until "Can control" is on for it, and then only what the Mac's
     own buttons and keyboard do. The device has Guard open, with its agents idle."""
@@ -1087,10 +1403,10 @@ def remote_control(app, device, device_id):
         return "\n".join(app.op(guard, "terminal", card="Alice")["screen"])
 
     def mac():
-        """Everything a command could change on the Mac."""
+        """Everything a command could change on the Mac: the flows, and the roles, pins and browser that belong to none."""
         d, g = app.state(doors), app.state(guard)
-        return ({k: d[k] for k in ("isRunning", "log", "runs", "holds", "results", "sessions", "orchestrator", "marks")},
-                {k: g[k] for k in ("isRunning", "log", "runs", "sessions")}, app.op("app", "remote-state")["selected"])
+        return ({k: d[k] for k in ("isRunning", "log", "runs", "holds", "results", "sessions", "orchestrator", "marks", "armed", "banner")},
+                {k: g[k] for k in ("isRunning", "log", "runs", "sessions")}, app.op("app", "remote-state")["selected"], app.op(guard, "macState"))
 
     every = [("openOnMac", {}), ("run", {}), ("run", {"text": "typed on the device"}), ("runFrom", {"card": gate, "text": "straight to the gate"}),
              ("stop", {}), ("approve", {"hold": "none", "text": "yes"}), ("reject", {"hold": "none", "text": "no"}),
@@ -1115,6 +1431,18 @@ def remote_control(app, device, device_id):
         ("setFlowOption", {"notify": True}), ("setFlowOption", {"limit": 1}), ("renameFlow", {"name": "Changed"}), ("deleteFlow", {}),
         ("undo", {}), ("redo", {})]]
     every.append(("newFlow", {"flow": "", "project": project, "name": "Made by a watcher"}))
+    # And everything stage 4 added, each aimed at something that is really there.
+    on_doors = {c["name"]: c["id"] for c in DOORS["cards"]}
+    every += [
+        ("runFromStart", {"card": on_doors["Start"]}), ("retry", {"card": on_doors["Shout"]}), ("clearLog", {}), ("dismissBanner", {}),
+        ("stopAgents", {"flow": guard}), ("startSession", {"flow": guard, "card": "orchestrator"}), ("revertSettings", {"flow": guard, "card": alice}),
+        ("armSchedule", {"card": on_doors["Start"], "on": True}), ("paste", {"flow": edits, "fragment": PASTED, "at": [100.0, 900.0]}),
+        ("addRoleCard", {"flow": edits, "role": "norole", "x": 100.0, "y": 900.0}), ("newSubflow", {"flow": edits, "card": there["Wrap"], "name": "Below"}),
+        ("pin", {"flow": edits, "on": True}), ("saveRole", {"flow": guard, "card": alice, "name": "A watcher's role"}),
+        ("updateRole", {"flow": guard, "role": "norole", "card": alice}), ("deleteRole", {"role": "norole"}),
+        ("clearBrowserData", {"project": project}), ("installBrowser", {"project": project}), ("restartBrowser", {"project": project}),
+        ("patchCard", {"flow": edits, "card": there["Wrap"], "patch": {"browser": True}}),
+    ]
 
     check("pairing leaves a device able to watch and nothing more", app.op("app", "remote-state")["controlling"] == 0)
     # The Mac saves a flow a moment after its last change, and Guard was changed a moment ago, here and in the
@@ -1303,6 +1631,12 @@ def remote_control(app, device, device_id):
         remote_edits(app, device, send, ask, done, refused, since)
     except Exception as e:  # the checks of stage 2 that follow are worth having whatever went wrong here
         check("the edits ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    try:
+        remote_parity(app, device, send, ask, done, refused, since)
+    except Exception as e:
+        check("the rest of what the Mac's buttons do ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    device.tell(f"open {guard}")
+    device.until(lambda m: m["type"] == "opened" and m["name"] == "Guard")
     edits_ended = time.time()
 
     check("it can restart an agent", done(ask("startSession", flow=guard, card=alice)), str(device.seen[-3:]))

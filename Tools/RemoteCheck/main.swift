@@ -20,6 +20,8 @@
 //                    "links" (lists of ids), "from", "port", "to", "link", "passes", "group", "name", "folded",
 //                    "patch" (a card's settings, named as RemoteCardPatch names them), "limit" or "notify"
 //                    (a flow's own settings) and "project".
+//                    The commands of stage 4 take "card", "on", "role", "name", "project", "x" and "y", and a paste
+//                    takes "fragment" (a FlowFragment as JSON) and "at" ([x, y], or left out).
 //   {"raw": {...}}   send that JSON as it is, as a device with an app of its own making could.
 // It never prints a key.
 import Foundation
@@ -217,6 +219,27 @@ Task {
     case "deleteFlow": return .deleteFlow(flowID: flow)
     case "undo": return .undo(flowID: flow)
     case "redo": return .redo(flowID: flow)
+    case "runFromStart": return .runFromStart(flowID: flow, startCardID: text("card"))
+    case "retry": return .retry(flowID: flow, cardID: text("card"))
+    case "clearLog": return .clearLog(flowID: flow)
+    case "dismissBanner": return .dismissBanner(flowID: flow)
+    case "stopAgents": return .stopAgents(flowID: flow)
+    case "revertSettings": return .revertSettings(flowID: flow, cardID: text("card"))
+    case "armSchedule": return .armSchedule(flowID: flow, cardID: text("card"), on: flag("on"))
+    case "paste":
+        guard let raw = fields["fragment"], let data = try? JSONSerialization.data(withJSONObject: raw),
+              let fragment = try? Remote.decode(FlowFragment.self, from: data) else { return nil }
+        let at = (fields["at"] as? [Double]).flatMap { $0.count == 2 ? RemotePoint(x: $0[0], y: $0[1]) : nil }
+        return .paste(flowID: flow, fragment: fragment, at: at)
+    case "addRoleCard": return .addRoleCard(flowID: flow, roleID: text("role"), x: number("x"), y: number("y"))
+    case "newSubflow": return .newSubflow(flowID: flow, cardID: text("card"), name: text("name"))
+    case "pin": return .pin(flowID: flow, on: flag("on"))
+    case "saveRole": return .saveRole(flowID: flow, cardID: text("card"), name: text("name"))
+    case "updateRole": return .updateRole(roleID: text("role"), flowID: flow, cardID: text("card"))
+    case "deleteRole": return .deleteRole(roleID: text("role"))
+    case "clearBrowserData": return .clearBrowserData(projectID: text("project"))
+    case "installBrowser": return .installBrowser(projectID: text("project"))
+    case "restartBrowser": return .restartBrowser(projectID: text("project"))
     default: return nil
     }
 }
@@ -295,9 +318,20 @@ while true {
     case .refused(let reason):
         say(["type": "refused", "reason": reason])
     case .library(let library):
-        say(["type": "library", "flows": library.projects.flatMap(\.flows).map(\.name), "projects": library.projects.map(\.id),
-             "flowIDs": Dictionary(library.projects.flatMap(\.flows).map { ($0.name, $0.id) }) { first, _ in first },
-             "roles": library.roles.map(\.name)])
+        let flows = library.projects.flatMap(\.flows)
+        say(["type": "library", "flows": flows.map(\.name), "projects": library.projects.map(\.id),
+             "flowIDs": Dictionary(flows.map { ($0.name, $0.id) }) { first, _ in first },
+             "roles": library.roles.map(\.name),
+             "roleInfo": library.roles.map { ["id": $0.id, "name": $0.name, "instructions": $0.instructions, "model": $0.model,
+                                              "effort": $0.effort, "permissionMode": $0.permissionMode] },
+             "parents": Dictionary(flows.map { ($0.name, $0.parentID ?? "") }) { first, _ in first },
+             "pinned": flows.filter(\.pinned).map(\.name),
+             "cardNames": Dictionary(flows.map { ($0.name, $0.cardNames) }) { first, _ in first },
+             "costs": Dictionary(flows.map { ($0.name, [$0.usage?.cost ?? 0, $0.usageWithSubflows?.cost ?? 0]) }) { first, _ in first },
+             "browsers": library.projects.map { project -> [String: Any] in
+                 ["status": project.browser.status.rawValue, "progress": project.browser.progress ?? NSNull(),
+                  "problem": project.browser.problem ?? NSNull(), "browser": project.browser.browser ?? NSNull(), "hasData": project.browser.hasData]
+             }])
         try? await connection.send(DeviceMessage.open(flowID: shared.flowID))
     case .opened(let snapshot):
         say(["type": "opened", "name": snapshot.flow.name, "cards": snapshot.flow.cards.count,
@@ -313,7 +347,9 @@ while true {
     case .run(let id, let state):
         say(["type": "run", "flow": id, "isRunning": state.isRunning, "sessions": state.sessions.mapValues(\.rawValue),
              "holds": state.holds.map { ["id": $0.id, "card": $0.cardID, "kind": $0.kind.rawValue, "needsAllow": $0.needsAllow,
-                                          "allowOnMac": $0.allowOnMac == true] as [String: Any] }])
+                                          "allowOnMac": $0.allowOnMac == true] as [String: Any] },
+             "awaitingRestart": state.awaitingRestart, "orchestratorNeedsRestart": state.orchestratorNeedsRestart,
+             "banner": state.banner ?? NSNull(), "failed": state.marks.filter(\.value.failed).keys.sorted()])
     case .log(_, let lines, let reset):
         say(["type": "log", "lines": lines.count, "reset": reset])
     case .messages(_, let link, let all):
