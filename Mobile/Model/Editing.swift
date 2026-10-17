@@ -93,16 +93,17 @@ extension RemoteClient {
             if ids.count > 1 {
                 items.append(item("Group", "rectangle.dashed", .group(ids)))
             } else {
-                // The Mac's card menu: a Start card runs from itself, a card the run stopped at is tried again.
+                // The Mac's card menu: a Flow card opens its flow, a Start card runs from itself, a card the run
+                // stopped at is tried again.
+                if card.kind == .flow, CanvasContent.innerFlow(of: card, in: openFlow?.project.flows ?? [], excluding: flow.id) != nil {
+                    items.append(item("Open Its Flow", "arrow.turn.down.right", .openSubflow(id)))
+                }
                 for button in [can.starts[id], can.retry[id]].compactMap({ $0 }) {
                     var press = item(button.title, button.press == .retry(cardID: id) ? "arrow.clockwise" : "play", .press(button.press))
                     press.isEnabled = button.isEnabled
                     items.append(press)
                 }
                 if can.runFrom.contains(id) { items.append(item("Run from here…", "play", .runFrom(id))) }
-                if card.kind == .flow, CanvasContent.innerFlow(of: card, in: openFlow?.project.flows ?? [], excluding: flow.id) != nil {
-                    items.append(item("Open Its Flow", "arrow.turn.down.right", .openSubflow(id)))
-                }
             }
             items.append(item("Duplicate", "plus.square.on.square", .duplicate(ids)))
             items.append(item("Copy", "doc.on.doc", .copy(ids)))
@@ -391,5 +392,12 @@ extension RemoteClient {
             edit.dropCarried(id)
         }
         return refusal
+    }
+}
+
+extension FlowFragment {
+    /// "Paste", with what is on the clipboard, so it is plain what will be pasted.
+    var pasteTitle: String {
+        cards.isEmpty ? "Paste" : cards.count == 1 ? "Paste \(cards[0].name)" : "Paste \(cards.count) Cards"
     }
 }

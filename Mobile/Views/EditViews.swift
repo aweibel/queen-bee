@@ -69,7 +69,7 @@ private struct EditMore: View {
         let edit = client.edit
         Menu {
             if edit.clipboard != nil {
-                Button { Task { await client.act(.paste(at: nil)) } } label: { Label(EditMore.pasteTitle(edit.clipboard), systemImage: "doc.on.clipboard") }
+                Button { Task { await client.act(.paste(at: nil)) } } label: { Label(edit.clipboard?.pasteTitle ?? "Paste", systemImage: "doc.on.clipboard") }
                     .disabled(client.isBusy(.paste(at: nil)))
             }
             Button { Task { await client.act(.selectAll) } } label: { Label("Select All", systemImage: "checklist") }
@@ -88,11 +88,6 @@ private struct EditMore: View {
         .accessibilityHint("Paste, Select All, and whether dragged cards snap to the others and the grid.")
     }
 
-    /// "Paste", with how many cards, so it is plain what is on the clipboard.
-    static func pasteTitle(_ fragment: FlowFragment?) -> String {
-        guard let cards = fragment?.cards, !cards.isEmpty else { return "Paste" }
-        return cards.count == 1 ? "Paste \(cards[0].name)" : "Paste \(cards.count) Cards"
-    }
 }
 
 /// The list a held finger brings up, where the finger was: what can be done to a card, a link or a group, or

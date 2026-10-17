@@ -184,18 +184,16 @@ struct CalloutView: View {
                 .dsSans(Theme.Touch.caption + 1)
                 .foregroundStyle(Theme.inkSecondary.ui)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: Theme.Space.s) {
-                Button(callout.canBuild ? "Build it by hand" : "Close") { client.buildByHand() }
-                    .buttonStyle(.panel(.quiet))
-                    .fixedSize()
-                    .accessibilityHint(callout.canBuild ? "Puts this note away and shows the cards you can add." : "Puts this note away.")
-                Spacer(minLength: 0)
-                if let start = callout.start {
-                    Button("Start the orchestrator") { client.startOrchestratorFromCallout() }
-                        .buttonStyle(.panel(.live))
-                        .fixedSize()
-                        .disabled(!start.isEnabled)
-                        .accessibilityHint("Starts the session that builds and runs this flow, on your Mac, and shows it.")
+            // Side by side where both fit whole, the way to start it above the other where they don't.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.Space.s) {
+                    build
+                    Spacer(minLength: 0)
+                    start
+                }
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    start
+                    build
                 }
             }
         }
@@ -203,5 +201,22 @@ struct CalloutView: View {
         .padding(Theme.Space.m)
         .frame(maxWidth: 360, alignment: .leading)
         .floatingPanel()
+    }
+
+    private var build: some View {
+        Button(callout.canBuild ? "Build it by hand" : "Close") { client.buildByHand() }
+            .buttonStyle(.panel(.quiet))
+            .fixedSize()
+            .accessibilityHint(callout.canBuild ? "Puts this note away and shows the cards you can add." : "Puts this note away.")
+    }
+
+    @ViewBuilder private var start: some View {
+        if let start = callout.start {
+            Button("Start the orchestrator") { client.startOrchestratorFromCallout() }
+                .buttonStyle(.panel(.live))
+                .fixedSize()
+                .disabled(!start.isEnabled)
+                .accessibilityHint("Starts the session that builds and runs this flow, on your Mac, and shows it.")
+        }
     }
 }

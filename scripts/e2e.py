@@ -22,6 +22,8 @@ the same way.
 the same way. No finger touches the screen: each gesture is made through what its recogniser calls.
 `settings-edit` is run only when named: it checks changing settings in the details, and making, renaming and deleting
 flows, in the iPad app against a Mac made up inside the app, the same way.
+`parity` is run only when named: it checks stage 4's controls in the iPad app, copying and pasting, roles, schedules,
+sub-flows, pins, Find and the rest, against a Mac made up inside the app, the same way.
 """
 import atexit
 import base64
@@ -2505,6 +2507,72 @@ def scenario_mobile(app):
         check("allowed on the Mac, the command runs", h[0]["text"] == "HELLO FROM THE START CARD", str(h))
         app.op(gid, "stop")
         app.wait(gid, lambda s: not s["isRunning"], 20, "the held run to stop")
+
+        # Stage 4's controls, a few real checks of each family, on flows with no agent session: Gates, whose only
+        # session is its orchestrator, and Touch, which the Mac has never opened. Each step waits for the test.
+        def parity(state):
+            return state.get("parity") or {}
+
+        steps = ("wait:q1;runStart:Start 2;wait:q2;clearLog;wait:q3;edit:on;copy:Shout;paste:312,600;wait:q4;link:Start:Shout 2;edit:off;runStart:Start;"
+                 "wait:q5;edit:on;set:Start 2:trigger:daily/3/15;arm:Start 2:on;wait:q6;arm:Start 2:off;set:Start 2:trigger:none;wait:q7;"
+                 "openFlow:Touch;edit:on;add:flow:300,600;add:agent:700,600;newSubflow:Flow:Inner afar;wait:q8;saveRole:Agent:E2E role;wait:q9;"
+                 "deleteRole:E2E role;set:Agent:browser:on;wait:q10;pin:Touch:on;wait:q11;pin:Touch:off")
+        mobile.launch("-qbOpen", "Gates", "-qbDo", steps)
+        mobile.wait(lambda s: s.get("openFlow") == "Gates" and controls(s).get("canAct"), 40, "the app to open Gates")
+        s = step("q1", 2)
+        real = app.wait(gid, lambda s: not s["isRunning"] and s["runs"] and s["runs"][-1]["command"] == "second start", 30, "the run from Start 2 to end")
+        check("Run from This Start on the device runs the flow on the Mac from that Start card",
+              did(s)[-1] == ("runStart:Start 2", None) and real["results"] == {"Other": "second start"} and f"Run started from {name}" in real["log"],
+              f"{did(s)[-1]} {real['results']} {real['log'][-3:]}")
+        s = step("q2", 4)
+        real = app.wait(gid, lambda s: s["runs"] == [], 15, "the log to be cleared")
+        check("Clear on the device clears the Mac's log and earlier runs, and the log says who did it",
+              did(s)[-1] == ("clearLog", None) and real["runs"] == [] and any(f"{name} cleared the log" in line for line in real["log"]) and len(real["log"]) <= 2,
+              f"{did(s)[-1]} {real['log']}")
+        s = step("q3", 8, also=lambda s: shown(s, "Shout 2"))
+        f = saved_flow(app, gid, lambda f: any(c["name"] == "Shout 2" for c in f["cards"]))
+        pasted = next((c for c in (f or {}).get("cards", []) if c["name"] == "Shout 2"), {})
+        check("a Script card copied and pasted on the device is saved by the Mac as a copy, where it was pasted",
+              [r for _, r in did(s)[-3:]] == [None] * 3 and pasted.get("command") == "tr a-z A-Z" and (pasted.get("x"), pasted.get("y")) == (312, 600),
+              f"{did(s)[-3:]} {pasted}")
+        s = step("q4", 12, also=lambda s: "Shout 2" in needing(s))
+        h = held(app, gid, "Shout 2")
+        check("and a run that reaches it holds it for Allow on the Mac, and the device says to allow it there",
+              bool(h) and h[0]["needsAllow"] and h[0]["allowOnMac"]
+              and {"name": "Shout 2", "reason": "Waiting for you to allow its command on your Mac"} in panel(s).get("needsYou", []), f"{h} {panel(s).get('needsYou')}")
+        app.op(gid, "stop")
+        app.wait(gid, lambda s: not s["isRunning"], 20, "the held run to stop")
+        s = step("q5", 16)
+        armed = app.wait(gid, lambda s: len(s["armed"]) == 1, 15, "the schedule to be turned on")["armed"]
+        check("a schedule set and turned on from the device is on on the Mac", [r for _, r in did(s)[-2:]] == [None, None] and len(armed) == 1, f"{did(s)[-2:]} {armed}")
+        s = step("q6", 19)
+        armed = app.wait(gid, lambda s: s["armed"] == [], 15, "the schedule to be turned off")["armed"]
+        check("and turned off from the device", [r for _, r in did(s)[-2:]] == [None, None] and armed == [], f"{did(s)[-2:]} {armed}")
+        s = step("q7", 25, also=lambda s: s.get("openFlow") == "Touch")
+        deadline = time.time() + 8
+        while "Inner afar" not in flow_names() and time.time() < deadline:
+            time.sleep(0.2)
+        f = on_mac(lambda f: (card_named(f, "Flow") or {}).get("flowRef"))
+        check("New sub-flow on the device makes the flow on the Mac, and the Flow card runs it",
+              did(s)[-1] == ("newSubflow:Flow:Inner afar", None) and "Inner afar" in flow_names() and bool((card_named(f, "Flow") or {}).get("flowRef")),
+              f"{did(s)[-1]} {flow_names()} {card_named(f, 'Flow')}")
+        s = step("q8", 27, also=lambda s: any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
+        check("a role saved from the device is saved on the Mac, and the card has it",
+              did(s)[-1] == ("saveRole:Agent:E2E role", None) and bool((card_named(on_mac(lambda f: (card_named(f, "Agent") or {}).get("role")), "Agent") or {}).get("role")),
+              f"{did(s)[-1]} {parity(s).get('roles')}")
+        s = step("q9", 30, also=lambda s: not any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
+        f = on_mac(lambda f: (card_named(f, "Agent") or {}).get("browser") is True)
+        check("and deleted from the device", did(s)[-2] == ("deleteRole:E2E role", None), str(did(s)[-2:]))
+        check("the Browser switch turned on from the device is saved on a card of a flow the Mac hasn't opened",
+              did(s)[-1] == ("set:Agent:browser:on", None) and (card_named(f, "Agent") or {}).get("browser") is True, f"{did(s)[-1]} {card_named(f, 'Agent')}")
+        mine = app.state(eid)
+        check("and no browser and no session starts for it", (parity(s).get("browser") or {}).get("words", "").startswith("Not running")
+              and mine["orchestrator"]["state"] == "notStarted", f"{parity(s).get('browser')} {mine['orchestrator']['state']}")
+        s = step("q10", 32, also=lambda s: "Touch" in parity(s).get("pinned", []))
+        check("a flow pinned from the device is pinned in the Mac's sidebar, and every device is told", did(s)[-1] == ("pin:Touch:on", None), str(did(s)[-1]))
+        mobile.shot("mobile-10-pinned")
+        s = step("q11", 34, also=lambda s: "Touch" not in parity(s).get("pinned", []))
+        check("and unpinned", did(s)[-1] == ("pin:Touch:off", None), str(did(s)[-1]))
         app.op(gid, "close")
 
         mobile.quit()
@@ -3042,7 +3110,8 @@ def scenario_editing():
     # made-up Mac makes to it with the app's own rules. Every launch starts from that flow afresh.
     on = ("-qbControl", "1")
     away, gone = "Not connected to your Mac right now.", "That card is no longer in the flow."
-    kinds = ["Agent", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "Approval", "Script", "Flow", "End", "Note"]
+    # The kinds of card in the Mac's order, with the made-up Mac's two saved roles under Agent, as its palette has them.
+    kinds = ["Agent", "Note writer", "Proof reader", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "Approval", "Script", "Flow", "End", "Note"]
     bar = ["undo", "redo", "add", "select", "tidy", "done"]
 
     def edit(state):
@@ -3115,13 +3184,14 @@ def scenario_editing():
               and all(button(s, k).get("enabled") for k in ("add", "select", "tidy", "done")), str(e.get("bar")))
         menus = e.get("menus") or {}
         check("a held finger offers each thing its own menu, in the Mac's words",
-              menus.get("card:Both ready") == ["Run from here…", "Duplicate", "Delete"] and menus.get("card:Start") == ["Duplicate", "Delete"]
-              and menus.get("link:0") == ["Delete Link"] and menus.get("group:Checks") == ["Rename Group…", "Fold into One Card", "Ungroup", "Duplicate", "Delete 2 Cards"],
+              menus.get("card:Both ready") == ["Run from here…", "Duplicate", "Copy", "Cut", "Delete"]
+              and menus.get("card:Start") == ["Run from This Start", "Duplicate", "Copy", "Cut", "Delete"]
+              and menus.get("link:0") == ["Delete Link"] and menus.get("group:Checks") == ["Rename Group…", "Fold into One Card", "Ungroup", "Duplicate", "Copy", "Delete 2 Cards"],
               str(menus))
         check("and on bare canvas the kinds of card, in the order of the Mac's list", menus.get("canvas") == kinds, str(menus.get("canvas")))
         acts = shown_card(s, "Both ready").get("actions", [])
         check("VoiceOver can move, link, copy and delete a card, delete a link, and fold, rename and ungroup a group",
-              acts == ["Move left", "Move right", "Move up", "Move down", "Link to…", "Duplicate", "Delete"]
+              acts == ["Move left", "Move right", "Move up", "Move down", "Link to…", "Duplicate", "Copy", "Cut", "Delete"]
               and "Link to…" not in shown_card(s, "Sent").get("actions", []) and "Delete" in shown_card(s, "Sent").get("actions", [])
               and s["canvas"].get("linkActions", [[]])[0] == ["Delete Link"]
               and s["canvas"].get("groupActions") == {"Checks": ["Fold into One Card", "Rename Group…", "Ungroup"]},
@@ -3240,7 +3310,8 @@ def scenario_editing():
         # Adding.
         s = play("edit:on;hold:at/1000,700", *on, "-qbZoom", "0.6", also=lambda s: edit(s).get("menu"))
         menu = edit(s).get("menu") or {}
-        check("a finger held on bare canvas brings up the kinds of card", menu.get("title") == "Add Card" and [i["title"] for i in menu.get("items", [])] == kinds, str(menu))
+        check("a finger held on bare canvas brings up Select All and the kinds of card", menu.get("title") == "Add Card"
+              and [i["title"] for i in menu.get("items", [])] == ["Select All"] + kinds, str(menu))
         both("editing-07-add-list")
         s = play("edit:on;hold:at/1000,700;choose:Prompt;addList;choose:Note;add:script:1000,600", *on,
                  also=lambda s: len(names(s)) == 11 and edit(s).get("selected") == ["Script"])
@@ -3257,7 +3328,7 @@ def scenario_editing():
         s = play("edit:on;hold:Both ready", *on, "-qbZoomCard", "Both ready", "-qbZoom", "0.8", also=lambda s: edit(s).get("menu"))
         menu = edit(s).get("menu") or {}
         check("a finger held on a card selects it and brings up its menu", menu.get("title") == "Both ready" and edit(s).get("selected") == ["Both ready"]
-              and [i["title"] for i in menu.get("items", [])] == ["Run from here…", "Duplicate", "Delete"], str(menu))
+              and [i["title"] for i in menu.get("items", [])] == ["Run from here…", "Duplicate", "Copy", "Cut", "Delete"], str(menu))
         both("editing-08-card-menu")
         s = play("edit:on;hold:Both ready;choose:Delete", *on, also=lambda s: edit(s).get("asking"))
         check("deleting a card that has links is asked about first, and nothing is sent until it is answered",
@@ -3285,7 +3356,7 @@ def scenario_editing():
         check("a tap adds a card to what is selected or takes it out, and leaving Select keeps the selection",
               edit(s).get("selected") == ["Both ready", "Start", "Style guide"] and edit(s).get("selecting") is False and edit(s).get("box") is None, str(edit(s).get("selected")))
         check("held on one of several selected cards, the menu is about all of them",
-              menu.get("title") == "3 cards" and [i["title"] for i in menu.get("items", [])] == ["Group", "Duplicate", "Delete 3 Cards"], str(menu))
+              menu.get("title") == "3 cards" and [i["title"] for i in menu.get("items", [])] == ["Group", "Duplicate", "Copy", "Cut", "Delete 3 Cards"], str(menu))
         s = play("edit:on;zoom:1;select:on;box:300,0,1150,560;select:off;move:Style guide:48,48", *on,
                  also=lambda s: at(s, "Both ready") == (944, 296, 240, 120) and edit(s).get("overlay") is None)
         check("dragging one of several selected cards moves them all, and a card that isn't selected stays",
@@ -3384,7 +3455,7 @@ def scenario_settings_edit():
 
     def named(state):
         """The settings on offer, and the lines between them that aren't settings, in order."""
-        return [r.get("name") or ("folder" if "folder" in r else "open" if "open" in r else r.get("item")) for r in rows(state) or []]
+        return [r.get("name") or next((k for k in ("folder", "open", "newSubflow", "roleDrift", "arm") if k in r), r.get("item")) for r in rows(state) or []]
 
     def lines(state, style):
         return [r["label"] for r in rows(state) or [] if r.get("item") == style]
@@ -3431,7 +3502,7 @@ def scenario_settings_edit():
         # An agent.
         s = play("edit:on;pick:Writer", *on)
         check("with Edit pressed, an agent's details are the Mac's settings in the Mac's order, and the foot says so with Done",
-              named(s) == ["name", "instructions", "role", "model", "effort", "row", "permissionMode", "folder"]
+              named(s) == ["name", "instructions", "role", "model", "effort", "row", "permissionMode", "browser", "note", "folder"]
               and settings(s).get("foot") == editing and settings(s).get("footButton") == "Done", f"{named(s)} {settings(s).get('foot')}")
         check("the choices are the Mac's, and no permission mode skips checks",
               row(s, "permissionMode").get("choices") == ["Your default", "Manual", "Accept edits", "Plan", "Auto"]
@@ -3523,26 +3594,26 @@ def scenario_settings_edit():
         s = play("edit:on;pick:Start", *on)
         r = row(s, "trigger")
         check("a Start card has what the run starts with and the Mac's schedule, with its choices",
-              named(s) == ["name", "command", "trigger", "note", "caution"] and row(s, "command").get("label") == "What the run starts with"
+              named(s) == ["name", "command", "trigger", "note", "caution", "arm"] and row(s, "command").get("label") == "What the run starts with"
               and r.get("label") == "Runs" and r.get("value") == "Mon, Wed at 09:00"
               and r.get("choices") == ["When you press Run", "Every so often", "Every day", "On chosen days", "When a file changes"], f"{named(s)} {r}")
         check("a schedule that is on says when it next runs, and that changing it here turns it off",
               lines(s, "note")[0].startswith("Next: ") and "Queen Bee has to be open" in lines(s, "note")[0]
-              and lines(s, "caution") == ["This schedule is on. Changing it here, or what the run starts with, turns it off until it is turned on again on your Mac."],
+              and lines(s, "caution") == ["This schedule is on. A change to what this flow does, made from a device, turns it off again."],
               f"{lines(s, 'note')} {lines(s, 'caution')}")
         both("settings-02-start")
-        off = "A schedule set here stays off until it is turned on on your Mac."
+        off, switched = "A schedule set here starts switched off. Turn it on once it is set.", "This schedule is switched off. It stays off until you turn it on."
         s = play("edit:on;pick:Start;set:Start:trigger:daily/7/30", *on, also=lambda s: mac(s, "Start").get("trigger") == "Every day at 07:30" and not lines(s, "note"))
-        check("a schedule set from here is the Mac's to turn on: it is off, and says so",
+        check("a schedule set from here starts switched off, and says so",
               said(s)[-1] is None and sent(s) == ["patchCard:trigger"] and row(s, "trigger").get("value") == "Every day at 07:30"
-              and lines(s, "caution") == ["This schedule is switched off. " + off] and lines(s, "note") == [], f"{did(s)} {sent(s)} {lines(s, 'caution')}")
+              and lines(s, "caution") == [switched] and lines(s, "note") == [], f"{did(s)} {sent(s)} {lines(s, 'caution')}")
         s = play("edit:on;pick:Start;set:Start:trigger:file/inbox;set:Start:trigger:interval/30;set:Start:trigger:weekly/2,6/8/15;set:Start:trigger:none", *on,
                  also=lambda s: mac(s, "Start").get("trigger") == "When you press Run")
         check("every kind of schedule can be set, and taken away", said(s)[2:] == [None] * 4 and sent(s) == ["patchCard:trigger"] * 3 + ["patchCard:removesTrigger"]
               and row(s, "trigger").get("value") == "When you press Run" and lines(s, "note") == [off] and lines(s, "caution") == [], f"{did(s)} {sent(s)} {lines(s, 'note')}")
-        s = play("edit:on;pick:Start;set:Start:command:Write a thank-you note.", *on, also=lambda s: lines(s, "caution") == ["This schedule is switched off. " + off])
+        s = play("edit:on;pick:Start;set:Start:command:Write a thank-you note.", *on, also=lambda s: lines(s, "caution") == [switched])
         check("changing what a scheduled run starts with turns its schedule off too", mac(s, "Start").get("command") == "Write a thank-you note."
-              and mac(s, "Start").get("trigger") == "Mon, Wed at 09:00" and lines(s, "caution") == ["This schedule is switched off. " + off], f"{mac(s, 'Start')} {lines(s, 'caution')}")
+              and mac(s, "Start").get("trigger") == "Mon, Wed at 09:00" and lines(s, "caution") == [switched], f"{mac(s, 'Start')} {lines(s, 'caution')}")
 
         # The cards that check, sort and rewrite.
         s = play("edit:on;pick:Short enough?;set:Short enough?:check:contains;set:Short enough?:value:APPROVED", *on, also=lambda s: mac(s, "Short enough?").get("value") == "APPROVED")
@@ -3603,7 +3674,7 @@ def scenario_settings_edit():
               and sent(s) == ["renameGroup:Gate"] and settings(s).get("actions") == ["Delete", "Ungroup", "Fold"], f"{named(s)} {sent(s)} {settings(s).get('actions')}")
         s = play("edit:on;pick:Start,Writer,Style guide", *on)
         check("several cards have no settings in common: how many there are, and what can be done to all of them",
-              settings(s).get("title") == "3 cards" and named(s) == ["note"] and settings(s).get("actions") == ["Delete", "Duplicate", "Group"], f"{settings(s).get('title')} {named(s)}")
+              settings(s).get("title") == "3 cards" and named(s) == ["note"] and settings(s).get("actions") == ["Delete", "Duplicate", "Group", "Copy"], f"{settings(s).get('title')} {named(s)}")
         both("settings-07-several")
 
         # Flows.
@@ -3611,7 +3682,8 @@ def scenario_settings_edit():
         f = flows(s)
         check("with control on, each project has a + and each flow a menu, and only the open flow's menu has its settings",
               f.get("canChange") is True and f.get("add") == ["Book club", "Allotment society"] and f.get("menu") == "Rota"
-              and f.get("menus", {}).get("Rota") == ["Rename…", "Delete…"] and f.get("menus", {}).get("Welcome note") == ["Rename…", "Flow Settings…", "Delete…"], str(f))
+              and f.get("menus", {}).get("Rota") == ["Rename…", "Pin", "Stop Its Agents", "Delete…"]
+              and f.get("menus", {}).get("Welcome note") == ["Rename…", "Pin", "Stop Its Agents", "Flow Settings…", "Delete…"], str(f))
         both("settings-08-flows")
         s = play("askFlow:delete/Rota", *on, "-qbShow", "flows")
         ask = flows(s).get("asking") or {}
@@ -3653,6 +3725,284 @@ def scenario_settings_edit():
         check("and each is changed on the Mac", said(s) == [None] * 4 and sent(s) == ["subflowLimit:1", "notify:off", "renameFlow:Welcome letter"]
               and settings(s).get("flowOptions") == {"limit": 1, "notify": False} and row(s, "subflowLimit", fs).get("shown") == "1 level deep"
               and row(s, "notify", fs).get("shown") == "Off" and s.get("openFlow") == "Welcome letter", f"{did(s)} {sent(s)} {settings(s).get('flowOptions')}")
+    finally:
+        mobile.appearance("light")
+        mobile.quit()
+
+
+def scenario_parity():
+    print("parity: stage 4's controls in the iPad app, each in both control states, with a Mac made up inside the app", flush=True)
+    if not os.path.exists(MOBILE_APP):
+        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        return
+    udid = simulator()
+    if udid is None:
+        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        return
+    mobile = Mobile(udid)
+    print(f"        screenshots: {mobile.shots}", flush=True)
+    # `DebugCannedRun` with `-qbParity 1`: its flow has a Flow card running a sub-flow, and its made-up Mac has a flow
+    # with two Start cards, an empty flow, a pinned flow, card names, costs and a browser. Every launch starts afresh.
+    on, parity = ("-qbControl", "1"), ("-qbParity", "1")
+    watch_only = "This device can only watch."
+
+    def controls(state):
+        return state.get("controls") or {}
+
+    def did(state):
+        return [(d["step"], d["refusal"]) for d in controls(state).get("done", [])]
+
+    def said(state):
+        return [refusal for _, refusal in did(state)]
+
+    def play(steps="", *args, stage=3, also=lambda s: True, timeout=45):
+        silent = ("pause", "away", "control:on", "control:off")
+        waited = len([step for step in steps.split(";") if step and not step.startswith("~") and step not in silent])
+        mobile.launch("-qbCannedRun", str(stage), *parity, *args, *(("-qbDo", steps) if steps else ()))
+        return mobile.wait(lambda s: s.get("cannedStage") == stage and len(controls(s).get("done", [])) >= waited and also(s),
+                           timeout, f"the app to do {steps or 'nothing'}")
+
+    def p(state):
+        return state.get("parity") or {}
+
+    def edit(state):
+        return state.get("edit") or {}
+
+    def settings(state):
+        return state.get("settings") or {}
+
+    def mac(state, card):
+        return (settings(state).get("cards") or {}).get(card, {})
+
+    def names(state):
+        return [c["name"] for c in (state.get("canvas") or {}).get("cards", [])]
+
+    def menus(state):
+        return edit(state).get("menus") or {}
+
+    def rows_of(state):
+        return [r.get("name") or next((k for k in ("folder", "open", "newSubflow", "roleDrift", "arm") if k in r), r.get("item")) for r in settings(state).get("rows") or []]
+
+    def flow_menus(state):
+        return (settings(state).get("flows") or {}).get("menus") or {}
+
+    def both(name):
+        mobile.shot(name + "-light")
+        mobile.appearance("dark")
+        mobile.shot(name + "-dark")
+        mobile.appearance("light")
+
+    try:
+        # Watching only: what is read is there, and nothing is offered that changes the Mac.
+        steps = "pick:Writer;arm:Start:off;clearLog;closeBanner;pin:Rota:on;stopAgents:Monthly newsletter;browser:clear;orchestrator;copy:Writer;saveRole:Writer"
+        s = play(steps, "-qbShow", "flows")
+        w = p(s)
+        check("a device that may only watch is offered none of stage 4's controls",
+              w.get("starts") == {} and w.get("retry") == [] and w.get("orchestrator") is None and w.get("runMenu") == [] and w.get("canClearLog") is False
+              and w.get("bannerClose") is False and (w.get("browser") or {}).get("canClear") is False and (w.get("browser") or {}).get("offer") is None
+              and set(map(tuple, flow_menus(s).values())) == {()}, str(w))
+        check("but it is shown pins, sub-flows under their flow, costs with sub-flows and the project's browser",
+              w.get("pinned") == ["Reading list"] and ["Check the spelling", 1] in w["list"][0]["rows"] and (w.get("cost") or {}).get("withSubflows") == "$0.83"
+              and (w.get("cost") or {}).get("subflows") == [["Check the spelling", 0, "$0.12"]] and (w.get("browser") or {}).get("words") == "Running, using Google Chrome.",
+              str(w))
+        check("what it presses anyway is refused by the Mac, and what edits needs Edit first",
+              len(said(s)) == 10 and all(watch_only in (r or "") for r in said(s)[1:8])
+              and said(s)[8:] == ["Press Edit to change this flow from here."] * 2 and w.get("pinned") == ["Reading list"], str(did(s)))
+        both("parity-01-watch-only")
+        s = play("find:spell", "-qbShow", "flows")
+        f = p(s).get("find") or {}
+        check("Find works for a device that only watches, over flows and cards in every flow",
+              f.get("flows") == ["Check the spelling"] and f.get("cards") == ["Spell check in Welcome note"], str(f))
+        both("parity-02-find")
+
+        # Copy, Cut, Paste and Select All, across two flows.
+        s = play("edit:on;hold:Writer;choose:Copy;openFlow:Monthly newsletter;edit:on;paste:400,420", *on, also=lambda s: "Writer" in names(s))
+        check("a card copied in one flow is pasted into another, where the finger asked",
+              s.get("openFlow") == "Monthly newsletter" and "Writer" in names(s) and said(s) == [None] * 6 and p(s).get("clipboard") == ["Writer"]
+              and (shown_card(s, "Writer").get("x"), shown_card(s, "Writer").get("y")) == (400, 420), f"{did(s)} {names(s)} {shown_card(s, 'Writer')}")
+        check("and the clipboard is kept from one flow to the next, and named in Paste", (p(s).get("more") or {}).get("paste") == "Paste Writer", str(p(s).get("more")))
+        s = play("edit:on;cut:Style guide,Both ready;paste", *on, also=lambda s: names(s).count("Style guide") == 1 and "Both ready" in names(s))
+        check("Cut takes the cards away, and Paste puts copies back round the middle of the screen, with the link between them",
+              said(s) == [None] * 3 and p(s).get("clipboard") == ["Style guide", "Both ready"] and "Undo Paste" in [b["title"] for b in edit(s).get("bar", [])],
+              f"{did(s)} {names(s)}")
+        s = play("edit:on;paste", *on)
+        check("Paste with nothing copied says so", said(s)[-1] == "There is nothing to paste. Copy or cut some cards first.", str(did(s)))
+        s = play("edit:on;select:on;selectAll", *on)
+        check("Select All, from Select, selects every card",
+              sorted(edit(s).get("selected", [])) == sorted(names(s)) and (p(s).get("more") or {}).get("selectAllOnBar") is True, str(edit(s).get("selected")))
+        m = menus(play("edit:on", *on))
+        check("a card's menu has Copy and Cut, a Start card's Run from This Start, a Flow card's Open Its Flow, and the list of cards the roles",
+              m.get("card:Start") == ["Run from This Start", "Duplicate", "Copy", "Cut", "Delete"] and m.get("card:Spell check") == ["Open Its Flow", "Run from here…", "Duplicate", "Copy", "Cut", "Delete"]
+              and m.get("canvas", [])[:4] == ["Agent", "Note writer", "Proof reader", "Start"], str(m))
+        s = play("edit:on;copy:Sent;hold:at/1000,900", *on, "-qbZoom", "0.6", also=lambda s: edit(s).get("menu"))
+        check("a finger held on bare canvas offers Paste and Select All first",
+              [i["title"] for i in (edit(s).get("menu") or {}).get("items", [])][:4] == ["Paste", "Select All", "Agent", "Note writer"], str(edit(s).get("menu")))
+        s = play("edit:on;addRole:Proof reader:700,800", *on, also=lambda s: "Proof reader" in names(s))
+        check("an agent added from a saved role is named for it and has it", said(s)[-1] is None and mac(s, "Proof reader").get("role") == "role0002", str(mac(s, "Proof reader")))
+        both("parity-03-pasted")
+
+        # Snapping, and the map.
+        s = play("edit:on;snap:off;move:Sent:5,7", *on, also=lambda s: shown_card(s, "Sent").get("x") == 1805)
+        check("with snapping off a card goes exactly where the finger leaves it", (shown_card(s, "Sent").get("x"), shown_card(s, "Sent").get("y")) == (1805, 167)
+              and p(s).get("snaps") is False, str(shown_card(s, "Sent")))
+        s = play("map:on", "-qbZoom", "1", also=lambda s: p(s).get("mapView"))
+        before = (s.get("canvas") or {}).get("visible") or {}
+        s = play("map:on;mapTap:5,5", "-qbZoom", "1", also=lambda s: ((s.get("canvas") or {}).get("visible") or {}).get("x", 0) < before.get("x", 0) - 50)
+        after = (s.get("canvas") or {}).get("visible") or {}
+        check("the map shows the whole flow and where the screen is, and a tap on it moves the canvas there",
+              p(s).get("map") is True and p(s).get("mapView") is not None and after.get("x", 0) < before.get("x", 0) - 50, f"{before} {after}")
+        both("parity-04-map")
+
+        # Runs: Run from This Start, the Run menu, Retry, and the message at the top.
+        s = play("openFlow:Monthly newsletter;runStart:Weekly;runStart:Start", *on)
+        check("a flow with two Start cards has a Run menu of them, and runs from the one picked",
+              [b["title"] for b in p(play("openFlow:Monthly newsletter", *on)).get("runMenu", [])] == ["Run from Start", "Run from Weekly"]
+              and said(s)[1] is None and "A run is already going" in (said(s)[2] or "") and "Run started at Weekly" in (s.get("panel") or {}).get("log", []), f"{did(s)}")
+        s = play("openFlow:Monthly newsletter", *on)
+        mobile.shot("parity-05-run-menu")
+        s = play("mac:fail:Writer;pick:Writer;retry:Style guide;retry:Writer", *on)
+        check("a card the run stopped at offers Retry, and the Mac takes it there and nowhere else",
+              "The last run didn't stop at Style guide" in (said(s)[2] or "") and said(s)[3] is None, str(did(s)))
+        s = play("mac:fail:Writer;pick:Writer", *on)
+        check("Retry is beside \"The run stopped here.\"", p(s).get("retry") == ["Writer"], str(p(s).get("retry")))
+        both("parity-06-retry")
+        s = play("mac:banner:Writer couldn't start: claude wasn't found.", *on)
+        check("the Mac's message at the top of the flow is shown, with a way to close it", p(s).get("banner", "").startswith("Writer couldn't start") and p(s).get("bannerClose") is True,
+              str(p(s).get("banner")))
+        both("parity-07-banner")
+        s = play("mac:banner:Gone soon.;closeBanner;closeBanner", *on)
+        check("closed from here it goes, and closing it again is refused", p(s).get("banner") is None and said(s)[1] is None and said(s)[2] == "There is no message to close.", str(did(s)))
+
+        # Sessions: "Not in use yet", Undo, Restart to apply, the orchestrator.
+        s = play("edit:on;pick:Writer;set:Writer:model:sonnet;set:Writer:browser:on", *on, also=lambda s: (p(s).get("restart") or {}).get("Writer") == ["model", "browser"])
+        check("a setting changed while the agent runs is listed as not in use yet, with Undo and Restart to apply",
+              p(s).get("pending") == "Not in use yet. The agent keeps working with its old model and browser until you restart it."
+              and controls(s).get("details") == ["Run from here…", "Undo", "Restart to apply"] and mac(s, "Writer").get("browser") == "On", f"{p(s).get('pending')} {controls(s).get('details')}")
+        both("parity-08-not-in-use")
+        s = play("edit:on;pick:Writer;set:Writer:model:sonnet;revert:Writer", *on, also=lambda s: mac(s, "Writer").get("model") == "opus")
+        check("Undo puts it back to what the agent is using", said(s)[-1] is None and p(s).get("restart") == {} and p(s).get("pending") is None, str(did(s)))
+        s = play("edit:on;pick:Writer;set:Writer:effort:low;start:Writer;revert:Writer", *on, also=lambda s: len(did(s)) >= 5)
+        check("Restart to apply gives the agent the new settings, and then there is nothing to undo",
+              said(s)[3] is None and p(s).get("restart") == {} and "nothing to undo" in (said(s)[4] or ""), str(did(s)))
+        s = play("mac:needsRestart", *on)
+        check("the orchestrator panel offers Restart to apply when the flow changed under it", (p(s).get("orchestrator") or {}).get("title") == "Restart to apply", str(p(s).get("orchestrator")))
+        mobile.launch("-qbCannedRun", "3", *parity, *on, "-qbShow", "orchestrator", "-qbDo", "mac:needsRestart")
+        mobile.wait(lambda s: (p(s).get("orchestrator") or {}).get("title") == "Restart to apply", 30, "the orchestrator to need a restart")
+        both("parity-09-orchestrator")
+        s = play("mac:needsRestart;orchestrator", *on, also=lambda s: (p(s).get("orchestrator") or {}).get("title") == "Restart")
+        check("and Restart to apply restarts it", said(s)[-1] is None, str(did(s)))
+
+        # Roles.
+        s = play("edit:on;pick:Writer;saveRole:Writer:Kind writer;saveRole:Writer:Again", *on, also=lambda s: any(r["name"] == "Kind writer" for r in p(s).get("roles", [])))
+        role = next((r for r in p(s).get("roles", []) if r["name"] == "Kind writer"), {})
+        check("Save as a New Role saves the card's settings under the name, and ties the card to it",
+              said(s)[2] is None and role.get("model") == "opus" and role.get("instructions", "").startswith("You write short notes")
+              and "already has the role Kind writer" in (said(s)[3] or ""), f"{did(s)} {role}")
+        s = play("edit:on;pick:Writer;saveRole:Writer:Note writer", *on)
+        check("a role is never saved over another of the same name", "already has a role called Note writer" in (said(s)[-1] or ""), str(did(s)))
+        steps = "edit:on;pick:Writer;saveRole:Writer:Kind writer;set:Writer:model:haiku"
+        s = play(steps, *on, also=lambda s: p(s).get("drift") is True)
+        check("a card changed since its role was saved says so, with Reset and Update role",
+              p(s).get("drift") is True and "roleDrift" in rows_of(s), str(rows_of(s)))
+        both("parity-10-role-drift")
+        s = play(steps + ";updateRole:Writer", *on, also=lambda s: p(s).get("drift") is False)
+        check("Update role brings the role up to the card", said(s)[-1] is None and next((r for r in p(s)["roles"] if r["name"] == "Kind writer"), {}).get("model") == "haiku", str(p(s).get("roles")))
+        s = play(steps + ";resetRole:Writer", *on, also=lambda s: mac(s, "Writer").get("model") == "opus")
+        check("Reset puts the card back to what the role holds", said(s)[-1] is None and p(s).get("drift") is False, str(did(s)))
+        s = play("edit:on;pick:Writer;saveRole:Writer:Kind writer;askDeleteRole:Kind writer", *on)
+        check("deleting a role is asked first, by its name", edit(s).get("asking") == "deleteRole:Kind writer", str(edit(s).get("asking")))
+        both("parity-11-delete-role")
+        s = play("edit:on;pick:Writer;saveRole:Writer:Kind writer;deleteRole:Kind writer", *on, also=lambda s: len(p(s).get("roles", [])) == 2)
+        check("and deleted on the Mac", said(s)[-1] is None and [r["name"] for r in p(s)["roles"]] == ["Note writer", "Proof reader"], str(p(s).get("roles")))
+        s = play("edit:on;pick:Writer;askSaveRole:Writer", *on)
+        check("Save as a New Role asks for a name", edit(s).get("asking") == "saveRole:Writer", str(edit(s).get("asking")))
+        both("parity-12-save-role")
+
+        # Schedules.
+        s = play("edit:on;pick:Start;arm:Start:off", *on, also=lambda s: "arm" in rows_of(s) and next(r for r in settings(s)["rows"] if "arm" in r)["arm"] == "Turn on")
+        check("a schedule that is on can be turned off from here, and then offers Turn on", said(s)[-1] is None, str(did(s)))
+        both("parity-13-schedule-off")
+        s = play("edit:on;pick:Start;arm:Start:off;arm:Start:on;pick:none;pick:Start", *on,
+                 also=lambda s: "arm" in rows_of(s) and next(r for r in settings(s)["rows"] if "arm" in r)["arm"] == "Turn off")
+        check("and turned on again, when it says when it next runs", said(s)[3] is None and any(r.get("label", "").startswith("Next: ") for r in settings(s)["rows"]), str(did(s)))
+        s = play("openFlow:Monthly newsletter;arm:Start:on", *on)
+        check("a Start card with no schedule has nothing to turn on", "has no schedule to turn on" in (said(s)[-1] or ""), str(did(s)))
+        s = play("pick:Start", *on)
+        check("without Edit, the details say whether it is on, and offer Turn off", (p(s).get("scheduleNote") or "").startswith("This schedule is on. Next: "), str(p(s).get("scheduleNote")))
+
+        # Sub-flows, and the way back.
+        s = play("edit:on;add:flow:600,800;pick:Flow;newSubflow:Flow:Tidy words;openSub:Flow", *on, also=lambda s: s.get("openFlow") == "Tidy words")
+        check("New sub-flow makes a flow for the card, under it in the list, and Open goes into it, with the way back",
+              s.get("openFlow") == "Tidy words" and p(s).get("back") == "Welcome note" and ["Tidy words", 1] in p(s)["list"][0]["rows"] and names(s) == ["Input", "Output"],
+              f"{s.get('openFlow')} {p(s).get('back')} {p(s).get('list')}")
+        both("parity-14-subflow")
+        s = play("edit:on;add:flow:600,800;pick:Flow;newSubflow:Flow;openSub:Flow;backTo", *on, also=lambda s: s.get("openFlow") == "Welcome note" and len(did(s)) >= 6)
+        check("and Back goes to the flow that runs it", s.get("openFlow") == "Welcome note" and said(s)[-1] is None, str(did(s)))
+        s = play("openSub:Spell check", *on, "-qbShow", "cost", also=lambda s: s.get("openFlow") == "Check the spelling")
+        check("inside a sub-flow, its cost says what it is part of", (p(s).get("cost") or {}).get("outer") == "Welcome note $0.83", str(p(s).get("cost")))
+        s = play("edit:on;add:flow:600,800;pick:Flow;askNewSubflow:Flow", *on)
+        check("New sub-flow asks for a name", edit(s).get("asking") == "newSubflow:Flow", str(edit(s).get("asking")))
+        both("parity-15-new-subflow")
+
+        # The empty flow's note.
+        s = play("openFlow:Thank the speakers", *on, also=lambda s: p(s).get("callout"))
+        c = p(s).get("callout") or {}
+        check("an empty flow says to describe it, with Start the orchestrator and Build it by hand",
+              c.get("start") == "Start the orchestrator" and c.get("build") == "Build it by hand", str(c))
+        both("parity-16-callout")
+        s = play("openFlow:Thank the speakers;callout:start", *on, also=lambda s: (s.get("panel") or {}).get("page") == "orchestrator")
+        check("Start the orchestrator starts it and shows it", said(s)[-1] is None and (p(s).get("orchestrator") or {}).get("title") == "Restart", str(did(s)))
+        s = play("openFlow:Thank the speakers;callout:hand", *on, also=lambda s: edit(s).get("on"))
+        check("Build it by hand puts the note away and starts editing, with the cards to add",
+              p(s).get("callout") is None and (edit(s).get("menu") or {}).get("title") == "Add Card", str(edit(s).get("menu")))
+        s = play("openFlow:Thank the speakers")
+        check("watching only, the note has no buttons that change the Mac", (p(s).get("callout") or {}).get("start") is None and (p(s).get("callout") or {}).get("build") == "Close", str(p(s).get("callout")))
+
+        # The log, costs, pins, agents and Find.
+        s = play("clearLog", *on, also=lambda s: len((s.get("panel") or {}).get("log", [])) == 1)
+        check("Clear empties the log and the earlier runs, and the Mac says who did it",
+              said(s) == [None] and (s.get("panel") or {}).get("runs") == [] and "cleared the log" in (s.get("panel") or {}).get("log", [""])[0], str((s.get("panel") or {}).get("log")))
+        mobile.launch("-qbCannedRun", "3", *parity, *on, "-qbShow", "log")
+        mobile.wait(lambda s: p(s).get("canClearLog"), 30, "the log")
+        both("parity-17-log")
+        s = play("", *on, stage=1, also=lambda s: (p(s).get("cost") or {}).get("runSoFar"))
+        check("while a run goes, the cost of it so far is shown", (p(s).get("cost") or {}).get("runTotal") == "$0.13", str(p(s).get("cost")))
+        mobile.launch("-qbCannedRun", "3", *parity, *on, "-qbShow", "cost")
+        mobile.wait(lambda s: s.get("cannedStage") == 3, 30, "the cost")
+        both("parity-18-cost")
+        s = play("pin:Rota:on", *on, also=lambda s: "Rota" in p(s).get("pinned", []))
+        check("Pin puts a flow in the Pinned list, and its menu then says Unpin",
+              said(s) == [None] and flow_menus(s).get("Rota", [])[:3] == ["Rename…", "Unpin", "Stop Its Agents"], str(flow_menus(s).get("Rota")))
+        s = play("pin:Rota:on;pin:Rota:off", *on, also=lambda s: p(s).get("pinned") == ["Reading list"])
+        check("and Unpin takes it out", said(s) == [None, None], str(did(s)))
+        mobile.launch("-qbCannedRun", "3", *parity, *on, "-qbShow", "flows", "-qbDo", "flowMenu:Monthly newsletter")
+        mobile.wait(lambda s: (settings(s).get("flows") or {}).get("menu") == "Monthly newsletter", 30, "the flow's menu")
+        both("parity-19-flow-list")
+        s = play("askStopAgents:Monthly newsletter", *on)
+        check("Stop Its Agents is asked first", ((settings(s).get("flows") or {}).get("asking") or {}).get("answer") == "Stop Its Agents", str(settings(s).get("flows")))
+        s = play("stopAgents:Monthly newsletter;stopAgents:Monthly newsletter;stopAgents:Welcome note", *on)
+        check("and stops them, and a flow with none running says so",
+              said(s)[0] is None and "None of this flow's agents is running" in (said(s)[1] or "") and said(s)[2] is None, str(did(s)))
+        s = play("find:wrap;findGo:Monthly newsletter/Wrap", *on, also=lambda s: s.get("openFlow") == "Monthly newsletter" and (s.get("canvas") or {}).get("selected"))
+        wrap = next((c for c in (s.get("canvas") or {}).get("cards", []) if c["name"] == "Wrap"), {})
+        check("Find goes to a card in another flow: the flow opens, and the card is selected", wrap.get("selected") is True and p(s).get("find") is None, str(wrap))
+
+        # The project's browser.
+        s = play("flowSettings;browser:clear;browser:clear", *on)
+        b = p(s).get("browser") or {}
+        check("Clear browser data clears it, and there is then nothing to clear", said(s)[1] is None and b.get("canClear") is False
+              and "There is no browser data to clear" in (b.get("refusal") or ""), str(b))
+        s = play("mac:browser:missing;flowSettings", *on, also=lambda s: settings(s).get("flows", {}).get("sheet"))
+        check("with no browser on the Mac, the Mac's Download is offered", (p(s).get("browser") or {}).get("offer") == "Download", str(p(s).get("browser")))
+        both("parity-20-browser-missing")
+        s = play("mac:browser:missing;flowSettings;browser:download", *on, also=lambda s: "Downloading" in (p(s).get("browser") or {}).get("words", ""))
+        check("and Download starts it downloading", said(s)[-1] is None, str(p(s).get("browser")))
+        s = play("mac:browser:failed:Chrome quit when it started.;flowSettings;browser:restart", *on, also=lambda s: len(did(s)) >= 3)
+        check("a browser that failed says why in the Mac's words, and Try again restarts it",
+              said(s)[-1] is None and (p(s).get("browser") or {}).get("words") == "Starting the browser…", str(p(s).get("browser")))
+        s = play("mac:browser:failed:Chrome quit when it started.;flowSettings", *on, also=lambda s: settings(s).get("flows", {}).get("sheet"))
+        check("with Try again offered", (p(s).get("browser") or {}).get("offer") == "Try again" and (p(s).get("browser") or {}).get("words") == "Chrome quit when it started.", str(p(s).get("browser")))
+        both("parity-21-browser-failed")
     finally:
         mobile.appearance("light")
         mobile.quit()
@@ -4780,7 +5130,7 @@ def main():
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
-    in_app = [w for w in wanted if w not in ("noclaude", "nobrowser", "terminals", "panels", "controls", "typing", "editing", "settings-edit")]
+    in_app = [w for w in wanted if w not in ("noclaude", "nobrowser", "terminals", "panels", "controls", "typing", "editing", "settings-edit", "parity")]
     if in_app:
         app = App(project)
         try:
@@ -4830,6 +5180,11 @@ def main():
             scenario_settings_edit()
         except Exception as e:
             check("settings-edit ran to the end", False, f"{type(e).__name__}: {e}"[:500])
+    if "parity" in wanted:
+        try:
+            scenario_parity()
+        except Exception as e:
+            check("parity ran to the end", False, f"{type(e).__name__}: {e}"[:500])
     if "nobrowser" in wanted:
         try:
             scenario_nobrowser(project)

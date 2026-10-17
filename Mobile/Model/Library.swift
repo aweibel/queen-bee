@@ -32,16 +32,14 @@ extension RemoteClient {
     /// Pin or Unpin, from a flow's menu. The Mac's sidebar changes, and so does every device's list.
     @discardableResult
     func pin(_ flowID: String, on: Bool) async -> String? {
-        guard canChangeFlows else { return Self.notConnected }
-        return await flowCommand(.pin(flowID: flowID, on: on))
+        await flowCommand(.pin(flowID: flowID, on: on))
     }
 
     /// "Stop Its Agents": every session of the flow ends on the Mac, the orchestrator's included, and so does a run.
     /// Asked first, from the flow's menu.
     @discardableResult
     func stopAgents(_ flowID: String) async -> String? {
-        guard canChangeFlows else { return Self.notConnected }
-        return await flowCommand(.stopAgents(flowID: flowID))
+        await flowCommand(.stopAgents(flowID: flowID))
     }
 
     // MARK: Find
@@ -96,7 +94,7 @@ extension RemoteClient {
     /// Clear browser data, Download, Restart or Try again, from the flow's settings. What the Mac turns down is said there.
     @discardableResult
     func browser(_ action: BrowserStatus.Action) async -> String? {
-        guard abilities.canAct, let command = browserCommand(action) else { return Self.notConnected }
+        guard let command = browserCommand(action) else { return Self.notConnected }
         let refusal = await send(command)
         settings.browserRefusal = refusal
         if let refusal { UIAccessibility.post(notification: .announcement, argument: refusal) }

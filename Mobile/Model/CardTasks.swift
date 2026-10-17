@@ -24,7 +24,7 @@ extension RemoteClient {
 
     @discardableResult
     func armSchedule(_ cardID: String, on: Bool) async -> String? {
-        guard abilities.canAct, let command = armCommand(cardID, on: on) else { return Self.notConnected }
+        guard let command = armCommand(cardID, on: on) else { return Self.notConnected }
         return await perform(command: command)
     }
 
@@ -124,7 +124,7 @@ extension RemoteClient {
 
     @discardableResult
     func clearLog() async -> String? {
-        guard abilities.canAct, let command = clearLogCommand() else { return Self.notConnected }
+        guard let command = clearLogCommand() else { return Self.notConnected }
         return await perform(command: command)
     }
 
@@ -133,7 +133,7 @@ extension RemoteClient {
     /// Closes the message at the top of the flow, on the Mac as well as here.
     @discardableResult
     func dismissBanner() async -> String? {
-        guard abilities.canAct, let command = dismissBannerCommand() else { return Self.notConnected }
+        guard let command = dismissBannerCommand() else { return Self.notConnected }
         return await perform(command: command)
     }
 
