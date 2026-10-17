@@ -199,6 +199,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         groupViews.values.forEach { $0.removeFromSuperview() }
         cardViews = [:]
         groupViews = [:]
+        client.browsers.canvasShows([])
         linkLayer.update([])
         content = CanvasContent()
         inputs = nil
@@ -228,6 +229,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 view.onPress = { [weak self] in self?.model.onPress?($0) }
                 view.onEdit = { [weak self] action in self?.perform(action) }
                 (view as? AgentCardView)?.onExpand = { [weak self] in self?.model.expandTerminal?(id) }
+                (view as? AgentCardView)?.onExpandBrowser = { [weak self] in self?.model.expandBrowser?(id) }
                 view.zoom = zoom
                 document.insertSubview(view, belowSubview: overlayView)
                 cardViews[card.id] = view
@@ -235,7 +237,12 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 created = true
             }
             let context = new.contexts[card.id] ?? CardContext()
-            if !view.isCurrent(card: card, context: context) { view.update(card: card, context: context) }
+            if !view.isCurrent(card: card, context: context) {
+                let hadBrowser = (view as? AgentCardView)?.browserHalf != nil
+                view.update(card: card, context: context)
+                // A browser half that has just come draws what is known of it at once.
+                if let agent = view as? AgentCardView, agent.browserHalf != nil, !hadBrowser { browserChanged(card.id) }
+            }
             let hidden = new.folded.contains(card.id)
             if view.isHidden != hidden { view.isHidden = hidden }
         }
@@ -251,6 +258,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         content = new
         layoutGroups()
         didFirstSync = true
+        noteBrowsersInView()
         if created {
             attachTerminals()
             if sharpness != 1 { sharpen(force: true) }
@@ -305,6 +313,34 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         #if DEBUG
         model.didChangeWhatIsShown()
         #endif
+    }
+
+    // MARK: Browsers
+
+    /// The card's browser has a new picture, or its bar or notice changed.
+    func browserChanged(_ id: String) {
+        guard let view = cardViews[id] as? AgentCardView else { return }
+        view.showBrowser(page: client.browsers.pages[id], picture: client.browsers.pictures[id])
+    }
+
+    /// Tells the Mac which browser cards are on screen and large enough to read, which are the only ones it
+    /// sends pictures of. As on the Mac, a card zoomed out to its overview shows no page.
+    private func noteBrowsersInView() {
+        guard window != nil, bounds.width > 0, scrollView.zoomScale >= CardView.overviewBelow else {
+            client.browsers.canvasShows([])
+            return
+        }
+        let visible = visible
+        let shown = content.cards.filter { card in
+            card.kind == .agent && card.browser == true && !content.folded.contains(card.id) && CanvasGeometry.frame(of: card).intersects(visible)
+        }
+        client.browsers.canvasShows(Set(shown.map(\.id)))
+    }
+
+    /// The agent card whose browser's "open full screen" mark a tap at a canvas point is on, if any.
+    private func browserExpandTarget(at point: CGPoint) -> String? {
+        let zoom = scrollView.zoomScale
+        return cardViews.first { _, view in (view as? AgentCardView)?.browserExpandTarget(zoom: zoom)?.contains(point) == true }?.key
     }
 
     /// The agent card whose "open full screen" mark a tap at a canvas point is on, if any: the nearest,
@@ -382,6 +418,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         centre = canvasPoint(at: middleOfRoom)
         // The map outlines what is on screen, and is the only thing that needs to know as the canvas moves.
         if model.showsMap { model.noteVisible(visible) }
+        noteBrowsersInView()
     }
 
     /// Pans so a canvas point is in the middle of the clear part of the canvas, at the zoom it is at, as a tap on the map does.
@@ -427,8 +464,9 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        // A canvas that has left the screen is under no finger.
+        // A canvas that has left the screen is under no finger, and shows no page.
         if window == nil { letGoOfDrag() }
+        noteBrowsersInView()
     }
 
     override func safeAreaInsetsDidChange() {
@@ -615,7 +653,9 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
 
     /// What a tap at a canvas point does.
     func tap(at point: CGPoint) {
-        if let key = expandTarget(at: point) {
+        if let id = browserExpandTarget(at: point) {
+            model.expandBrowser?(id)
+        } else if let key = expandTarget(at: point) {
             model.expandTerminal?(key)
         } else if let press = pressTarget(at: point) {
             model.onPress?(press)
@@ -636,7 +676,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: document)
         if let edits = editingTakes(gestureRecognizer, at: point) { return edits }
-        return item(at: point) == .none && expandTarget(at: point) == nil && pressTarget(at: point) == nil
+        return item(at: point) == .none && expandTarget(at: point) == nil && browserExpandTarget(at: point) == nil && pressTarget(at: point) == nil
     }
 
     /// What a tap at a canvas point is on. Something the finger is squarely on wins: a card, then a group's
@@ -697,6 +737,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
             entry["linkDrop"] = view.context.linkDrop.rawValue
             entry["actions"] = (view.accessibilityCustomActions ?? []).map(\.name)
             entry["badges"] = view.badgeTexts
+            entry["spoken"] = view.accessibilityValue ?? ""
             entry["text"] = (view as? LogicCardView)?.summaryText ?? NSNull()
             entry["hasTerminalPlace"] = terminalContainer(for: card.id) != nil
             // The buttons drawn on the card, with the middle of each on screen, for a test to tap. Laid out
@@ -716,6 +757,15 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
                 if let target = agent.expandTarget(zoom: zoom) {
                     let middle = document.convert(CGPoint(x: target.midX, y: target.midY), to: nil)
                     entry["expandAt"] = ["x": middle.x, "y": middle.y]
+                }
+                if let half = agent.browserHalf {
+                    // Where the page is drawn on screen, and the mark that opens the browser full screen.
+                    entry["browserPage"] = rect(half.convert(half.pageFrame, to: nil))
+                    entry["browserShows"] = half.page.image != nil
+                    if let target = agent.browserExpandTarget(zoom: zoom) {
+                        let middle = document.convert(CGPoint(x: target.midX, y: target.midY), to: nil)
+                        entry["browserExpandAt"] = ["x": middle.x, "y": middle.y]
+                    }
                 }
             }
             return entry

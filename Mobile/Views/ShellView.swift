@@ -16,6 +16,15 @@ struct ShellView: View {
         }
     }
 
+    /// The agent card whose browser is open full screen. Closing the cover stops it being watched full screen.
+    private var expandedBrowser: Binding<ExpandedTerminal?> {
+        Binding {
+            client.browsers.expandedCard.map(ExpandedTerminal.init)
+        } set: { new in
+            if new == nil { client.openBrowser(nil) }
+        }
+    }
+
     var body: some View {
         Group {
             if sizeClass == .compact {
@@ -24,6 +33,8 @@ struct ShellView: View {
                 SplitShell { showsSettings = true }
             }
         }
+        // On the shells, not beside the terminal's cover: one view presents one cover at a time.
+        .fullScreenCover(item: expandedBrowser) { BrowserViewer(cardID: $0.id) }
         .sheet(isPresented: $showsSettings) { SettingsSheet() }
         .fullScreenCover(item: expanded) { TerminalViewer(key: $0.id) }
         .asksBeforeActing()
@@ -35,7 +46,7 @@ struct ShellView: View {
     }
 }
 
-/// A session's key, as something a cover can be shown for.
+/// A session's key, or a card's id, as something a cover can be shown for.
 private struct ExpandedTerminal: Identifiable {
     let id: String
 }

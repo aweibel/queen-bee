@@ -307,6 +307,9 @@ class CardView: UIView {
     /// What VoiceOver says after the card's name: what it is doing, whether it is waiting on the person,
     /// where the run went, and anything wrong with how it is set up. The same things the badges, the tint
     /// and the warning line say to the eye.
+    /// Says again what the card is doing, when something a subclass speaks of has changed.
+    func refreshSpoken() { speak() }
+
     private func speak() {
         var parts = spokenState
         if context.mark.failed {
@@ -700,6 +703,9 @@ final class AgentCardView: CardView {
     private let expandIcon = UIImageView()
     private static let expandSize: CGFloat = 14
     private var stateText = ""
+    /// The card's browser half, while its Browser switch is on: terminal on the left, page on the right, as on the Mac.
+    private(set) var browserHalf: BrowserHalfView?
+    private let browserRule = UIView()
 
     override var overviewText: String { stateText }
 
@@ -709,11 +715,23 @@ final class AgentCardView: CardView {
         if state == .needsYou { parts.append("Waiting for you in its terminal") }
         if !hintLabel.isHidden { parts.append(hintLabel.text ?? "") }
         if let cost = context.cost { parts.append("Cost \(cost)") }
+        if let browserHalf {
+            // The page is a picture, and VoiceOver can only say what it is of.
+            let page = browserHalf.shown.page
+            if let notice = (page ?? RemoteBrowserPage()).notice {
+                parts.append("Browser: \(notice.words)")
+            } else if let page {
+                let name = page.title.isEmpty ? (page.url.isEmpty ? "a blank page" : page.url) : page.title
+                parts.append("Browser showing \(name), a picture of the page on your Mac")
+            }
+        }
         return parts.filter { !$0.isEmpty }
     }
 
     /// Opens the terminal full screen, for VoiceOver, which can't reach the mark in the title's corner.
     var onExpand: (() -> Void)?
+    /// Opens the card's browser full screen, for VoiceOver, which can't reach the mark at the end of its bar.
+    var onExpandBrowser: (() -> Void)?
 
     override init(card: Card) {
         super.init(card: card)
@@ -732,6 +750,27 @@ final class AgentCardView: CardView {
         expandIcon.tintColor = Theme.ink
         expandIcon.isHidden = true
         titleBar.addSubview(expandIcon)
+        browserRule.backgroundColor = Theme.hairline
+        browserRule.isHidden = true
+        content.addSubview(browserRule)
+    }
+
+    /// Where a tap opens the card's browser full screen, in the canvas's own points, or nil when it has none.
+    /// Given a finger's width on screen whatever the zoom, as the terminal's mark is.
+    func browserExpandTarget(zoom: CGFloat) -> CGRect? {
+        guard let browserHalf, !isHidden, zoom >= Self.overviewBelow else { return nil }
+        let mark = browserHalf.convert(browserHalf.expandFrame, to: superview)
+        let reach = max(Self.expandSize / 2, Theme.Touch.target / 2 / max(zoom, 0.01))
+        return CGRect(x: mark.midX - reach, y: mark.midY - reach, width: reach * 2, height: reach * 2)
+    }
+
+    /// Draws what the card's browser shows now.
+    func showBrowser(page: RemoteBrowserPage?, picture: BrowserPicture?) {
+        guard let browserHalf else { return }
+        let hadPage = browserHalf.shown.page
+        browserHalf.show(page: page, picture: picture)
+        // What VoiceOver says only changes with the bar, not with each picture.
+        if hadPage != page { refreshSpoken() }
     }
 
     override var titleAccessories: [BadgeLabel] { [stateBadge, costBadge] }
@@ -768,6 +807,9 @@ final class AgentCardView: CardView {
         (terminal == nil ? [] : [UIAccessibilityCustomAction(name: "Open the terminal full screen") { [weak self] _ in
             self?.onExpand?()
             return self?.onExpand != nil
+        }]) + (browserHalf == nil ? [] : [UIAccessibilityCustomAction(name: "Open the browser full screen") { [weak self] _ in
+            self?.onExpandBrowser?()
+            return self?.onExpandBrowser != nil
         }]) + super.extraActions
     }
 
@@ -789,17 +831,32 @@ final class AgentCardView: CardView {
         // With a button to start it from here, there is nothing to send the person to the Mac for.
         hintLabel.isHidden = (state != .notStarted && state != .exited) || !context.buttons.isEmpty
         hintLabel.text = state == .exited ? "Restart it on your Mac" : "Start it on your Mac"
+        let wantsBrowser = new.browser == true
+        if wantsBrowser != (browserHalf != nil) {
+            browserHalf?.removeFromSuperview()
+            browserHalf = wantsBrowser ? BrowserHalfView() : nil
+            if let browserHalf { content.insertSubview(browserHalf, belowSubview: browserRule) }
+            browserRule.isHidden = !wantsBrowser
+            refreshActions()
+        }
         super.update(card: new, context: context)
     }
 
 
     override func layoutContent() {
-        terminalHolder.frame = content.bounds
+        // With a browser the card is split down the middle, as on the Mac: terminal on the left, page on the right.
+        var left = content.bounds
+        if let browserHalf {
+            left.size.width = (content.bounds.width / 2).rounded()
+            browserRule.frame = CGRect(x: left.maxX, y: 0, width: 1, height: content.bounds.height)
+            browserHalf.frame = CGRect(x: left.maxX + 1, y: 0, width: content.bounds.width - left.maxX - 1, height: content.bounds.height)
+        }
+        terminalHolder.frame = left
         terminal?.frame = terminalFrame
         let size = Self.expandSize
         expandIcon.frame = CGRect(x: titleBar.bounds.width - 8 - size, y: (CanvasGeometry.titleHeight - size) / 2, width: size, height: size)
-        hintLabel.frame = content.bounds.insetBy(dx: 10, dy: 0)
-        layoutButtons(in: content.bounds.insetBy(dx: 10, dy: 0), centred: true)
+        hintLabel.frame = left.insetBy(dx: 10, dy: 0)
+        layoutButtons(in: left.insetBy(dx: 10, dy: 0), centred: true)
         // A terminal put in the card later mustn't cover them.
         buttonViews.forEach(content.bringSubviewToFront)
     }

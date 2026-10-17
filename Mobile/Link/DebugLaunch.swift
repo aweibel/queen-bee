@@ -36,6 +36,8 @@ import UIKit
 ///                                       terminals, as if a Mac had sent them. See `DebugCanned`.
 ///   -qbGoToWaiting <n>                  once the flow is on the canvas, go to the nth card that is waiting on
 ///                                       the person, as a tap on its line in the banner does
+///   -qbCannedBrowser <state>            no Mac at all: one agent card with a browser, in that state. See `DebugBrowser`,
+///                                       which has the steps for a card's browser too.
 ///   -qbCannedRun <n>                    no Mac at all: play the first n stages of a made-up run, for the
 ///                                       panels. See `DebugCannedRun`.
 ///   -qbControl 1                        with a made-up run: the made-up Mac lets this device control it
@@ -280,6 +282,13 @@ enum DebugLaunch {
                     client.controls.debugNote(step, await work())
                 case _ where DebugSettings.step(step, in: client) != nil:
                     guard let work = DebugSettings.step(step, in: client) else { continue }
+                    if isWaitedFor {
+                        client.controls.debugNote(step, await work())
+                    } else {
+                        Task { client.controls.debugNote(step, await work()) }
+                    }
+                case _ where DebugBrowser.step(step, in: client) != nil:
+                    guard let work = DebugBrowser.step(step, in: client) else { continue }
                     if isWaitedFor {
                         client.controls.debugNote(step, await work())
                     } else {
@@ -654,6 +663,16 @@ enum DebugLaunch {
             fields["edit"] = DebugEditing.state(client)
             fields["settings"] = DebugSettings.state(client)
             fields["parity"] = DebugParity.state(client)
+            // What each card's browser shows, written again when a bar changes or a picture first comes.
+            _ = client.browsers.pageRevision
+            _ = client.browsers.debugCatching
+            var names = Dictionary((client.mirror.snapshot?.flow.cards ?? []).map { ($0.id, $0.name) }) { first, _ in first }
+            names[TerminalRegistry.orchestratorKey] = TerminalRegistry.orchestratorKey
+            fields["browsers"] = client.browsers.debugState(names: names, canAct: client.abilities.canAct)
+            fields["browserSent"] = client.debugSent.compactMap { command -> String? in
+                guard case .browser(_, _, let action) = command else { return nil }
+                return action.name
+            }
         } onChange: {
             Task { @MainActor in report(client) }
         }

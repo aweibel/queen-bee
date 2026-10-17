@@ -17,6 +17,7 @@ struct QueenBeeMobileApp: App {
                     DebugLaunch.report(client)
                     DebugLaunch.openNamedFlow(client)
                     DebugLaunch.expandNamedTerminal(client)
+                    DebugBrowser.expandNamed(client)
                     DebugLaunch.showNamedPage(client)
                     DebugLaunch.viewNamedRun(client)
                     DebugLaunch.goToNamedWaiting(client)

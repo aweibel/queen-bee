@@ -515,6 +515,8 @@ extension RemoteClient {
 
     /// Opens a session's terminal full screen, with the message box under it, or with the keys.
     func openTerminal(_ key: String, keys: Bool = false) {
+        // One thing full screen at a time.
+        if browsers.expandedCard != nil { openBrowser(nil) }
         composer.releaseControl()
         composer.mode = keys ? .keys : .message
         composer.wantsKeyboard = keys

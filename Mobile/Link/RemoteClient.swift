@@ -37,6 +37,10 @@ final class RemoteClient {
     /// True when iOS won't let the app look for the Mac.
     private(set) var localNetworkBlocked = false
     let terminals = TerminalRegistry()
+    /// The browsers of the open flow's agent cards: the pictures of the pages on screen, and their bars.
+    let browsers = BrowserFeeds()
+    /// What is on its way to the cards' browsers. See `BrowserInput.swift`.
+    @ObservationIgnored let browserInput = BrowserInputQueue()
     /// What this device is looking at on the open flow's canvas, and what it has selected there.
     let canvas = CanvasModel()
     /// Which page of the panel beside the canvas is on show.
@@ -73,6 +77,8 @@ final class RemoteClient {
     @ObservationIgnored var debugOpener: ((_ flowID: String?, _ leaving: RemoteFlowSnapshot?) -> Void)?
     /// Every command that left for the Mac, in order, for a test to see that nothing else did.
     private(set) var debugSent: [RemoteCommand] = []
+    /// And is told which browser cards the device has on screen, as the Mac would be.
+    @ObservationIgnored var debugWatcher: ((_ flowID: String, _ cardIDs: [String]) -> Void)?
     #endif
 
     /// One connection and the things waiting to be sent on it, which leave in the order they were asked for.
@@ -105,6 +111,9 @@ final class RemoteClient {
         canvas.expandTerminal = { [weak self] key in self?.openTerminal(key) }
         terminals.onChange = { [canvas] in canvas.terminalsChanged() }
         canvas.onPress = { [weak self] in self?.press($0) }
+        canvas.expandBrowser = { [weak self] id in self?.openBrowser(id) }
+        browsers.onChange = { [canvas] id in canvas.view?.browserChanged(id) }
+        browsers.sendWatch = { [weak self] ids in self?.watch(ids) }
     }
 
     // MARK: Starting and stopping
@@ -117,6 +126,10 @@ final class RemoteClient {
         #if DEBUG
         if DebugCanned.isWanted {
             Task { await DebugCanned.play(self) }
+            return
+        }
+        if DebugBrowser.isWanted {
+            Task { await DebugBrowser.play(self) }
             return
         }
         if DebugCannedRun.isWanted {
@@ -304,6 +317,14 @@ final class RemoteClient {
             mirror.terminalEvent(in: message).map(terminals.receive)
             return
         }
+        // Pictures of pages, like terminal output, go straight to what draws them.
+        switch message {
+        case .browserPage(let id, _, _), .browserFrame(let id, _, _), .browserCopied(let id, _, _):
+            if id == mirror.openFlowID { browsers.receive(message) }
+            return
+        default:
+            break
+        }
         // A welcome starts a new connection, and the mirror forgets what the old one was sent.
         if case .welcome = message { failWaiting() }
         mirror.apply(message).forEach(terminals.receive)
@@ -311,8 +332,12 @@ final class RemoteClient {
         case .answer(let id, let refusal):
             giveUps.removeValue(forKey: id)?.cancel()
             answers.removeValue(forKey: id)?.resume(returning: refusal)
-        // The Mac's copy of the flow is what every setting that isn't being written in shows.
-        case .opened, .flow: fieldsFollowMac()
+        // The Mac's copy of the flow is what every setting that isn't being written in shows. A flow sent
+        // afresh, as after connecting again, comes with no browser watched on the Mac.
+        case .opened:
+            fieldsFollowMac()
+            browsers.tellAgain()
+        case .flow: fieldsFollowMac()
         // A flow made from here is opened once the Mac lists it.
         case .library: openNewFlow()
         default: break
@@ -423,6 +448,10 @@ final class RemoteClient {
             controls.asking = nil
             stopEditing()
         }
+        if flowID != mirror.openFlowID {
+            browsers.reset()
+            browserInput.clear()
+        }
         mirror.willOpen(flowID)
         terminals.reset()
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
@@ -430,6 +459,19 @@ final class RemoteClient {
         #if DEBUG
         if state == .connected, link == nil { debugOpener?(flowID, leaving) }
         #endif
+    }
+
+    /// Tells the Mac which browser cards of the open flow are on screen. With no connection there is nobody to
+    /// tell: the flow is sent afresh once there is one, and that tells it again.
+    private func watch(_ cardIDs: [String]) {
+        guard state == .connected, let flowID = mirror.openFlowID else { return }
+        if let link {
+            link.send(.watchBrowsers(flowID: flowID, cardIDs: cardIDs))
+        } else {
+            #if DEBUG
+            debugWatcher?(flowID, cardIDs)
+            #endif
+        }
     }
 
     /// The open flow as the Mac lists it, with the project it is in. Nil when none is open, or the Mac no longer lists it.
@@ -511,6 +553,8 @@ final class RemoteClient {
         edit.clipboard = nil
         settings.clear()
         terminals.reset()
+        browsers.reset()
+        browserInput.clear()
         canvas.viewports = [:]
         noteMac(notFound: false)
         localNetworkBlocked = false
