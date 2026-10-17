@@ -254,15 +254,52 @@ final class RemoteHost {
     // MARK: The flow list
 
     private func library() -> RemoteLibrary {
-        RemoteLibrary(projects: AppServices.shared.projects.map { project in
-            RemoteProject(id: project.root.path, name: project.name, flows: project.controllers.map {
-                RemoteFlowSummary(id: $0.flow.id, name: $0.flow.name, isSubflow: $0.flow.isSubflow == true, activity: $0.activity)
-            })
-        // A role's name and id, for a device to offer. What a role holds is never sent.
-        }, roles: AppServices.shared.roles.map { RemoteRole(id: $0.id, name: $0.name) })
+        let services = AppServices.shared
+        return RemoteLibrary(projects: services.projects.map { project in
+            // One for the project, as working it out reads every flow.
+            let nesting = project.nesting
+            return RemoteProject(id: project.root.path, name: project.name, flows: project.controllers.map { controller in
+                let id = controller.flow.id
+                let outer = nesting.outerFlows(of: id)
+                let own = controller.totalUsage
+                let below = nesting.subflows(of: id).compactMap { project.controller($0.id)?.totalUsage }.reduce(own, +)
+                return RemoteFlowSummary(id: id, name: controller.flow.name, isSubflow: controller.flow.isSubflow == true,
+                                         activity: controller.activity, parentID: outer.count == 1 ? outer[0] : nil,
+                                         pinned: services.pinnedFlowIDs.contains(id), cardNames: Remote.listedNames(of: controller.flow),
+                                         usage: own.isZero ? nil : own, usageWithSubflows: below.isZero ? nil : below)
+            }, browser: Self.browserState(of: project))
+        // What a role holds, so a device can say when a card has drifted from it. A role has no folder.
+        }, roles: services.roles.map {
+            RemoteRole(id: $0.id, name: $0.name, instructions: $0.instructions, model: $0.model, effort: $0.effort, permissionMode: $0.permissionMode)
+        })
     }
 
-    /// Sends the flow list to every device whenever a project, a flow's name, what a flow needs or a saved role changes.
+    /// A project's browser as its cards and the flow's settings show it on the Mac.
+    private static func browserState(of project: ProjectModel) -> RemoteBrowserState {
+        let host = project.browser
+        // Read so that the profile being made or deleted counts as a change: whether it is there is asked of the disk.
+        _ = host.dataRevision
+        var state = RemoteBrowserState(hasData: host.hasData)
+        switch host.state {
+        case .idle: state.status = .idle
+        case .starting: state.status = .starting
+        case .running: state.status = .running
+        case .missing: state.status = .missing
+        case .downloading(let fraction):
+            state.status = .downloading
+            state.progress = RemoteBrowserState.step(fraction)
+        case .stopped: state.status = .stopped
+        case .failed(let reason):
+            state.status = .failed
+            state.problem = reason
+        }
+        // The program's own name: "Google Chrome", "Chromium", "Google Chrome for Testing".
+        state.browser = BrowserFinder.find(support: AppServices.shared.supportDirectory).map { URL(fileURLWithPath: $0.path).lastPathComponent }
+        return state
+    }
+
+    /// Sends the flow list to every device whenever a project, a flow's name, what a flow needs or a saved role changes,
+    /// and when a project's browser starts, stops, downloads or is cleared.
     private func watchLibrary(_ generation: Int) {
         // Off and on again starts a new watcher. Without this check the old one would carry on beside it.
         guard isOn, generation == watch else { return }

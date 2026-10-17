@@ -23,3 +23,12 @@ public enum RemoteSnapshot {
         return out
     }
 }
+
+extension RemoteFlowSnapshot {
+    /// Whether the Mac offers Retry on a card: the last run stopped there, no run is going, and a message
+    /// reached the card in that run, which is what it is given again.
+    public func canRetry(_ cardID: String) -> Bool {
+        guard run.marks[cardID]?.failed == true, !run.isRunning else { return false }
+        return flow.links(into: cardID).contains { !(messages[$0.id] ?? []).isEmpty }
+    }
+}

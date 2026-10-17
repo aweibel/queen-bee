@@ -178,6 +178,23 @@ enum TestHarness {
         case "browserClear":
             await controller.project.browser.clearData()
             return ["hasData": .bool(controller.project.browser.hasData)]
+        case "browserMakeData":
+            // What a browser that has run once leaves behind, without one being started.
+            controller.project.browser.testMakeData()
+            return ["hasData": .bool(controller.project.browser.hasData)]
+        case "macState":
+            // What a paired device can change that lives outside any flow: the saved roles, the pinned flows,
+            // and the project's browser.
+            let services = AppServices.shared
+            return [
+                "roles": .array(services.roles.map {
+                    ["id": .string($0.id), "name": .string($0.name), "instructions": .string($0.instructions), "model": .string($0.model),
+                     "effort": .string($0.effort), "permissionMode": .string($0.permissionMode)]
+                }),
+                "pinned": .array(services.pinnedFlowIDs.sorted().map(JSONValue.string)),
+                "browser": .string("\(controller.project.browser.state)"),
+                "browserData": .bool(controller.project.browser.hasData),
+            ]
         case "launchArguments":
             // The command line a card's session would be started with.
             guard let cardID, let card = controller.flow.card(cardID), let environment = AppServices.shared.environment,

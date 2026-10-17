@@ -4,14 +4,18 @@ import QueenBeeCore
 /// Does what a paired device asks, if that device may control this Mac.
 ///
 /// Every command becomes one call the Mac's own buttons, keyboard or canvas already make, checked the way
-/// those are. There is nothing here that adds or removes a project, opens a folder, changes Settings or a
-/// saved role, or pairs or removes a device, so no message from a device can do any of those.
+/// those are. There is nothing here that adds or removes a project, opens a folder, answers "trust this
+/// folder", changes Settings, or pairs or removes a device, so no message from a device can do any of those.
 ///
 /// A command that edits a flow is held to more than the Mac's own canvas is, because the Mac did not see the
 /// person make it. It goes through `FlowController.edit(from:)`, which treats it as it treats a change the
 /// orchestrator's tools made: a Script card's command written that way is asked about before it runs, and
-/// a change to what a scheduled flow does turns its schedules off. No edit here can name an agent's folder
-/// or turn a schedule on, and none changes what this Mac's own window is showing or has selected.
+/// a change to what a scheduled flow does turns its schedules off. No edit here can name an agent's folder,
+/// pasting included, and none changes what this Mac's own window is showing or has selected. A schedule is
+/// only turned on by `armSchedule`, as by the Mac's own "Turn on", and never by an edit.
+///
+/// A role saved or updated from a device can't hold a permission mode that skips checks, and changing a role
+/// changes no card that has it. Downloading a browser is only ever the Mac's own offer taken up.
 ///
 /// A device is also held to a pace. It may send a burst of commands, which is what a drag comes to, and then
 /// so many a second; past that they are refused. And each kind of edit is put in a flow's log once, with
@@ -43,7 +47,13 @@ enum RemoteCommands {
         let services = AppServices.shared
         // In the log a name is one line and short, whatever the device calls itself.
         let name = Remote.logName(device.name)
-        if case .newFlow(let projectID, let flowName) = command { return newFlow(named: flowName, inProject: projectID, by: name) }
+        switch command {
+        case .newFlow(let projectID, let flowName): return newFlow(named: flowName, inProject: projectID, by: name)
+        case .deleteRole(let roleID): return deleteRole(roleID, by: name, deviceID: deviceID)
+        case .clearBrowserData(let projectID), .installBrowser(let projectID), .restartBrowser(let projectID):
+            return browser(command, inProject: projectID, by: name, deviceID: deviceID)
+        default: break
+        }
         guard let controller = services.allFlows.first(where: { $0.flow.id == command.flowID }) else { return flowGone }
         /// What a card is called in a line of the log.
         func called(_ cardID: String) -> String { controller.flow.card(cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card" }
@@ -115,6 +125,16 @@ enum RemoteCommands {
             guard hold.needsAllow else { return "That command has already been allowed." }
             controller.noteFromDevice("\(name) chose not to run \(called(hold.cardID))'s command")
             controller.refuseScript(holdID)
+            return nil
+
+        case .startSession(_, let cardID) where cardID == Remote.orchestratorKey:
+            guard services.environment != nil else { return notReady }
+            // The orchestrator panel's Start, Restart and "Restart to apply" all start it afresh.
+            let state = controller.sessions[cardID]?.state ?? .notStarted
+            let did = state == .notStarted ? "started the orchestrator"
+                : controller.orchestratorNeedsRestart ? "restarted the orchestrator, so it has the flow's new details" : "restarted the orchestrator"
+            controller.noteFromDevice("\(name) \(did)")
+            controller.startOrchestrator()
             return nil
 
         case .startSession(_, let cardID):
@@ -248,7 +268,7 @@ enum RemoteCommands {
                 guard let index = flow.cards.firstIndex(where: { $0.id == cardID }) else { throw FlowError.notFound(cardGone) }
                 if let role { try flow.updateCard(cardID, patch: role.patch) }
                 if patch.role != nil { flow.cards[index].role = role?.id }
-                // A schedule set here is only what the card says. Turning it on is done at this Mac and nowhere else.
+                // A schedule set here is only what the card says. Turning it on is a command of its own, `armSchedule`.
                 if let trigger = patch.trigger { flow.cards[index].trigger = trigger }
                 if patch.removesTrigger == true { flow.cards[index].trigger = nil }
                 // By id: the card may be given a name another card had a moment ago.
@@ -322,7 +342,237 @@ enum RemoteCommands {
             if let refusal = controller.undo(from: name, redo: true) { return refusal }
             say(.redo, "chose \(Remote.logName(title))")
             return nil
+
+        // MARK: Runs and sessions, stage 4
+
+        case .runFromStart(_, let cardID):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .start else { return "Only a Start card starts a run." }
+            guard !controller.isRunning else { return alreadyRunning }
+            // The Start card's Run button is greyed out when it has nothing to start with, or nothing to give it to.
+            guard !isBlank(card.command), !controller.flow.links(from: cardID).isEmpty else {
+                return "Nothing to run yet: give \(called(cardID)) something to start with and link it to a card."
+            }
+            let start = await controller.start(startCardID: cardID, note: "Run started from \(name)")
+            return start.began ? nil : start.status
+
+        case .retry(_, let cardID):
+            guard controller.flow.card(cardID) != nil else { return cardGone }
+            guard !controller.isRunning else { return alreadyRunning }
+            // Retry is only offered on a card the last run stopped at: see `FlowController.canRetry`.
+            guard controller.marks[cardID]?.failed == true else { return "The last run didn't stop at \(called(cardID)), so there is nothing to retry." }
+            guard let last = controller.lastMessage(into: cardID) else { return "There is no message to give this card again." }
+            let start = await controller.start(from: cardID, message: last.text, sender: last.from, note: "\(name) retried \(called(cardID))")
+            return start.began ? nil : start.status
+
+        case .clearLog:
+            // The log's Clear is only there when the log has something in it.
+            guard !controller.log.isEmpty else { return "The log is already empty." }
+            controller.clearLog()
+            // The first line of the new log, so the person at the Mac knows where the old one went.
+            controller.noteFromDevice("\(name) cleared the log")
+            return nil
+
+        case .dismissBanner:
+            guard controller.banner != nil else { return "There is no message to close." }
+            controller.banner = nil
+            say(.banner, "closed the message at the top of the flow")
+            return nil
+
+        case .stopAgents:
+            guard controller.isRunning || controller.sessions.values.contains(where: { $0.state != .notStarted }) else {
+                return "None of this flow's agents is running."
+            }
+            controller.noteFromDevice("\(name) stopped this flow's agents")
+            controller.shutDown()
+            return nil
+
+        case .revertSettings(_, let cardID):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .agent else { return "Only an agent card has settings to put back." }
+            let pending = controller.settingsAwaitingRestart(forCard: cardID)
+            guard !pending.isEmpty, var patch = controller.revertPatch(forCard: cardID) else {
+                return "There is nothing to undo: the agent is using these settings."
+            }
+            // An agent's folder is only ever changed at this Mac, putting it back included.
+            patch.cwd = nil
+            guard pending != ["folder"] else { return "Only the folder is different, and that can only be put back on your Mac." }
+            return edit("Change \(card.name)", key: "edit:\(cardID)", .revert, say: "put \(called(cardID))'s settings back to what its agent is using") {
+                try $0.updateCard(cardID, patch: patch)
+            }
+
+        case .armSchedule(_, let cardID, let on):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .start else { return "Only a Start card has a schedule." }
+            guard let trigger = card.trigger else {
+                return "\(called(cardID)) has no schedule to turn \(on ? "on" : "off"). Choose when it runs first."
+            }
+            guard on != controller.isArmed(card) else { return nil }
+            // The Mac's own "Turn on": agreed to for what the card starts with now. A change from a device to what
+            // the flow does turns it off again.
+            if on { controller.setTrigger(trigger, onCard: cardID) } else { controller.turnScheduleOff(onCard: cardID) }
+            say(on ? .scheduleOn : .scheduleOff, "turned the schedule \(on ? "on" : "off") for \(called(cardID))")
+            return nil
+
+        // MARK: Editing, stage 4
+
+        case .paste(_, var fragment, let at):
+            // A role or a flow is kept by its id, and only one this Mac has, in this project for a flow. By name it
+            // could be made to match something else.
+            let roles = Set(services.roles.map(\.id))
+            let flows = Set(controller.project.controllers.filter { $0 !== controller }.map(\.flow.id))
+            for index in fragment.cards.indices {
+                if let role = fragment.cards[index].role, !roles.contains(role) { fragment.cards[index].role = nil }
+                if let ref = fragment.cards[index].flowRef, !flows.contains(ref) { fragment.cards[index].flowRef = nil }
+            }
+            let offset = FlowController.pasteOffset(of: fragment, at: at.map { CGPoint(x: $0.x, y: $0.y) })
+            // New ids, names nothing else has, and no session or schedule: see `Flow.insert`. The folder was left
+            // behind when the command was cleaned.
+            return edit("Paste", .paste, say: "pasted \(counted(fragment.cards.count, "card"))") {
+                $0.insert(fragment, dx: offset.dx, dy: offset.dy)
+            }
+
+        case .addRoleCard(_, let roleID, let x, let y):
+            guard let role = services.roles.first(where: { $0.id == roleID }) else { return roleGone }
+            let spot = FlowController.dropSpot(for: .agent, at: CGPoint(x: x, y: y))
+            return edit("Add \(role.name)", .addCard, say: "added an agent with the role \(Remote.logName(role.name, or: "with no name"))") {
+                try FlowController.addAgent(from: role, to: &$0, x: spot.x, y: spot.y)
+            }
+
+        case .newSubflow(_, let cardID, let wanted):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .flow else { return "Only a Flow card runs a sub-flow." }
+            if let inner = controller.innerFlow(of: card) { return "\(called(cardID)) already runs \(Remote.logName(inner.flow.name, or: "a flow"))." }
+            if let problem = controller.newSubflowProblem { return problem }
+            guard controller.project.controllers.count < flowLimit else {
+                return "This project already has \(flowLimit) flows. Make more on your Mac."
+            }
+            guard let made = controller.project.newSubflow(named: wanted.isEmpty ? card.name : wanted) else { return "The sub-flow couldn't be saved." }
+            var patch = CardPatch()
+            patch.flowRef = made.flow.id
+            if let refusal = controller.edit(from: name, "Change \(card.name)", key: "edit:\(cardID)", { try $0.updateCard(cardID, patch: patch) }) {
+                // Nothing runs the new flow, so it would only be clutter.
+                controller.project.delete(made)
+                return refusal
+            }
+            made.noteFromDevice("\(name) made this flow, for \(called(cardID)) in \(Remote.logName(controller.flow.name, or: "a flow"))")
+            say(.subflow, "made the sub-flow \(Remote.logName(made.flow.name, or: "with no name")) for \(called(cardID))")
+            return nil
+
+        case .pin(_, let on):
+            let id = controller.flow.id
+            guard services.pinnedFlowIDs.contains(id) != on else { return nil }
+            services.togglePin(id)
+            say(.pin, on ? "pinned this flow" : "unpinned this flow")
+            return nil
+
+        // MARK: Roles
+
+        case .saveRole(_, let cardID, let wanted):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .agent else { return "Only an agent card can be saved as a role." }
+            // The Mac offers Update in place of "Save as a New Role" on a card that has one.
+            if let current = controller.role(of: card) {
+                return "\(called(cardID)) already has the role \(Remote.logName(current.name)). Update that role instead."
+            }
+            if let problem = roleProblem(card) { return problem }
+            let roleName = wanted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? card.name : wanted
+            // The Mac's own Save replaces a role of the same name. One from a device never does: it could be one
+            // the person relies on.
+            if services.roles.contains(where: { $0.name.caseInsensitiveCompare(roleName) == .orderedSame }) {
+                return "Your Mac already has a role called \(Remote.logName(roleName)). Give this one another name."
+            }
+            guard services.roles.count < Remote.roleLimit else { return "Your Mac already has \(Remote.roleLimit) roles. Save more on your Mac." }
+            var role = AgentRole(from: card)
+            role.name = roleName
+            let saved = services.save(role)
+            if let refusal = controller.edit(from: name, "Save Role", {
+                guard let index = $0.cards.firstIndex(where: { $0.id == cardID }) else { throw FlowError.notFound(cardGone) }
+                $0.cards[index].role = saved.id
+            }) {
+                services.deleteRole(saved.id)
+                return refusal
+            }
+            say(.saveRole, "saved \(called(cardID)) as the role \(Remote.logName(saved.name))")
+            return nil
+
+        case .updateRole(let roleID, _, let cardID):
+            guard let role = services.roles.first(where: { $0.id == roleID }) else { return roleGone }
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            // The Mac offers "Update role" on a card that has the role, and nowhere else.
+            guard card.kind == .agent, card.role == roleID else {
+                return "\(called(cardID)) doesn't have the role \(Remote.logName(role.name)), so it can't update it."
+            }
+            if let problem = roleProblem(card) { return problem }
+            var updated = AgentRole(from: card)
+            updated.id = role.id
+            updated.name = role.name
+            guard updated != role else { return nil }
+            // Only the role changes. A card that has it keeps what it has until somebody chooses Reset on it.
+            services.save(updated)
+            say(.updateRole, "updated the role \(Remote.logName(role.name)) from \(called(cardID))")
+            return nil
+
+        case .newFlow, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser:
+            // Done above: none of them is for a flow.
+            return nil
         }
+    }
+
+    /// Why a card's settings can't be saved into a role from a device. A mode that skips permission checks
+    /// can't be set on a card from anywhere, but a flow's file can hold one, and a role would carry it into
+    /// every card that is given it.
+    private static func roleProblem(_ card: Card) -> String? {
+        guard let mode = card.permissionMode, !mode.isEmpty, !Card.permissionModes.contains(mode) else { return nil }
+        return "A role can't skip permission checks. Give \(Remote.logName(card.name, or: "the card")) one of these permissions first: \(Card.permissionModes.joined(separator: ", "))."
+    }
+
+    /// Deletes a saved role. Cards made from it keep what it gave them.
+    private static func deleteRole(_ roleID: String, by name: String, deviceID: String) -> String? {
+        let services = AppServices.shared
+        guard let role = services.roles.first(where: { $0.id == roleID }) else { return roleGone }
+        services.deleteRole(roleID)
+        // A role belongs to no flow, so it is said where the person at the Mac will see it.
+        if let shown = services.current ?? services.allFlows.first {
+            note(.deleteRole, "deleted the role \(Remote.logName(role.name, or: "with no name"))", in: shown, by: deviceID, called: name)
+        }
+        return nil
+    }
+
+    /// Clear browser data, and the Download and Restart the Mac offers, for a project in the sidebar.
+    private static func browser(_ command: RemoteCommand, inProject projectID: String, by name: String, deviceID: String) -> String? {
+        let services = AppServices.shared
+        guard let project = services.projects.first(where: { $0.root.path == projectID }) else {
+            return "That project is no longer in your Mac's sidebar."
+        }
+        let host = project.browser
+        let said: (kind: Kind, line: String)
+        switch command {
+        case .clearBrowserData:
+            // The Mac's button is greyed out when there is nothing to clear.
+            guard host.hasData else { return "There is no browser data to clear in \(project.name)." }
+            Task { await host.clearData() }
+            said = (.clearBrowser, "cleared the browser data of \(project.name)")
+        case .installBrowser:
+            // The card's Download is only there when the Mac has no browser it can use, and it fetches what the
+            // Mac decides from where the Mac decides. A device takes up that offer and nothing else.
+            if case .downloading = host.state { return "The browser is already downloading." }
+            guard host.state == .missing else { return "Your Mac isn't offering to download a browser: it has one it can use, or none has been needed yet." }
+            host.download()
+            said = (.installBrowser, "started downloading a browser for \(project.name)")
+        case .restartBrowser:
+            switch host.state {
+            case .stopped, .failed: break
+            default: return "The browser isn't stopped, so there is nothing to restart."
+            }
+            host.restart()
+            said = (.restartBrowser, "restarted the browser of \(project.name)")
+        default:
+            return nil
+        }
+        let shown = services.current.flatMap { $0.project === project ? $0 : nil } ?? project.controllers.first
+        if let shown { note(said.kind, said.line, in: shown, by: deviceID, called: name) }
+        return nil
     }
 
     /// A new flow, in a project that is already in the sidebar and nowhere else. The Mac's own window goes
@@ -402,6 +652,8 @@ enum RemoteCommands {
     private enum Kind: String {
         case addCard, move, resize, delete, link, linkLimit, duplicate, tidy, group, ungroup, renameGroup, foldGroup
         case settings, flowSettings, renameFlow, deleteFlow, undo, redo
+        case banner, revert, scheduleOn, scheduleOff, paste, subflow, pin, saveRole, updateRole, deleteRole
+        case clearBrowser, installBrowser, restartBrowser
 
         /// What the device did, said of any number of them.
         var phrase: String {
@@ -424,6 +676,19 @@ enum RemoteCommands {
             case .deleteFlow: "deleted a flow"
             case .undo: "chose Undo"
             case .redo: "chose Redo"
+            case .banner: "closed the message at the top of the flow"
+            case .revert: "put an agent's settings back"
+            case .scheduleOn: "turned a schedule on"
+            case .scheduleOff: "turned a schedule off"
+            case .paste: "pasted cards"
+            case .subflow: "made a sub-flow"
+            case .pin: "pinned or unpinned this flow"
+            case .saveRole: "saved a role"
+            case .updateRole: "updated a role"
+            case .deleteRole: "deleted a role"
+            case .clearBrowser: "cleared the browser data"
+            case .installBrowser: "started downloading a browser"
+            case .restartBrowser: "restarted the browser"
             }
         }
     }
@@ -468,6 +733,7 @@ enum RemoteCommands {
             (patch.trigger != nil || patch.removesTrigger == true, "schedule"), (patch.check != nil || patch.value != nil, "check"),
             (patch.maxTries != nil, "number of tries"), (patch.branches != nil, "branches"), (patch.template != nil, "template"),
             (patch.saveTo != nil, "file to save to"), (patch.text != nil, "text"), (patch.flowRef != nil, "flow"),
+            (patch.browser != nil, "browser"),
         ]
         return named.filter(\.0).map(\.1)
     }
@@ -482,6 +748,7 @@ enum RemoteCommands {
     private static let linkGone = "That link is no longer in the flow."
     private static let groupGone = "That group is no longer in the flow."
     private static let holdGone = "That is no longer waiting for an answer."
+    private static let roleGone = "That role is no longer on your Mac."
     private static let notRunning = "That session isn't running."
     private static var notReady: String { AppServices.shared.problem ?? "Claude Code isn't ready yet." }
 

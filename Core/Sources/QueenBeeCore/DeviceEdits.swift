@@ -20,6 +20,16 @@ extension Remote {
     public static let flowByteLimit = 2_000_000
     /// As much of a name as is copied into a line of the Mac's log, in characters.
     public static let logNameLimit = 60
+    /// The most roles a device may leave saved on the Mac. More can be saved on the Mac.
+    public static let roleLimit = 200
+    /// How many of a flow's card names the flow list carries, and how much of each, for finding a card.
+    public static let cardNamesLimit = 200
+    public static let cardNameLength = 60
+
+    /// The names of a flow's cards as the flow list carries them.
+    public static func listedNames(of flow: Flow) -> [String] {
+        flow.cards.prefix(cardNamesLimit).map { String(plainLine($0.name).prefix(cardNameLength)) }
+    }
 
     /// A name for a line of the Mac's log: on one line, safe to show, and short. A long one is cut off with "…".
     public static func logName(_ name: String, or fallback: String = "a device") -> String {
@@ -56,11 +66,83 @@ extension Flow {
                 card.x = 0; card.y = 0; card.width = 0; card.height = 0
                 // The session behind a card is not part of what the person agreed the flow does.
                 card.sessionID = nil
+                // Nor is the role a card is tied to: only what the card holds is run, and giving it a role's
+                // settings changes those, which counts.
+                card.role = nil
                 return card
             }.sorted { $0.id < $1.id }
         }
         func links(_ flow: Flow) -> [Link] { flow.links.sorted { $0.id < $1.id } }
         return parts(self) != parts(old) || links(self) != links(old) || subflowLimit != old.subflowLimit
+    }
+}
+
+extension FlowFragment {
+    /// Why a fragment a device sent can't be pasted, whatever flow it is for. Nil when it can. It is held to
+    /// what any other edit from a device is: as many cards and links as a flow may have, names and text
+    /// within the caps, and every card somewhere on the canvas and a size a card could be.
+    public var deviceProblem: String? {
+        if cards.isEmpty { return "There is nothing to paste." }
+        if cards.count > Remote.cardLimit || links.count > Remote.linkLimit || (groups ?? []).count > Remote.cardLimit {
+            return RemoteCommand.tooMany
+        }
+        for card in cards {
+            guard RemotePoint(x: card.x, y: card.y).isOnCanvas else { return RemoteCommand.offCanvas }
+            guard RemoteFrame(x: card.x, y: card.y, width: card.width, height: card.height).isCardSized else { return "A card can't be that size." }
+            for short in [card.id, card.name, card.model, card.effort, card.permissionMode, card.role, card.flowRef] + (card.branches ?? []).map(Optional.some) {
+                if let short, !Remote.fitsName(short) { return RemoteCommand.nameTooLong }
+            }
+            for long in [card.instructions, card.command, card.value, card.template, card.text] {
+                if let long, !Remote.fitsText(long) { return RemoteCommand.textTooLong }
+            }
+            if let saveTo = card.saveTo, !Remote.fitsPath(saveTo) {
+                return "That file path is too long. The most a device can send is \(Remote.pathLimit) characters."
+            }
+            if (card.branches ?? []).count > Remote.branchLimit { return "That is too many branches. The most a device can give a card is \(Remote.branchLimit)." }
+        }
+        for link in links where ![link.id, link.from, link.port, link.to].allSatisfy(Remote.fitsName) { return RemoteCommand.nameTooLong }
+        for group in groups ?? [] {
+            if !Remote.fitsName(group.name) || !group.cardIDs.allSatisfy(Remote.fitsName) { return RemoteCommand.nameTooLong }
+            if group.cardIDs.count > Remote.cardLimit { return RemoteCommand.tooMany }
+        }
+        return nil
+    }
+
+    /// The fragment with its text made safe to show and to enter into a terminal, and without what a device
+    /// may not set: no card brings a folder, a session or a schedule with it.
+    public var cleanedFromDevice: FlowFragment {
+        var fragment = self
+        for index in fragment.cards.indices {
+            var card = fragment.cards[index]
+            card.name = Remote.plainLine(card.name)
+            card.instructions = card.instructions.map(Remote.plainText)
+            card.model = card.model.map(Remote.plainLine)
+            card.effort = card.effort.map(Remote.plainLine)
+            card.permissionMode = card.permissionMode.map(Remote.plainLine)
+            card.role = card.role.map(Remote.plainLine)
+            card.command = card.command.map(Remote.plainText)
+            card.value = card.value.map(Remote.plainText)
+            card.branches = card.branches.map { $0.map(Remote.plainLine) }
+            card.template = card.template.map(Remote.plainText)
+            card.saveTo = card.saveTo.map(Remote.plainLine)
+            card.text = card.text.map(Remote.plainText)
+            card.flowRef = card.flowRef.map(Remote.plainLine)
+            card.cwd = nil
+            card.sessionID = nil
+            card.trigger = nil
+            fragment.cards[index] = card
+        }
+        fragment.links = links.map { link in
+            var link = link
+            link.port = Remote.plainLine(link.port)
+            return link
+        }
+        fragment.groups = groups?.map { group in
+            var group = group
+            group.name = Remote.plainLine(group.name)
+            return group
+        }
+        return fragment
     }
 }
 

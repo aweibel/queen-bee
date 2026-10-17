@@ -53,7 +53,7 @@ import Testing
     }
 
     @Test func bothSidesAreOnTheVersionThatHasEditing() {
-        #expect(Remote.version == 3)
+        #expect(Remote.version >= 3)
     }
 }
 

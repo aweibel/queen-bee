@@ -211,7 +211,15 @@ final class FlowController: ToolHost {
         card.trigger.map { ScheduleArming.isArmed($0, command: card.command ?? "", scope: allowScope, cardID: card.id) } ?? false
     }
 
-    /// Sets what starts runs from a Start card, and turns it on: the person chose it.
+    /// Turns a Start card's schedule off and leaves it set, so that it does nothing until it is turned on again.
+    func turnScheduleOff(onCard id: String) {
+        guard let card = flow.card(id), card.kind == .start, isArmed(card) else { return }
+        ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: id)
+        reschedule()
+    }
+
+    /// Sets what starts runs from a Start card, and turns it on: the person chose it, at this Mac or, with
+    /// the schedule it already has, from a paired device the person lets control this Mac.
     func setTrigger(_ trigger: Trigger?, onCard id: String) {
         guard let card = flow.card(id), card.kind == .start else { return }
         ScheduleArming.arm(trigger, command: card.command ?? "", scope: allowScope, cardID: id)
@@ -855,14 +863,26 @@ final class FlowController: ToolHost {
     func paste(at point: CGPoint? = nil) {
         guard let data = NSPasteboard.general.data(forType: Self.fragmentType),
               let fragment = try? JSONDecoder().decode(FlowFragment.self, from: data), !fragment.cards.isEmpty else { return }
-        var dx = 48.0, dy = 48.0
-        if let point, let left = fragment.cards.map(\.x).min(), let top = fragment.cards.map(\.y).min() {
-            dx = point.x - left
-            dy = point.y - top
-        }
+        let offset = Self.pasteOffset(of: fragment, at: point)
         var made: [Card] = []
-        perform("Paste") { made = $0.insert(fragment, dx: dx, dy: dy) }
+        perform("Paste") { made = $0.insert(fragment, dx: offset.dx, dy: offset.dy) }
         if !made.isEmpty { selection = .of(Set(made.map(\.id))) }
+    }
+
+    /// How far pasted cards are moved from where they were copied: so the top-left one lands at the point,
+    /// or without one a step down and right.
+    static func pasteOffset(of fragment: FlowFragment, at point: CGPoint?) -> (dx: Double, dy: Double) {
+        guard let point, let left = fragment.cards.map(\.x).min(), let top = fragment.cards.map(\.y).min() else { return (48, 48) }
+        return (point.x - left, point.y - top)
+    }
+
+    /// Adds an agent made from a saved role: the role's settings, its name unless another card has it, and
+    /// the card tied to the role.
+    @discardableResult
+    static func addAgent(from role: AgentRole, to flow: inout Flow, x: Double, y: Double) throws -> Card {
+        let made = try flow.addCard(kind: .agent, name: flow.uniqueName(role.name), x: x, y: y, patch: role.patch)
+        if let index = flow.cards.firstIndex(where: { $0.id == made.id }) { flow.cards[index].role = role.id }
+        return flow.cards.first { $0.id == made.id } ?? made
     }
 
     /// Adds a card. With a point, as when one is dropped from the palette, the card is centred
@@ -885,11 +905,12 @@ final class FlowController: ToolHost {
                 tries += 1
             }
         }
-        var patch = Self.newCardPatch(for: kind)
-        if let role { patch = role.patch }
         perform("Add \(role?.name ?? kind.label)") {
-            made = try $0.addCard(kind: kind, name: role.map { [flow] in flow.uniqueName($0.name) }, x: spot.minX, y: spot.minY, patch: patch)
-            if let role, let made, let index = $0.cards.firstIndex(where: { $0.id == made.id }) { $0.cards[index].role = role.id }
+            if let role {
+                made = try Self.addAgent(from: role, to: &$0, x: spot.minX, y: spot.minY)
+            } else {
+                made = try $0.addCard(kind: kind, x: spot.minX, y: spot.minY, patch: Self.newCardPatch(for: kind))
+            }
         }
         if let made { selection = .card(made.id) }
     }
@@ -991,7 +1012,14 @@ final class FlowController: ToolHost {
     /// Puts a card's settings back to what its running session was started with, undoing
     /// whatever has been changed since.
     func revertSettings(forCard id: String) {
-        guard let session = sessions[id], session.isLive, let launched = session.launched else { return }
+        guard let patch = revertPatch(forCard: id) else { return }
+        update(id, patch)
+    }
+
+    /// The change that puts a card's settings back to what its running session was started with, or nil when
+    /// its session isn't running. A paired device's Undo makes it without the folder.
+    func revertPatch(forCard id: String) -> CardPatch? {
+        guard let session = sessions[id], session.isLive, let launched = session.launched else { return nil }
         var patch = CardPatch()
         patch.name = launched.name
         patch.instructions = launched.instructions
@@ -1001,7 +1029,7 @@ final class FlowController: ToolHost {
         patch.permissionMode = launched.permissionMode
         patch.cwd = launched.folder
         patch.browser = launched.browser
-        update(id, patch)
+        return patch
     }
 
     private func startMissingSessions() {
@@ -1322,6 +1350,11 @@ final class FlowController: ToolHost {
         }
         absorb(output, sender: nil)
         return RunStart(began: output.runID != nil, status: output.log.last ?? "Nothing to run")
+    }
+
+    /// Whether Retry is offered on a card: the last run stopped there, and a message reached it.
+    func canRetry(_ cardID: String) -> Bool {
+        marks[cardID]?.failed == true && !isRunning && lastMessage(into: cardID) != nil
     }
 
     /// Tries the card a run stopped at again, with the message it was given.

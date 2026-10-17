@@ -203,11 +203,22 @@ final class RemoteSession {
     private static func snapshot(of controller: FlowController) -> RemoteFlowSnapshot {
         // Read so that a session being added, replaced or dropped counts as a change.
         _ = controller.sessionsRevision
+        // What the Mac's "Not in use yet" line lists for each agent card, and its "Restart to apply" for the orchestrator.
+        var awaiting: [String: [String]] = [:]
+        for card in controller.flow.cards where card.kind == .agent {
+            let pending = controller.settingsAwaitingRestart(forCard: card.id)
+            if !pending.isEmpty { awaiting[card.id] = pending }
+        }
+        var runUsage: [String: Usage] = [:]
+        for key in controller.usage.keys {
+            if let used = controller.runUsage(forCard: key), !used.isZero { runUsage[key] = used }
+        }
         let run = RemoteRunState(
             isRunning: controller.isRunning, marks: controller.marks, linkPasses: controller.linkPasses,
             liveLinkIDs: controller.liveLinkIDs.sorted(), handOffs: controller.handOffs, holds: controller.holds,
             results: controller.results, usage: controller.usage, sessions: controller.sessions.mapValues(\.state),
-            awaitingAnswer: controller.awaitingAnswer.sorted(), banner: controller.banner)
+            awaitingAnswer: controller.awaitingAnswer.sorted(), banner: controller.banner, awaitingRestart: awaiting,
+            orchestratorNeedsRestart: controller.orchestratorNeedsRestart, runUsage: runUsage)
         // Read so that a schedule turned on or off at the Mac counts as a change: which are on is not in the flow.
         _ = controller.schedulesRevision
         let armed = controller.flow.cards.filter { $0.kind == .start && controller.isArmed($0) }.map(\.id)

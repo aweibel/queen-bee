@@ -3,7 +3,7 @@ import Foundation
 /// What the Mac app and a paired device say to each other. Each message is one frame of JSON.
 public enum Remote {
     /// Both sides must be on the same version, or the device is told to update.
-    public static let version = 3
+    public static let version = 4
     /// The Bonjour type of a paired device's listener, and of the listener that exists only while pairing.
     public static let service = "_queenbee._tcp"
     public static let pairingService = "_queenbee-pair._tcp"
@@ -119,9 +119,58 @@ public struct RemoteFlowSummary: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var isSubflow: Bool
     public var activity: FlowActivity
+    /// The flow whose Flow card runs this one, when exactly one flow does: where the sidebar puts it.
+    public var parentID: String?
+    /// Pinned to the top of the Mac's sidebar.
+    public var pinned: Bool
+    /// What the flow's cards are called, for finding a card from the list of flows. The first
+    /// `Remote.cardNamesLimit` cards, each cut to `Remote.cardNameLength` characters.
+    public var cardNames: [String]
+    /// What the flow's own sessions have used, and that with every sub-flow below it, as the Mac's cost
+    /// breakdown counts them. Nil when nothing has been used.
+    public var usage: Usage?
+    public var usageWithSubflows: Usage?
 
-    public init(id: String, name: String, isSubflow: Bool, activity: FlowActivity) {
-        self.id = id; self.name = name; self.isSubflow = isSubflow; self.activity = activity
+    public init(id: String, name: String, isSubflow: Bool, activity: FlowActivity, parentID: String? = nil, pinned: Bool = false,
+                cardNames: [String] = [], usage: Usage? = nil, usageWithSubflows: Usage? = nil) {
+        self.id = id; self.name = name; self.isSubflow = isSubflow; self.activity = activity; self.parentID = parentID
+        self.pinned = pinned; self.cardNames = cardNames; self.usage = usage; self.usageWithSubflows = usageWithSubflows
+    }
+}
+
+/// The browser that a project's agent cards share, as the Mac's card and flow settings show it.
+public struct RemoteBrowserState: Codable, Equatable, Sendable {
+    public enum Status: String, Codable, Sendable {
+        /// Nothing has asked for it yet, or it was put away.
+        case idle
+        case starting, running
+        /// There is no Chromium-based browser on the Mac. The Mac offers to download one.
+        case missing
+        case downloading
+        /// It ran and has ended. The Mac offers Restart.
+        case stopped
+        /// The Mac offers Try again, with `problem` saying why.
+        case failed
+    }
+
+    public var status: Status
+    /// How far a download has got, from 0 to 1, in twentieths so that the list is not sent for every megabyte.
+    public var progress: Double?
+    /// Why it failed, in the Mac's words.
+    public var problem: String?
+    /// The browser on the Mac that it would use, such as "Google Chrome". Nil when there is none.
+    public var browser: String?
+    /// Whether it has kept sign-ins or pages, which "Clear browser data" would forget.
+    public var hasData: Bool
+
+    public init(status: Status = .idle, progress: Double? = nil, problem: String? = nil, browser: String? = nil, hasData: Bool = false) {
+        self.status = status; self.progress = progress; self.problem = problem; self.browser = browser; self.hasData = hasData
+    }
+
+    /// A download's progress as it is sent: between 0 and 1, in steps of a twentieth.
+    public static func step(_ fraction: Double) -> Double {
+        guard fraction.isFinite else { return 0 }
+        return (min(max(fraction, 0), 1) * 20).rounded(.down) / 20
     }
 }
 
@@ -129,16 +178,34 @@ public struct RemoteProject: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
     public var flows: [RemoteFlowSummary]
+    public var browser: RemoteBrowserState
 
-    public init(id: String, name: String, flows: [RemoteFlowSummary]) { self.id = id; self.name = name; self.flows = flows }
+    public init(id: String, name: String, flows: [RemoteFlowSummary], browser: RemoteBrowserState = RemoteBrowserState()) {
+        self.id = id; self.name = name; self.flows = flows; self.browser = browser
+    }
 }
 
-/// A saved role an agent card can be given: its id and what it is called. What the role holds stays on the Mac.
+/// A saved role an agent card can be given, and what it holds, so a device can say when a card has drifted
+/// from it. A role holds no folder.
 public struct RemoteRole: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
+    public var instructions: String
+    /// "" for the person's default, as with effort and permissions.
+    public var model: String
+    public var effort: String
+    public var permissionMode: String
 
-    public init(id: String, name: String) { self.id = id; self.name = name }
+    public init(id: String, name: String, instructions: String = "", model: String = "", effort: String = "", permissionMode: String = "") {
+        self.id = id; self.name = name; self.instructions = instructions; self.model = model; self.effort = effort
+        self.permissionMode = permissionMode
+    }
+
+    /// Whether a card still has exactly what the role holds. When it hasn't, the Mac says "Changed since the role was saved."
+    public func matches(_ card: Card) -> Bool {
+        instructions == (card.instructions ?? "") && model == (card.model ?? "")
+            && effort == (card.effort ?? "") && permissionMode == (card.permissionMode ?? "")
+    }
 }
 
 /// Every project in the Mac's sidebar and the flows in each, and the roles saved on the Mac.
@@ -163,13 +230,23 @@ public struct RemoteRunState: Codable, Equatable, Sendable {
     public var sessions: [String: SessionState]
     public var awaitingAnswer: [String]
     public var banner: String?
+    /// The settings changed on each agent card since its session started, which the session doesn't have yet,
+    /// named as the Mac's "Not in use yet" line names them: "name", "instructions", "model", "effort",
+    /// "permissions", "folder", "browser". By card id, with no entry for a card that is up to date.
+    public var awaitingRestart: [String: [String]]
+    /// The orchestrator is running with details that are no longer the flow's, so the Mac offers "Restart to apply".
+    public var orchestratorNeedsRestart: Bool
+    /// What each session has used in the run on show, by card id: while a run goes, what it has used so far.
+    public var runUsage: [String: Usage]
 
     public init(isRunning: Bool, marks: [String: RunMark], linkPasses: [String: Int], liveLinkIDs: [String], handOffs: Int,
                 holds: [PendingHold], results: [String: String], usage: [String: Usage], sessions: [String: SessionState],
-                awaitingAnswer: [String], banner: String?) {
+                awaitingAnswer: [String], banner: String?, awaitingRestart: [String: [String]] = [:],
+                orchestratorNeedsRestart: Bool = false, runUsage: [String: Usage] = [:]) {
         self.isRunning = isRunning; self.marks = marks; self.linkPasses = linkPasses; self.liveLinkIDs = liveLinkIDs
         self.handOffs = handOffs; self.holds = holds; self.results = results; self.usage = usage; self.sessions = sessions
-        self.awaitingAnswer = awaitingAnswer; self.banner = banner
+        self.awaitingAnswer = awaitingAnswer; self.banner = banner; self.awaitingRestart = awaitingRestart
+        self.orchestratorNeedsRestart = orchestratorNeedsRestart; self.runUsage = runUsage
     }
 }
 
@@ -180,7 +257,7 @@ public struct RemoteEditState: Codable, Equatable, Sendable {
     public var undo: String?
     /// The same for Redo.
     public var redo: String?
-    /// The Start cards whose schedule is on, by card id. A schedule is only ever turned on at the Mac.
+    /// The Start cards whose schedule is on, by card id. A device turns one on or off with `armSchedule`.
     public var armed: [String]
     /// When the clock next starts a run from each of those, by card id. A schedule that waits on a file has none.
     public var nextFires: [String: Date]
@@ -282,9 +359,10 @@ public struct RemoteFrame: Codable, Equatable, Sendable {
 /// Changes to a card's settings from a device. A nil field is left as it is, and a setting that belongs to
 /// another kind of card is left alone, as on the Mac.
 ///
-/// It has every setting the Mac's own panel has but two. There is no folder: an agent's folder is picked
-/// with the Mac's folder panel, and a path typed on a device could point an agent anywhere. And there is no
-/// way to turn a schedule on: one set here arrives switched off, and stays off until it is turned on at the Mac.
+/// It has every setting the Mac's own panel has but the folder: an agent's folder is picked with the Mac's
+/// folder panel, and a path typed on a device could point an agent anywhere. A schedule set here arrives
+/// switched off, as one that came in a flow's file does. Turning it on is a command of its own, `armSchedule`,
+/// so that it is always a deliberate act and never the side effect of an edit.
 public struct RemoteCardPatch: Codable, Equatable, Sendable {
     public var name: String?
     // Agent
@@ -295,10 +373,12 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
     public var permissionMode: String?
     /// The id of a saved role, which gives the card what the role holds, or "" to cut the card loose from its role.
     public var role: String?
+    /// The Browser switch: a web browser beside the agent's terminal.
+    public var browser: Bool?
     // Start, Script
     public var command: String?
     // Start
-    /// What starts runs besides the Run button. It arrives switched off.
+    /// What starts runs besides the Run button. It arrives switched off: see `RemoteCommand.armSchedule`.
     public var trigger: Trigger?
     /// True takes the schedule away, so only the Run button starts a run.
     public var removesTrigger: Bool?
@@ -331,6 +411,7 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
         patch.model = model
         patch.effort = effort
         patch.permissionMode = permissionMode
+        patch.browser = browser
         patch.command = command
         patch.check = check
         patch.value = value
@@ -433,7 +514,8 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     /// Let a script's command run. The Mac remembers it for that card, as it does when allowed there.
     case allowScript(flowID: String, holdID: String)
     case refuseScript(flowID: String, holdID: String)
-    /// An agent card's "Start agent" or "Restart agent".
+    /// An agent card's "Start agent", "Restart agent" or "Restart to apply". With `Remote.orchestratorKey` for
+    /// the card, the orchestrator panel's Start, Restart or "Restart to apply".
     case startSession(flowID: String, cardID: String)
     /// A message for a session, entered the way the Mac enters one: held until the session is idle, then
     /// pasted whole and followed by Enter. `key` is a card's id, or `Remote.orchestratorKey`.
@@ -488,7 +570,66 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     case undo(flowID: String)
     case redo(flowID: String)
 
-    /// The flow a command is for. A new flow has none yet: it names its project.
+    // MARK: Runs and sessions, stage 4
+
+    /// A Start card's own Run, or "Run from This Start" in its menu: the flow with several Start cards runs from this one.
+    case runFromStart(flowID: String, startCardID: String)
+    /// The settings panel's Retry, on a card the last run stopped at: it is given the message it was given, again.
+    /// See `RemoteFlowSnapshot.canRetry(_:)` for when the Mac offers it.
+    case retry(flowID: String, cardID: String)
+    /// The log's Clear: the log and the list of earlier runs are emptied.
+    case clearLog(flowID: String)
+    /// Closes the message at the top of the flow, the run state's `banner`.
+    case dismissBanner(flowID: String)
+    /// The sidebar's "Stop Its Agents": every session of the flow ends, the orchestrator's included, and so does a run.
+    case stopAgents(flowID: String)
+    /// The Undo beside "Restart to apply": puts an agent card's settings back to what its session is using.
+    /// The folder is left as it is: it is only ever changed on the Mac.
+    case revertSettings(flowID: String, cardID: String)
+    /// A Start card's "Turn on", or turning its schedule off and leaving it set. Turned on, the schedule runs the
+    /// flow with nobody watching, on what the flow does now. A later change from a device to what the flow
+    /// does turns it off again.
+    case armSchedule(flowID: String, cardID: String, on: Bool)
+
+    // MARK: Editing, stage 4
+
+    /// Paste: copies of the fragment's cards, with the links and groups between them. With a point, the top-left
+    /// card lands there; without, the copies land a step down and right of where the cards were. A pasted
+    /// Script card's command has to be allowed on the Mac, a pasted agent does not start by itself, and no
+    /// folder comes with one.
+    case paste(flowID: String, fragment: FlowFragment, at: RemotePoint?)
+    /// A new agent made from a saved role, with the middle of its title bar at that point, as one dragged from the
+    /// Mac's list of roles.
+    case addRoleCard(flowID: String, roleID: String, x: Double, y: Double)
+    /// A Flow card's "New sub-flow": a new sub-flow with an Input and an Output, which the card then runs. With an
+    /// empty name it is named after the card. The Mac's own window does not go into it.
+    case newSubflow(flowID: String, cardID: String, name: String)
+    /// Pins the flow to the top of the Mac's sidebar, or unpins it.
+    case pin(flowID: String, on: Bool)
+
+    // MARK: Roles
+
+    /// "Save as a New Role": an agent card's instructions, model, effort and permissions saved under a name, and
+    /// the card tied to it. With an empty name the role is named after the card.
+    case saveRole(flowID: String, cardID: String, name: String)
+    /// "Update role": the role takes the settings of a card tied to it. No card changes: one that uses the role
+    /// takes the new settings when somebody chooses Reset on it.
+    case updateRole(roleID: String, flowID: String, cardID: String)
+    /// Deletes a saved role. Cards made from it keep their settings.
+    case deleteRole(roleID: String)
+
+    // MARK: A project's browser
+
+    /// "Clear browser data": the project's browser forgets every sign-in, cookie and page it kept.
+    case clearBrowserData(projectID: String)
+    /// Takes up the Mac's own offer to download a browser, which it makes when there is none on the Mac.
+    /// What is downloaded, and from where, is the Mac's to decide.
+    case installBrowser(projectID: String)
+    /// The Restart, or "Try again", that the Mac offers when the browser has stopped or failed.
+    case restartBrowser(projectID: String)
+
+    /// The flow a command is for. A new flow has none yet: it names its project. Nor does a command for a saved
+    /// role, or for a project's browser.
     public var flowID: String? {
         switch self {
         case .openOnMac(let id), .run(let id, _), .runFrom(let id, _, _), .stop(let id), .approve(let id, _, _),
@@ -497,19 +638,27 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
              .resizeCard(let id, _, _, _), .deleteItems(let id, _, _), .addLink(let id, _, _, _), .setLinkLimit(let id, _, _),
              .duplicate(let id, _), .tidy(let id), .group(let id, _, _), .ungroup(let id, _), .renameGroup(let id, _, _),
              .foldGroup(let id, _, _), .patchCard(let id, _, _), .setFlowOption(let id, _), .renameFlow(let id, _),
-             .deleteFlow(let id), .undo(let id), .redo(let id): id
-        case .newFlow: nil
+             .deleteFlow(let id), .undo(let id), .redo(let id), .runFromStart(let id, _), .retry(let id, _), .clearLog(let id),
+             .dismissBanner(let id), .stopAgents(let id), .revertSettings(let id, _), .armSchedule(let id, _, _), .paste(let id, _, _),
+             .addRoleCard(let id, _, _, _), .newSubflow(let id, _, _), .pin(let id, _), .saveRole(let id, _, _), .updateRole(_, let id, _): id
+        case .newFlow, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser: nil
         }
     }
 
     /// Whether this changes a flow, or makes or deletes one. The Mac did not see the person make such a
     /// change, so it treats it as it treats one its orchestrator made: a Script card's command written this
     /// way is asked about before it runs, and a change to what a scheduled flow does turns its schedules off.
+    ///
+    /// Turning a schedule on or off is not an edit: it changes nothing in the flow, and it is the one thing that
+    /// turns a schedule on. Nor is updating or deleting a role, which changes no card.
     public var isEdit: Bool {
         switch self {
-        case .openOnMac, .run, .runFrom, .stop, .approve, .reject, .allowScript, .refuseScript, .startSession, .prompt, .keys: false
+        case .openOnMac, .run, .runFrom, .stop, .approve, .reject, .allowScript, .refuseScript, .startSession, .prompt, .keys,
+             .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .armSchedule, .pin, .updateRole, .deleteRole,
+             .clearBrowserData, .installBrowser, .restartBrowser: false
         case .addCard, .moveCards, .resizeCard, .deleteItems, .addLink, .setLinkLimit, .duplicate, .tidy, .group, .ungroup,
-             .renameGroup, .foldGroup, .patchCard, .setFlowOption, .newFlow, .renameFlow, .deleteFlow, .undo, .redo: true
+             .renameGroup, .foldGroup, .patchCard, .setFlowOption, .newFlow, .renameFlow, .deleteFlow, .undo, .redo,
+             .revertSettings, .paste, .addRoleCard, .newSubflow, .saveRole: true
         }
     }
 
@@ -554,8 +703,13 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
         case .patchCard(let id, let cardID, let patch): .patchCard(flowID: id, cardID: cardID, patch: patch.cleaned)
         case .newFlow(let projectID, let name): .newFlow(projectID: projectID, name: Remote.plainLine(name))
         case .renameFlow(let id, let name): .renameFlow(flowID: id, name: Remote.plainLine(name))
+        case .paste(let id, let fragment, let at): .paste(flowID: id, fragment: fragment.cleanedFromDevice, at: at)
+        case .newSubflow(let id, let cardID, let name): .newSubflow(flowID: id, cardID: cardID, name: Remote.plainLine(name))
+        case .saveRole(let id, let cardID, let name): .saveRole(flowID: id, cardID: cardID, name: Remote.plainLine(name))
         case .openOnMac, .stop, .allowScript, .refuseScript, .startSession, .keys, .addCard, .moveCards, .resizeCard,
-             .deleteItems, .setLinkLimit, .duplicate, .tidy, .ungroup, .foldGroup, .setFlowOption, .deleteFlow, .undo, .redo: self
+             .deleteItems, .setLinkLimit, .duplicate, .tidy, .ungroup, .foldGroup, .setFlowOption, .deleteFlow, .undo, .redo,
+             .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .revertSettings, .armSchedule, .addRoleCard, .pin,
+             .updateRole, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser: self
         }
     }
 
@@ -563,7 +717,7 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     /// stopping one waits its turn behind that. The Mac goes on reading what else the device sends meanwhile.
     public var canTakeTime: Bool {
         switch self {
-        case .run, .runFrom, .stop: true
+        case .run, .runFrom, .stop, .runFromStart, .retry: true
         default: false
         }
     }
@@ -611,6 +765,16 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
             return Remote.fitsName(name) ? nil : Self.nameTooLong
         case .patchCard(_, _, let patch): return patch.problem
         case .setLinkLimit, .tidy, .ungroup, .foldGroup, .setFlowOption, .deleteFlow, .undo, .redo: return nil
+
+        case .paste(_, let fragment, let at):
+            if let at, !at.isOnCanvas { return Self.offCanvas }
+            return fragment.deviceProblem
+        case .addRoleCard(_, _, let x, let y):
+            return RemotePoint(x: x, y: y).isOnCanvas ? nil : Self.offCanvas
+        case .newSubflow(_, _, let name), .saveRole(_, _, let name):
+            return Remote.fitsName(name) ? nil : Self.nameTooLong
+        case .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .revertSettings, .armSchedule, .pin, .updateRole,
+             .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser: return nil
         }
     }
 
@@ -620,8 +784,8 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
 
     static let nameTooLong = "That name is too long. The most a device can send is \(Remote.nameLimit) characters."
     static let textTooLong = "That text is too long. The most a device can send is \(Remote.textLimit) characters."
-    private static let offCanvas = "That is off the edge of the canvas."
-    private static let tooMany = "That is too many at once."
+    static let offCanvas = "That is off the edge of the canvas."
+    static let tooMany = "That is too many at once."
 }
 
 /// What a device sends to the pairing listener.

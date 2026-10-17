@@ -147,7 +147,7 @@ private struct CardSettings: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if controller.marks[card.id]?.failed == true, !controller.isRunning, controller.lastMessage(into: card.id) != nil {
+            if controller.canRetry(card.id) {
                 HStack(spacing: Theme.Space.s) {
                     Text("The run stopped here.")
                         .font(.dsSans(Theme.Size.caption))
