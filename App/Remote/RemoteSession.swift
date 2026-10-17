@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import Observation
+import UniformTypeIdentifiers
 import QueenBeeCore
 import QueenBeeLink
 
@@ -9,8 +11,9 @@ final class RemoteSession {
     /// The device as it was when it connected, kept up to date for what the Mac shows of it. Whether it may
     /// control the Mac is never taken from here: each command asks the list of devices afresh.
     private(set) var device: PairedDevice
-    /// One message, already encoded, with how much terminal output it carries that counts towards the flood limit.
-    private typealias Queued = (frame: Data, terminalBytes: Int)
+    /// One message, already encoded, with how much terminal output it carries that counts towards the flood
+    /// limit, and the card whose page it is a picture of, if it is one.
+    private typealias Queued = (frame: Data, terminalBytes: Int, pictureOf: String?)
     private let outbox: AsyncStream<Queued>.Continuation
     private var pump: Task<Void, Never>?
     /// Bytes of every kind queued and not yet sent.
@@ -50,6 +53,21 @@ final class RemoteSession {
 
     /// The commands that can take time and haven't finished, by flow: the last one of each, which the next waits for.
     private var slow: [String: (turn: Int, task: Task<Void, Never>)] = [:]
+
+    /// The browser cards of the open flow the device has on screen, by card id. See `watchBrowsers`.
+    private var browsers: [String: BrowserWatch] = [:]
+    /// Pictures of pages sent, and dropped for newer ones, and the bytes sent, for a test and for measuring.
+    private(set) var framesSent = 0
+    fileprivate(set) var framesDropped = 0
+    private(set) var pictureBytes = 0
+    #if DEBUG
+    /// The most that has been queued for the device at once, for a test to see that pictures don't pile up.
+    private(set) var mostQueued = 0
+    var queuedNow: Int { queuedBytes }
+    var watchedBrowsers: [String] { browsers.keys.sorted() }
+    var picturesDropped: Int { framesDropped + browsers.values.reduce(0) { $0 + $1.pacer.dropped } }
+    func resetMostQueued() { mostQueued = queuedBytes }
+    #endif
     private var turn = 0
 
     init(connection: LinkConnection, device: PairedDevice) {
@@ -70,9 +88,10 @@ final class RemoteSession {
 
     func send(_ message: HostMessage) { queue(message, terminalBytes: 0) }
 
-    /// Encoded here, once, so what is waiting can be counted as it is queued.
-    private func queue(_ message: HostMessage, terminalBytes: Int) {
-        guard !isClosed, let frame = try? Remote.encode(message) else { return }
+    /// Encoded here, once, so what is waiting can be counted as it is queued. False if it wasn't queued.
+    @discardableResult
+    private func queue(_ message: HostMessage, terminalBytes: Int, pictureOf card: String? = nil) -> Bool {
+        guard !isClosed, let frame = try? Remote.encode(message) else { return false }
         queuedBytes += frame.count
         guard queuedBytes <= Self.backlogLimit else {
             // Closing the connection ends `run`, and that tidies up. Doing it here would pull the flow out
@@ -80,14 +99,19 @@ final class RemoteSession {
             isClosed = true
             outbox.finish()
             connection.close()
-            return
+            return false
         }
-        outbox.yield((frame, terminalBytes))
+        outbox.yield((frame, terminalBytes, card))
+        #if DEBUG
+        mostQueued = max(mostQueued, queuedBytes)
+        #endif
+        return true
     }
 
     /// Called after each message has gone.
     private func sent(_ queued: Queued) {
         queuedBytes -= queued.frame.count
+        if let card = queued.pictureOf { pictureSent(of: card, bytes: queued.frame.count) }
         guard queued.terminalBytes > 0 else { return }
         queuedTerminalBytes -= queued.terminalBytes
         if isFlooded, queuedTerminalBytes <= 0 {
@@ -106,6 +130,10 @@ final class RemoteSession {
             case .open(let flowID) where flowID == controller?.flow.id: break
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
+            case .watchBrowsers(let flowID, let cardIDs): watchBrowsers(flowID, cardIDs)
+            // A card's browser is used only while this device has it on screen, and Copy's text comes back here.
+            case .command(let id, let command) where Self.isBrowser(command):
+                answer(id, command, await RemoteCommands.obey(command, from: device.id, browser: browserDoor))
             case .command(let id, let command) where command.canTakeTime: obeyInTurn(id, command)
             // An edit sent after a Run that hasn't begun yet waits its turn behind it, so the run starts with
             // the flow as it was when Run was pressed. Keys and answers don't wait: a run can be starting for a while.
@@ -153,6 +181,7 @@ final class RemoteSession {
 
     func close() {
         open(nil)
+        stopWatchingBrowsers()
         hasGone = true
         isClosed = true
         outbox.finish()
@@ -181,6 +210,8 @@ final class RemoteSession {
         // Looking at another flow, or at none, or going altogether, ends a drag the device left going. A
         // connection that has already closed has none: the device may be dragging again on its next one.
         if !hasGone { RemoteCommands.endDrag(of: device.id) }
+        // The cards it was watching are in the flow it left. The device says which it has on screen in the next.
+        stopWatchingBrowsers()
         flushTask?.cancel()
         flushTask = nil
         unfollowTerminals()
@@ -255,6 +286,8 @@ final class RemoteSession {
         RemoteSnapshot.updates(from: old, to: new, revision: revision).forEach(send)
         last = new
         followTerminals()
+        // A card watched may have lost its browser, or gone.
+        if !browsers.isEmpty { watchBrowsers(new.flow.id, Array(browsers.keys)) }
     }
 
     // MARK: Terminals
@@ -297,5 +330,151 @@ final class RemoteSession {
             queuedTerminalBytes += chunk.data.count
         }
         queue(.terminal(id: flowID, key: key, chunk: chunk), terminalBytes: chunk.reset ? 0 : chunk.data.count)
+    }
+}
+
+// MARK: Browsers
+
+extension RemoteSession {
+    /// One agent card's browser this device has on screen: its tab, the tab's note of it, and the pace its
+    /// pictures go at.
+    final class BrowserWatch {
+        let cardID: String
+        let tab: BrowserTab
+        var token: UUID?
+        var pacer = FramePacer<StreamFrame>()
+        /// What the device was last told of the card's bar and notice.
+        var told: RemoteBrowserPage?
+        /// Waits for the time the held picture may go.
+        var wait: Task<Void, Never>?
+
+        init(cardID: String, tab: BrowserTab) { self.cardID = cardID; self.tab = tab }
+    }
+
+    private static func isBrowser(_ command: RemoteCommand) -> Bool {
+        if case .browser = command { return true }
+        return false
+    }
+
+    /// What a card's browser commands need of this connection: which cards it is watching, and a way back for Copy.
+    private var browserDoor: RemoteCommands.BrowserDoor {
+        RemoteCommands.BrowserDoor(isWatching: { [weak self] in self?.browsers[$0] != nil }, send: { [weak self] in self?.send($0) })
+    }
+
+    /// The device said which browser cards of its open flow are on its screen. Only those are sent pictures.
+    /// Anything for a flow it doesn't have open is let go: it has just opened another.
+    func watchBrowsers(_ flowID: String, _ cardIDs: [String]) {
+        guard let controller, controller.flow.id == flowID else { return stopWatchingBrowsers() }
+        let wanted = Set(cardIDs.prefix(Remote.browserWatchLimit))
+        for (id, watch) in browsers where !wanted.contains(id) || controller.browserTab(forCard: id) !== watch.tab {
+            stopWatching(watch)
+        }
+        for id in wanted where browsers[id] == nil {
+            // A card with its Browser switch off has no tab, and nothing to watch.
+            guard let tab = controller.browserTab(forCard: id) else { continue }
+            let watch = BrowserWatch(cardID: id, tab: tab)
+            browsers[id] = watch
+            watch.token = tab.addWatcher(frame: { [weak self, weak watch] frame in
+                guard let self, let watch else { return }
+                self.offer(frame, to: watch)
+            }, change: { [weak self, weak watch] in
+                guard let self, let watch else { return }
+                self.tell(watch)
+            })
+            tell(watch)
+            // The page may not change again for a long time, and the device has nothing to show until it does.
+            if let last = tab.lastStream { offer(last, to: watch) }
+        }
+    }
+
+    func stopWatchingBrowsers() {
+        browsers.values.forEach(stopWatching)
+    }
+
+    private func stopWatching(_ watch: BrowserWatch) {
+        watch.token.map(watch.tab.removeWatcher)
+        watch.token = nil
+        watch.wait?.cancel()
+        framesDropped += watch.pacer.dropped
+        watch.pacer = FramePacer()
+        if browsers[watch.cardID] === watch { browsers[watch.cardID] = nil }
+    }
+
+    /// Sends the card's bar and notice, if they have changed since the device was last told.
+    private func tell(_ watch: BrowserWatch) {
+        guard browsers[watch.cardID] === watch, let flowID = controller?.flow.id else { return }
+        let page = watch.tab.remotePage
+        guard page != watch.told else { return }
+        watch.told = page
+        send(.browserPage(id: flowID, card: watch.cardID, page: page))
+    }
+
+    /// A new picture of a watched card's page. It goes now, or is held until it may, in place of any held before it.
+    private func offer(_ frame: StreamFrame, to watch: BrowserWatch) {
+        guard browsers[watch.cardID] === watch else { return }
+        if let now = watch.pacer.offer(frame) { send(now, of: watch) } else { waitForTurn(watch) }
+    }
+
+    /// When the held picture is only waiting for the time to come, it is sent then.
+    private func waitForTurn(_ watch: BrowserWatch) {
+        guard watch.wait == nil, let at = watch.pacer.nextTry else { return }
+        watch.wait = Task { [weak self, weak watch] in
+            try? await Task.sleep(for: .seconds(max(0, at.timeIntervalSinceNow)))
+            guard let self, let watch, !Task.isCancelled else { return }
+            watch.wait = nil
+            if let frame = watch.pacer.due() { self.send(frame, of: watch) } else { self.waitForTurn(watch) }
+        }
+    }
+
+    /// The picture on its way to the device has gone, so the newest held one may follow.
+    fileprivate func pictureSent(of cardID: String, bytes: Int) {
+        framesSent += 1
+        pictureBytes += bytes
+        guard let watch = browsers[cardID] else { return }
+        watch.pacer.delivered()
+        if let frame = watch.pacer.due() { send(frame, of: watch) } else { waitForTurn(watch) }
+    }
+
+    /// Queues one picture, made smaller first if it is over the limit. That is done off the main thread.
+    private func send(_ frame: StreamFrame, of watch: BrowserWatch) {
+        let page = frame.pageSize.width > 0 ? frame.pageSize : watch.tab.pageSize
+        let cardID = watch.cardID
+        let fits = frame.jpeg.count <= Remote.browserFrameLimit
+        Task { [weak self, weak watch] in
+            let made: RemoteBrowserFrame? = fits
+                ? RemoteBrowserFrame(jpeg: frame.jpeg, width: frame.image.width, height: frame.image.height, pageWidth: page.width, pageHeight: page.height)
+                : await Task.detached(priority: .utility) { Self.shrunk(frame, page: page) }.value
+            guard let self, let watch else { return }
+            guard self.browsers[cardID] === watch, let flowID = self.controller?.flow.id, let made,
+                  self.queue(.browserFrame(id: flowID, card: cardID, frame: made), terminalBytes: 0, pictureOf: cardID) else {
+                watch.pacer.delivered()
+                return
+            }
+        }
+    }
+
+    /// A picture made small enough to send: less fine first, then half the size.
+    nonisolated private static func shrunk(_ frame: StreamFrame, page: CGSize) -> RemoteBrowserFrame? {
+        let image = frame.image
+        for (scale, quality) in [(1.0, 0.6), (1.0, 0.4), (0.5, 0.6), (0.5, 0.35)] {
+            let width = max(1, Int(Double(image.width) * scale)), height = max(1, Int(Double(image.height) * scale))
+            var source = image
+            if scale != 1 {
+                guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { continue }
+                context.interpolationQuality = .high
+                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+                guard let small = context.makeImage() else { continue }
+                source = small
+            }
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(destination, source, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { continue }
+            if data.length <= Remote.browserFrameLimit {
+                return RemoteBrowserFrame(jpeg: data as Data, width: width, height: height, pageWidth: page.width, pageHeight: page.height)
+            }
+        }
+        return nil
     }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// What the Mac app and a paired device say to each other. Each message is one frame of JSON.
 public enum Remote {
     /// Both sides must be on the same version, or the device is told to update.
-    public static let version = 4
+    public static let version = 5
     /// The Bonjour type of a paired device's listener, and of the listener that exists only while pairing.
     public static let service = "_queenbee._tcp"
     public static let pairingService = "_queenbee-pair._tcp"
@@ -319,6 +319,15 @@ public enum HostMessage: Codable, Equatable, Sendable {
     case answer(id: Int, refusal: String?)
     /// "Can control" was turned on or off for this device on the Mac, while it was connected.
     case control(canControl: Bool)
+    /// What one agent card's browser half shows besides its picture: see `RemoteBrowserPage`. Sent for the cards
+    /// the device is watching, when it starts watching one and whenever any of it changes.
+    case browserPage(id: String, card: String, page: RemoteBrowserPage)
+    /// The newest picture of a watched card's page. At most `Remote.browserFramesASecond` a second, each at most
+    /// `Remote.browserFrameLimit` bytes, and none queued behind another: one the device can't take yet is dropped
+    /// for the one after it.
+    case browserFrame(id: String, card: String, frame: RemoteBrowserFrame)
+    /// The text that was selected on a card's page, for the device's Copy. Sent just before Copy's answer.
+    case browserCopied(id: String, card: String, text: String)
 }
 
 /// Device to Mac.
@@ -328,6 +337,10 @@ public enum DeviceMessage: Codable, Equatable, Sendable {
     case open(flowID: String?)
     /// Something for the Mac to do. The device picks the id, and the Mac's answer carries it back.
     case command(id: Int, command: RemoteCommand)
+    /// The agent cards of the open flow whose browser is on the device's screen now, which are the only ones
+    /// it is sent pictures of. Sent whenever that changes; an empty list stops them all. Watching needs no
+    /// "Can control", as watching a terminal needs none.
+    case watchBrowsers(flowID: String, cardIDs: [String])
 }
 
 /// A place on the canvas, in the canvas's own points.
@@ -628,6 +641,13 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     /// The Restart, or "Try again", that the Mac offers when the browser has stopped or failed.
     case restartBrowser(projectID: String)
 
+    // MARK: A card's browser
+
+    /// The mouse, keys and address bar of an agent card's browser, as the person at the Mac uses them. Only for
+    /// a card the device is watching. It acts as the person would, on whatever site the card is on, signed in or
+    /// not, so it is part of "Can control" like typing into a terminal.
+    case browser(flowID: String, cardID: String, action: RemoteBrowserAction)
+
     /// The flow a command is for. A new flow has none yet: it names its project. Nor does a command for a saved
     /// role, or for a project's browser.
     public var flowID: String? {
@@ -640,7 +660,8 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
              .foldGroup(let id, _, _), .patchCard(let id, _, _), .setFlowOption(let id, _), .renameFlow(let id, _),
              .deleteFlow(let id), .undo(let id), .redo(let id), .runFromStart(let id, _), .retry(let id, _), .clearLog(let id),
              .dismissBanner(let id), .stopAgents(let id), .revertSettings(let id, _), .armSchedule(let id, _, _), .paste(let id, _, _),
-             .addRoleCard(let id, _, _, _), .newSubflow(let id, _, _), .pin(let id, _), .saveRole(let id, _, _), .updateRole(_, let id, _): id
+             .addRoleCard(let id, _, _, _), .newSubflow(let id, _, _), .pin(let id, _), .saveRole(let id, _, _), .updateRole(_, let id, _),
+             .browser(let id, _, _): id
         case .newFlow, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser: nil
         }
     }
@@ -655,7 +676,7 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
         switch self {
         case .openOnMac, .run, .runFrom, .stop, .approve, .reject, .allowScript, .refuseScript, .startSession, .prompt, .keys,
              .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .armSchedule, .pin, .updateRole, .deleteRole,
-             .clearBrowserData, .installBrowser, .restartBrowser: false
+             .clearBrowserData, .installBrowser, .restartBrowser, .browser: false
         case .addCard, .moveCards, .resizeCard, .deleteItems, .addLink, .setLinkLimit, .duplicate, .tidy, .group, .ungroup,
              .renameGroup, .foldGroup, .patchCard, .setFlowOption, .newFlow, .renameFlow, .deleteFlow, .undo, .redo,
              .revertSettings, .paste, .addRoleCard, .newSubflow, .saveRole: true
@@ -685,7 +706,11 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     }
 
     /// False for a step of a drag that isn't the last. The Mac sends no answer to one.
-    public var isAnswered: Bool { dragStep.map(\.isLast) ?? true }
+    public var isAnswered: Bool {
+        // The pointer moving in a card's page, and scrolling it, come many times a second, as a drag's steps do.
+        if case .browser(_, _, let action) = self { return action.isAnswered }
+        return dragStep.map(\.isLast) ?? true
+    }
 
     /// The same command with its text made safe to show and to enter into a terminal. See `Remote.plainText`
     /// and `Remote.plainLine`. The Mac does this to every command before anything else. Key presses are left
@@ -706,6 +731,7 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
         case .paste(let id, let fragment, let at): .paste(flowID: id, fragment: fragment.cleanedFromDevice, at: at)
         case .newSubflow(let id, let cardID, let name): .newSubflow(flowID: id, cardID: cardID, name: Remote.plainLine(name))
         case .saveRole(let id, let cardID, let name): .saveRole(flowID: id, cardID: cardID, name: Remote.plainLine(name))
+        case .browser(let id, let cardID, let action): .browser(flowID: id, cardID: cardID, action: action.cleaned)
         case .openOnMac, .stop, .allowScript, .refuseScript, .startSession, .keys, .addCard, .moveCards, .resizeCard,
              .deleteItems, .setLinkLimit, .duplicate, .tidy, .ungroup, .foldGroup, .setFlowOption, .deleteFlow, .undo, .redo,
              .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .revertSettings, .armSchedule, .addRoleCard, .pin,
@@ -775,6 +801,7 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
             return Remote.fitsName(name) ? nil : Self.nameTooLong
         case .runFromStart, .retry, .clearLog, .dismissBanner, .stopAgents, .revertSettings, .armSchedule, .pin, .updateRole,
              .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser: return nil
+        case .browser(_, _, let action): return action.problem
         }
     }
 

@@ -134,29 +134,16 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
         if address.currentEditor() == nil, address.stringValue != tab.url { address.stringValue = tab.url }
         address.toolTip = tab.title.isEmpty ? nil : tab.title
 
-        var words = ""
-        var button = ""
-        var action: (() -> Void)?
+        // The same words and button a paired device shows for the card.
+        let (status, progress, problem) = tab.hostState.remote
+        let shown = BrowserNotice.of(status, progress: progress, problem: problem, isAttached: tab.isAttached, hasPicture: tab.lastFrame != nil)
+        let words = shown?.words ?? ""
+        let button = shown?.offer?.title ?? ""
         weak var host = tab.host
-        switch tab.hostState {
-        case .missing:
-            words = "This card's browser needs Chrome, and there isn't one on this Mac. Queen Bee can download a copy for its own use, about 150 MB."
-            button = "Download"
-            action = { host?.download() }
-        case .downloading(let fraction):
-            words = "Downloading the browser… \(Int(fraction * 100))%"
-        case .failed(let reason):
-            words = reason
-            button = "Try again"
-            action = { host?.restart() }
-        case .stopped:
-            words = "Browser stopped"
-            button = "Restart"
-            action = { host?.restart() }
-        case .starting:
-            words = "Starting the browser…"
-        case .idle, .running:
-            if !tab.isAttached, tab.lastFrame == nil { words = "Starting the browser…" }
+        let action: (() -> Void)? = switch shown?.offer {
+        case .download: { host?.download() }
+        case .tryAgain, .restart: { host?.restart() }
+        case nil: nil
         }
         let shows = !words.isEmpty
         if notice.stringValue != words { notice.stringValue = words }
@@ -314,8 +301,8 @@ final class BrowserPageView: NSView {
               let letter = event.charactersIgnoringModifiers?.lowercased() else { return super.performKeyEquivalent(with: event) }
         let shift = event.modifierFlags.contains(.shift)
         switch letter {
-        case "a": edit("a", "selectAll")
-        case "z": edit("z", shift ? "redo" : "undo", shift: shift)
+        case "a": tab.shortcut(.selectAll)
+        case "z": tab.shortcut(shift ? .redo : .undo)
         case "c": copySelection()
         case "x": copySelection(thenDelete: true)
         case "v":
@@ -326,13 +313,6 @@ final class BrowserPageView: NSView {
         return true
     }
 
-    private func edit(_ letter: Character, _ command: String, shift: Bool = false) {
-        let key = BrowserKey.typing(letter)
-        let modifiers = 4 | (shift ? 8 : 0)
-        tab.key(down: true, key, modifiers: modifiers, commands: [command])
-        tab.key(down: false, key, modifiers: modifiers)
-    }
-
     /// Copy, and Cut when `thenDelete` is set. The text is fetched before anything is deleted, or there would
     /// be nothing left to fetch.
     private func copySelection(thenDelete: Bool = false) {
@@ -341,7 +321,7 @@ final class BrowserPageView: NSView {
             guard !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            if thenDelete { edit("x", "delete") }
+            if thenDelete { tab.deleteSelection() }
         }
     }
 }

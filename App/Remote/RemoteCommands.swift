@@ -22,8 +22,15 @@ import QueenBeeCore
 /// one more line half a minute later saying how many more there were, so no number of edits pushes what
 /// else happened out of the log.
 enum RemoteCommands {
+    /// What a card's browser commands need of the connection they came on: whether the device has that card
+    /// on its screen, which is the only browser it may use, and a way to send Copy's text back.
+    struct BrowserDoor {
+        let isWatching: (String) -> Bool
+        let send: (HostMessage) -> Void
+    }
+
     /// Nil when it was done. Otherwise why not, in words the device shows the person.
-    static func obey(_ sent: RemoteCommand, from deviceID: String) async -> String? {
+    static func obey(_ sent: RemoteCommand, from deviceID: String, browser door: BrowserDoor? = nil) async -> String? {
         let host = RemoteHost.shared
         // Asked of the list as it is now, for every command: "Can control" turned off a moment ago is off.
         let device = host.isOn ? host.devices.devices.first(where: { $0.id == deviceID && $0.canControl }) : nil
@@ -35,8 +42,14 @@ enum RemoteCommands {
         // The last step of a drag ends it whatever becomes of the step: refused for its size, for coming too
         // fast, or for a flow or a card that has gone.
         defer { if sent.dragStep?.isLast == true { endDrag(of: deviceID) } }
-        // Keys are not counted: a held key repeats faster than this, and typing is not an edit.
-        if case .keys = sent {} else if !buckets[deviceID, default: TokenBucket()].take() {
+        // Keys are not counted: a held key repeats faster than this, and typing is not an edit. The pointer moving
+        // and scrolling in a card's page have a pace of their own, so a drag in it can't use up what the click
+        // that ends it needs. Every other use of a card's browser is counted like any command.
+        if case .keys = sent {} else if case .browser(_, _, let action) = sent, action.isPointer {
+            guard pointerBuckets[deviceID, default: TokenBucket(capacity: Remote.pointerBurst, refill: Remote.pointersASecond)].take() else {
+                return Remote.tooFastRefusal
+            }
+        } else if !buckets[deviceID, default: TokenBucket()].take() {
             // A step of a drag that isn't the last is never answered, so this goes nowhere and the step is dropped.
             return Remote.tooFastRefusal
         }
@@ -513,10 +526,69 @@ enum RemoteCommands {
             say(.updateRole, "updated the role \(Remote.logName(role.name)) from \(called(cardID))")
             return nil
 
+        case .browser(_, let cardID, let action):
+            guard let card = controller.flow.card(cardID) else { return cardGone }
+            guard card.kind == .agent, card.browser == true, let tab = controller.browserTab(forCard: cardID) else {
+                return "\(called(cardID)) has no browser."
+            }
+            // What isn't on the device's screen isn't used from it.
+            guard let door, door.isWatching(cardID) else { return "\(called(cardID))'s browser isn't on this device's screen." }
+            // Said once in a while for each card, and never what was typed or where.
+            if isFirst("\(controller.flow.id)/browser/\(cardID)", by: deviceID) { controller.noteFromDevice("\(name) used \(called(cardID))'s browser") }
+            return await use(tab, action, flowID: controller.flow.id, cardID: cardID, door: door)
+
         case .newFlow, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser:
             // Done above: none of them is for a flow.
             return nil
         }
+    }
+
+    /// One thing done in a card's browser, with the calls the Mac's own browser half makes for the person's
+    /// mouse, keys and bar.
+    private static func use(_ tab: BrowserTab, _ action: RemoteBrowserAction, flowID: String, cardID: String, door: BrowserDoor) async -> String? {
+        let notOpen = "The browser isn't open in that card yet."
+        switch action {
+        case .mouse(let mouse):
+            guard tab.isAttached else { return notOpen }
+            let type = switch mouse.kind {
+            case .pressed: "mousePressed"
+            case .released: "mouseReleased"
+            case .moved: "mouseMoved"
+            }
+            // As the Mac's page view sends them: a move with no button held names none.
+            tab.mouse(type, at: CGPoint(x: mouse.x, y: mouse.y), button: mouse.kind == .moved && !mouse.isDown ? "none" : "left",
+                      buttons: mouse.isDown ? 1 : 0, clicks: mouse.kind == .moved ? 0 : mouse.clicks, modifiers: mouse.modifiers)
+        case .wheel(let x, let y, let dx, let dy):
+            guard tab.isAttached else { return notOpen }
+            tab.wheel(at: CGPoint(x: x, y: y), dx: dx, dy: dy)
+        case .key(let name, let modifiers):
+            guard tab.isAttached else { return notOpen }
+            guard let key = BrowserKey.named(name) else { return "There is no key called that." }
+            tab.press(key, modifiers: modifiers)
+        case .text(let text):
+            guard tab.isAttached else { return notOpen }
+            tab.insert(text: text)
+        case .navigate(let typed):
+            tab.openTypedFromDevice(typed)
+        case .back:
+            guard tab.canGoBack else { return "There is no earlier page to go back to." }
+            Task { _ = await tab.goBack() }
+        case .forward:
+            guard tab.canGoForward else { return "There is no later page to go forward to." }
+            Task { await tab.goForward() }
+        case .reload:
+            tab.reload()
+        case .copy(let cut):
+            guard tab.isAttached else { return notOpen }
+            let text = await tab.selectedText()
+            guard !text.isEmpty else { return "Nothing is selected on the page." }
+            door.send(.browserCopied(id: flowID, card: cardID, text: String(text.prefix(Remote.browserCopyLimit))))
+            if cut { tab.deleteSelection() }
+        case .shortcut(let shortcut):
+            guard tab.isAttached else { return notOpen }
+            tab.shortcut(shortcut)
+        }
+        return nil
     }
 
     /// Why a card's settings can't be saved into a role from a device. A mode that skips permission checks
@@ -605,6 +677,8 @@ enum RemoteCommands {
 
     /// How fast each device may send commands, by device id.
     private static var buckets: [String: TokenBucket] = [:]
+    /// And how fast it may move the pointer and scroll in cards' pages.
+    private static var pointerBuckets: [String: TokenBucket] = [:]
 
     // MARK: Drags
 

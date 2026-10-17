@@ -22,6 +22,12 @@
 //                    (a flow's own settings) and "project".
 //                    The commands of stage 4 take "card", "on", "role", "name", "project", "x" and "y", and a paste
 //                    takes "fragment" (a FlowFragment as JSON) and "at" ([x, y], or left out).
+//                    A card's browser is used with "do": "browser", "card", and "act": one of click, press, release,
+//                    move, wheel, key, text, navigate, back, forward, reload, copy, cut, selectAll, undo, redo, with
+//                    whichever of "x", "y", "dx", "dy", "down", "clicks", "modifiers", "name" and "text" it takes.
+//   watch <flow id> <card id>,<card id>…
+//                    say which browser cards are on the device's screen. "watch <flow id> -" for none.
+//   pause <seconds>  read nothing from the Mac for that long, as a device on a slow network
 //   {"raw": {...}}   send that JSON as it is, as a device with an app of its own making could.
 // It never prints a key.
 import Foundation
@@ -240,9 +246,41 @@ Task {
     case "clearBrowserData": return .clearBrowserData(projectID: text("project"))
     case "installBrowser": return .installBrowser(projectID: text("project"))
     case "restartBrowser": return .restartBrowser(projectID: text("project"))
+    case "browser":
+        let x = number("x"), y = number("y"), modifiers = Int(number("modifiers"))
+        let clicks = fields["clicks"] as? Int ?? 1
+        let action: RemoteBrowserAction
+        switch text("act") {
+        case "click", "press": action = .mouse(RemoteMouse(.pressed, x: x, y: y, isDown: true, clicks: clicks, modifiers: modifiers))
+        case "release": action = .mouse(RemoteMouse(.released, x: x, y: y, clicks: clicks, modifiers: modifiers))
+        case "move": action = .mouse(RemoteMouse(.moved, x: x, y: y, isDown: flag("down"), modifiers: modifiers))
+        case "wheel": action = .wheel(x: x, y: y, dx: number("dx"), dy: number("dy"))
+        case "key": action = .key(name: text("name"), modifiers: modifiers)
+        case "text": action = .text(text("text"))
+        case "navigate": action = .navigate(text("text"))
+        case "back": action = .back
+        case "forward": action = .forward
+        case "reload": action = .reload
+        case "copy": action = .copy(cut: false)
+        case "cut": action = .copy(cut: true)
+        case "selectAll": action = .shortcut(.selectAll)
+        case "undo": action = .shortcut(.undo)
+        case "redo": action = .shortcut(.redo)
+        default: return nil
+        }
+        return .browser(flowID: flow, cardID: text("card"), action: action)
     default: return nil
     }
 }
+
+/// How long the reader of the connection is to read nothing for, as a device that has fallen behind.
+final class Pause: @unchecked Sendable {
+    private let lock = NSLock()
+    private var until = Date.distantPast
+    func set(_ seconds: Double) { lock.withLock { until = Date().addingTimeInterval(seconds) } }
+    var left: TimeInterval { lock.withLock { until.timeIntervalSinceNow } }
+}
+let pause = Pause()
 
 // What standard input asks to be sent leaves through here, one message at a time, so the Mac gets it in the
 // order it was asked for: the steps of a drag before its last, and a drag before the flow is left.
@@ -289,6 +327,12 @@ Thread.detachNewThread { [deviceID] in
                     say(["type": "reconnect-failed", "error": "\(error)"])
                 }
             }
+        case "watch" where words.count == 3:
+            let cards = words[2] == "-" ? [] : words[2].split(separator: ",").map(String.init)
+            if let frame = try? Remote.encode(DeviceMessage.watchBrowsers(flowID: words[1], cardIDs: cards)) { outbox.yield((nil, frame)) }
+        case "pause" where words.count == 2:
+            pause.set(Double(words[1]) ?? 0)
+            say(["type": "paused"])
         case "silent":
             Task { await second("silent", port: port, key: key, saying: nil) }
         case "stranger":
@@ -301,6 +345,8 @@ Thread.detachNewThread { [deviceID] in
 
 while true {
     let message: HostMessage
+    // Nothing is read while paused, so what the Mac sends waits in the network, and then on the Mac.
+    while pause.left > 0 { try? await Task.sleep(for: .milliseconds(50)) }
     do { message = try await connection.receive(HostMessage.self) } catch {
         // The Mac closes the old connection when the device connects again, and the new one takes over here.
         if let next = shared.takeReplacement() {
@@ -362,5 +408,15 @@ while true {
         say(["type": "answer", "id": id, "refusal": refusal ?? NSNull()])
     case .control(let canControl):
         say(["type": "control", "canControl": canControl])
+    case .browserPage(_, let card, let page):
+        say(["type": "browserPage", "card": card, "url": page.url, "title": page.title, "loading": page.isLoading,
+             "canGoBack": page.canGoBack, "canGoForward": page.canGoForward, "status": page.status.rawValue, "attached": page.isAttached,
+             "notice": page.notice?.words ?? NSNull(), "offer": page.notice?.offer?.title ?? NSNull(), "addressProblem": page.addressProblem ?? NSNull()])
+    case .browserFrame(_, let card, let frame):
+        say(["type": "browserFrame", "card": card, "bytes": frame.jpeg.count, "width": frame.width, "height": frame.height,
+             "pageWidth": frame.pageWidth, "pageHeight": frame.pageHeight, "jpeg": frame.jpeg.prefix(2) == Data([0xFF, 0xD8]),
+             "at": Date().timeIntervalSince1970])
+    case .browserCopied(_, let card, let text):
+        say(["type": "browserCopied", "card": card, "text": text])
     }
 }

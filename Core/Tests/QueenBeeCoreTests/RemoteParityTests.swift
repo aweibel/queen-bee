@@ -51,7 +51,8 @@ import Testing
     ]
 
     @Test func theVersionIsTheOneWithEverythingTheMacCanDo() {
-        #expect(Remote.version == 4)
+        // Version 4 brought these, and the browser on a device came with 5.
+        #expect(Remote.version >= 4)
     }
 
     @Test func everyNewCommandSurvivesEncodingAndIsFineAsItIs() throws {

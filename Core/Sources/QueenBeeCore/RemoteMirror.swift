@@ -150,6 +150,9 @@ public struct RemoteMirror: Equatable, Sendable {
             snapshot?.runs = runs
         case .terminal:
             return terminalEvent(in: message).map { [$0] } ?? []
+        // A card's browser is drawn from its own feed, as a terminal is, and changes nothing here.
+        case .browserPage, .browserFrame, .browserCopied:
+            break
         }
         return []
     }

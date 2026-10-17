@@ -30,6 +30,15 @@ enum TestHarness {
     }
 
     /// Turns Remote on, pairs and unpairs, for a test copy only. Nil for anything else.
+    #if DEBUG
+    /// What one connected device has been sent of cards' pages, and how much is waiting for it.
+    private static func browsersSeen(_ session: RemoteSession) -> JSONValue {
+        ["frames": .number(Double(session.framesSent)), "dropped": .number(Double(session.picturesDropped)),
+         "bytes": .number(Double(session.pictureBytes)), "queued": .number(Double(session.queuedNow)),
+         "mostQueued": .number(Double(session.mostQueued)), "watching": .array(session.watchedBrowsers.map(JSONValue.string))]
+    }
+    #endif
+
     static func handleRemote(_ payload: JSONValue) async -> JSONValue? {
         guard isEnabled else { return nil }
         let host = RemoteHost.shared
@@ -60,13 +69,25 @@ enum TestHarness {
             guard let port = await soon({ host.ports[id] }) else { return ["error": "not listening for that device"] }
             return ["port": .number(Double(port))]
         case "remote-state":
+            #if DEBUG
+            let browsers = JSONValue.array(host.sessions.map(Self.browsersSeen))
+            #else
+            let browsers = JSONValue.null
+            #endif
             return ["on": .bool(host.isOn), "devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
                     "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
                     "open": .array(host.sessions.compactMap(\.openFlowName).map(JSONValue.string)),
                     "received": .number(Double(host.sessions.reduce(0) { $0 + $1.received })),
                     "controlling": .number(Double(host.devices.devices.filter(\.canControl).count)),
                     "selected": AppServices.shared.selectedFlowID.map(JSONValue.string) ?? .null,
-                    "problem": host.problem.map(JSONValue.string) ?? .null]
+                    "problem": host.problem.map(JSONValue.string) ?? .null,
+                    "browsers": browsers]
+        case "remote-reset-queued":
+            // Starts counting the most ever queued afresh, from what is queued now.
+            #if DEBUG
+            host.sessions.forEach { $0.resetMostQueued() }
+            #endif
+            return [:]
         case "remote-vault":
             // Makes keeping a key fail, the way a locked or broken Keychain would.
             KeyVault.failsWrites = payload["fails"]?.boolValue ?? false
@@ -357,7 +378,9 @@ enum TestHarness {
                 described["browser"] = [
                     "url": .string(tab.url), "title": .string(tab.title), "attached": .bool(tab.isAttached),
                     "hasPicture": .bool(tab.lastFrame != nil), "pictureWidth": .number(Double(tab.lastFrame?.width ?? 0)),
-                    "host": .string("\(tab.hostState)"),
+                    "host": .string("\(tab.hostState)"), "watchers": .number(Double(tab.watcherCount)),
+                    "canGoBack": .bool(tab.canGoBack), "canGoForward": .bool(tab.canGoForward),
+                    "pageWidth": .number(tab.pageSize.width), "pageHeight": .number(tab.pageSize.height),
                 ]
             } else {
                 described["browser"] = .null

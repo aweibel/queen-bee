@@ -6,6 +6,10 @@ import QueenBeeCore
 /// changes once made, so it is safe to pass along.
 struct StreamFrame: @unchecked Sendable {
     let image: CGImage
+    /// The picture as the browser sent it, for a paired device watching the card.
+    var jpeg = Data()
+    /// The page's size in its own points when the browser drew it. Zero when the browser didn't say.
+    var pageSize = CGSize.zero
 }
 
 /// A running Chromium browser and the private line the app controls it over.
@@ -178,7 +182,9 @@ final class CDPConnection {
               let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         else { return nil }
-        return .frame(session: session, frame: StreamFrame(image: image), ack: ack)
+        let metadata = params["metadata"] as? [String: Any]
+        let page = CGSize(width: metadata?["deviceWidth"] as? Double ?? 0, height: metadata?["deviceHeight"] as? Double ?? 0)
+        return .frame(session: session, frame: StreamFrame(image: image, jpeg: jpeg, pageSize: page), ack: ack)
     }
 
     // MARK: Starting the process

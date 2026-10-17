@@ -288,3 +288,18 @@ final class BrowserHost {
     /// Whether this project's browser has kept anything.
     var hasData: Bool { FileManager.default.fileExists(atPath: profile.path) }
 }
+
+extension BrowserHost.State {
+    /// The state as a paired device is told it, with how far a download has got and why the browser failed.
+    var remote: (status: RemoteBrowserState.Status, progress: Double?, problem: String?) {
+        switch self {
+        case .idle: (.idle, nil, nil)
+        case .starting: (.starting, nil, nil)
+        case .running: (.running, nil, nil)
+        case .missing: (.missing, nil, nil)
+        case .downloading(let fraction): (.downloading, fraction, nil)
+        case .stopped: (.stopped, nil, nil)
+        case .failed(let reason): (.failed, nil, reason)
+        }
+    }
+}
