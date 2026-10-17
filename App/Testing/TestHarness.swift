@@ -35,7 +35,9 @@ enum TestHarness {
     private static func browsersSeen(_ session: RemoteSession) -> JSONValue {
         ["frames": .number(Double(session.framesSent)), "dropped": .number(Double(session.picturesDropped)),
          "bytes": .number(Double(session.pictureBytes)), "queued": .number(Double(session.queuedNow)),
-         "mostQueued": .number(Double(session.mostQueued)), "watching": .array(session.watchedBrowsers.map(JSONValue.string))]
+         "mostQueued": .number(Double(session.mostQueued)), "watching": .array(session.watchedBrowsers.map(JSONValue.string)),
+         "pagesTold": .number(Double(session.pagesTold)), "pagesDropped": .number(Double(session.pagesDropped)),
+         "watchesTaken": .number(Double(session.watchesTaken))]
     }
     #endif
 
@@ -210,12 +212,34 @@ enum TestHarness {
             return [
                 "roles": .array(services.roles.map {
                     ["id": .string($0.id), "name": .string($0.name), "instructions": .string($0.instructions), "model": .string($0.model),
-                     "effort": .string($0.effort), "permissionMode": .string($0.permissionMode)]
+                     "effort": .string($0.effort), "permissionMode": .string($0.permissionMode),
+                     "changedFrom": $0.changedFrom.map { .string($0.device) } ?? .null,
+                     "earlier": $0.earlier.map { .string($0.instructions) } ?? .null]
                 }),
+                "deletedRoles": .array(services.deletedRoles.map { ["id": .string($0.role.id), "name": .string($0.role.name), "device": .string($0.device)] }),
                 "pinned": .array(services.pinnedFlowIDs.sorted().map(JSONValue.string)),
                 "browser": .string("\(controller.project.browser.state)"),
                 "browserData": .bool(controller.project.browser.hasData),
             ]
+        case "pickRole":
+            // The inspector's role menu, with the person's answer to "Use it?" given here, and whether it was asked.
+            let services = AppServices.shared
+            guard let cardID, let role = services.roles.first(where: { $0.id == payload["role"]?.stringValue }) else { return ["error": "pickRole needs card and role"] }
+            services.testRoleAnswer = payload["answer"]?.boolValue ?? true
+            services.testRoleAsked = []
+            defer { services.testRoleAnswer = nil }
+            controller.applyRole(role, toCard: cardID)
+            return ["asked": .bool(!services.testRoleAsked.isEmpty), "role": controller.flow.card(cardID)?.role.map(JSONValue.string) ?? .null]
+        case "saveRoleOnMac":
+            guard let cardID else { return ["error": "saveRoleOnMac needs card"] }
+            controller.saveRole(fromCard: cardID)
+            return [:]
+        case "putBackRole":
+            AppServices.shared.putBackEarlierVersion(of: payload["role"]?.stringValue ?? "")
+            return [:]
+        case "restoreRole":
+            let restored = AppServices.shared.restoreRole(payload["role"]?.stringValue ?? "")
+            return ["name": restored.map { .string($0.name) } ?? .null]
         case "launchArguments":
             // The command line a card's session would be started with.
             guard let cardID, let card = controller.flow.card(cardID), let environment = AppServices.shared.environment,

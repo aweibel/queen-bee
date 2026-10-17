@@ -285,8 +285,16 @@ final class BrowserHost {
     }
     #endif
 
-    /// Whether this project's browser has kept anything.
-    var hasData: Bool { FileManager.default.fileExists(atPath: profile.path) }
+    /// Whether this project's browser has kept anything. Asked of the disk once for each `dataRevision`: the flow
+    /// list a paired device is sent asks it of every project each time it is made.
+    var hasData: Bool {
+        let revision = dataRevision
+        if let known = hasDataSeen, known.revision == revision { return known.value }
+        let value = FileManager.default.fileExists(atPath: profile.path)
+        hasDataSeen = (revision, value)
+        return value
+    }
+    @ObservationIgnored private var hasDataSeen: (revision: Int, value: Bool)?
 }
 
 extension BrowserHost.State {

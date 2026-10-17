@@ -43,6 +43,18 @@ final class RemoteHost {
     @ObservationIgnored private var pairingListener: LinkListener?
     @ObservationIgnored private(set) var pairingPort: UInt16?
     @ObservationIgnored private var lastLibrary: RemoteLibrary?
+    /// When the flow list was last worked out, and the wait for the next time it may be. It is worked out at most
+    /// once a second, however fast what it is made from changes: a card dragged on the Mac changes a flow sixty
+    /// times a second.
+    @ObservationIgnored private var libraryBuilt = Date.distantPast
+    @ObservationIgnored private var libraryLater: Task<Void, Never>?
+    static let libraryEvery: TimeInterval = 1
+    /// What flows have cost changes with every turn of every agent. The list is looked at again for it every five
+    /// seconds, and not each time it changes.
+    static let usageEvery: Duration = .seconds(5)
+    /// The browser program each project would use, looked for on the disk at most every half a minute, or when a
+    /// project's browser changes state.
+    @ObservationIgnored private var browserFound: (key: String, at: Date, name: String?)?
     /// Goes up each time Remote is turned on or off, so a watcher from an earlier turn knows to stop.
     @ObservationIgnored private var watch = 0
 
@@ -82,6 +94,7 @@ final class RemoteHost {
         if on {
             devices.devices.forEach(listen(for:))
             watchLibrary(watch)
+            watchUsage(watch)
         } else {
             shutDown()
         }
@@ -102,6 +115,8 @@ final class RemoteHost {
         watch += 1
         // The next device to connect after Remote comes back on must be sent the list, changed or not.
         lastLibrary = nil
+        libraryLater?.cancel()
+        libraryLater = nil
     }
 
     // MARK: Paired devices
@@ -253,32 +268,65 @@ final class RemoteHost {
 
     // MARK: The flow list
 
-    private func library() -> RemoteLibrary {
+    /// The flow list as it is now, with what each flow has cost.
+    private func library() -> RemoteLibrary { withUsage(libraryWithoutUsage()) }
+
+    /// Everything in the flow list but what flows have cost, which changes too often to watch: see `watchUsage`.
+    private func libraryWithoutUsage() -> RemoteLibrary {
         let services = AppServices.shared
+        let found = browserName()
         return RemoteLibrary(projects: services.projects.map { project in
             // One for the project, as working it out reads every flow.
             let nesting = project.nesting
             return RemoteProject(id: project.root.path, name: project.name, flows: project.controllers.map { controller in
                 let id = controller.flow.id
                 let outer = nesting.outerFlows(of: id)
-                let own = controller.totalUsage
-                let below = nesting.subflows(of: id).compactMap { project.controller($0.id)?.totalUsage }.reduce(own, +)
                 return RemoteFlowSummary(id: id, name: controller.flow.name, isSubflow: controller.flow.isSubflow == true,
                                          activity: controller.activity, parentID: outer.count == 1 ? outer[0] : nil,
-                                         pinned: services.pinnedFlowIDs.contains(id), cardNames: Remote.listedNames(of: controller.flow),
-                                         usage: own.isZero ? nil : own, usageWithSubflows: below.isZero ? nil : below)
-            }, browser: Self.browserState(of: project))
-        // What a role holds, so a device can say when a card has drifted from it. A role has no folder.
+                                         pinned: services.pinnedFlowIDs.contains(id), cardNames: Remote.listedNames(of: controller.flow))
+            }, browser: Self.browserState(of: project, browser: found))
+        // What a role holds, so a device can say when a card has drifted from it, with the start of its instructions and a
+        // fingerprint of the whole. A role has no folder. A role a device saved or changed says which.
         }, roles: services.roles.map {
-            RemoteRole(id: $0.id, name: $0.name, instructions: $0.instructions, model: $0.model, effort: $0.effort, permissionMode: $0.permissionMode)
+            RemoteRole.listed(id: $0.id, name: $0.name, instructions: $0.instructions, model: $0.model, effort: $0.effort,
+                              permissionMode: $0.permissionMode, changedFrom: $0.changedFrom?.device, changedAt: $0.changedFrom?.date)
         })
     }
 
+    /// The same list with what each flow's own sessions have used, and that with every sub-flow below it.
+    private func withUsage(_ library: RemoteLibrary) -> RemoteLibrary {
+        var library = library
+        let services = AppServices.shared
+        for index in library.projects.indices {
+            guard let project = services.projects.first(where: { $0.root.path == library.projects[index].id }) else { continue }
+            let nesting = project.nesting
+            for flowIndex in library.projects[index].flows.indices {
+                let id = library.projects[index].flows[flowIndex].id
+                guard let controller = project.controller(id) else { continue }
+                let own = controller.totalUsage
+                let below = nesting.subflows(of: id).compactMap { project.controller($0.id)?.totalUsage }.reduce(own, +)
+                library.projects[index].flows[flowIndex].usage = own.isZero ? nil : own
+                library.projects[index].flows[flowIndex].usageWithSubflows = below.isZero ? nil : below
+            }
+        }
+        return library
+    }
+
+    /// The browser program the Mac would use, such as "Google Chrome", looked for again when a project's browser
+    /// changes state or half a minute has passed.
+    private func browserName() -> String? {
+        let key = AppServices.shared.projects.map { "\($0.browser.state)" }.joined(separator: "|")
+        if let found = browserFound, found.key == key, Date().timeIntervalSince(found.at) < 30 { return found.name }
+        // The program's own name: "Google Chrome", "Chromium", "Google Chrome for Testing".
+        let name = BrowserFinder.find(support: AppServices.shared.supportDirectory).map { URL(fileURLWithPath: $0.path).lastPathComponent }
+        browserFound = (key, Date(), name)
+        return name
+    }
+
     /// A project's browser as its cards and the flow's settings show it on the Mac.
-    private static func browserState(of project: ProjectModel) -> RemoteBrowserState {
+    private static func browserState(of project: ProjectModel, browser: String?) -> RemoteBrowserState {
         let host = project.browser
-        // Read so that the profile being made or deleted counts as a change: whether it is there is asked of the disk.
-        _ = host.dataRevision
+        // Read so that the profile being made or deleted counts as a change.
         var state = RemoteBrowserState(hasData: host.hasData)
         switch host.state {
         case .idle: state.status = .idle
@@ -293,20 +341,51 @@ final class RemoteHost {
             state.status = .failed
             state.problem = reason
         }
-        // The program's own name: "Google Chrome", "Chromium", "Google Chrome for Testing".
-        state.browser = BrowserFinder.find(support: AppServices.shared.supportDirectory).map { URL(fileURLWithPath: $0.path).lastPathComponent }
+        state.browser = browser
         return state
     }
 
-    /// Sends the flow list to every device whenever a project, a flow's name, what a flow needs or a saved role changes,
-    /// and when a project's browser starts, stops, downloads or is cleared.
+    /// Sends the flow list to every device whenever a project, a flow's name or cards, what a flow needs or a saved
+    /// role changes, and when a project's browser starts, stops, downloads or is cleared: at most once a second,
+    /// with what is true then.
     private func watchLibrary(_ generation: Int) {
         // Off and on again starts a new watcher. Without this check the old one would carry on beside it.
         guard isOn, generation == watch else { return }
-        var current = RemoteLibrary(projects: [])
-        withObservationTracking { current = library() } onChange: {
+        let wait = Self.libraryEvery - Date().timeIntervalSince(libraryBuilt)
+        if wait > 0 {
+            guard libraryLater == nil else { return }
+            libraryLater = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                guard let self, !Task.isCancelled else { return }
+                self.libraryLater = nil
+                self.watchLibrary(generation)
+            }
+            return
+        }
+        libraryBuilt = Date()
+        var base = RemoteLibrary(projects: [])
+        withObservationTracking { base = libraryWithoutUsage() } onChange: {
             Task { @MainActor in RemoteHost.shared.watchLibrary(generation) }
         }
+        send(withUsage(base))
+    }
+
+    /// Looks at what flows have cost every few seconds, and sends the list if it has changed.
+    private func watchUsage(_ generation: Int) {
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: Self.usageEvery)
+                guard let self, self.isOn, generation == self.watch else { return }
+                // Nothing to tell nobody, and the list is worked out on the main thread.
+                guard !self.sessions.isEmpty, let last = self.lastLibrary else { continue }
+                var current = last
+                current = self.withUsage(current)
+                if current != last { self.send(current) }
+            }
+        }
+    }
+
+    private func send(_ current: RemoteLibrary) {
         guard current != lastLibrary else { return }
         lastLibrary = current
         for session in sessions {

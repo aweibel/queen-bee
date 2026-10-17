@@ -317,8 +317,7 @@ final class BrowserPageView: NSView {
     /// be nothing left to fetch.
     private func copySelection(thenDelete: Bool = false) {
         Task {
-            let text = await tab.selectedText()
-            guard !text.isEmpty else { return }
+            guard let text = await tab.selectedText(within: Remote.browserCopyWait), !text.isEmpty else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             if thenDelete { tab.deleteSelection() }

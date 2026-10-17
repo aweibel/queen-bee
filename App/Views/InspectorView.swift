@@ -300,10 +300,25 @@ private struct CardSettings: View {
             Menu {
                 Toggle("None", isOn: Binding(get: { current == nil }, set: { _ in controller.applyRole(nil, toCard: card.id) }))
                 ForEach(roles) { role in
-                    Toggle(role.name, isOn: Binding(get: { current?.id == role.id }, set: { _ in controller.applyRole(role, toCard: card.id) }))
+                    // A role a paired device saved or changed is marked, and asked about before it is first used here.
+                    Toggle(role.changedFrom.map { "\(role.name) — changed from \($0.device)" } ?? role.name,
+                           isOn: Binding(get: { current?.id == role.id }, set: { _ in controller.applyRole(role, toCard: card.id) }))
                 }
                 Divider()
                 Button(current == nil ? "Save as a New Role" : "Update “\(current?.name ?? "")” from This Card") { controller.saveRole(fromCard: card.id) }
+                if let current, current.earlier != nil {
+                    Button("Put Back the Earlier Version of “\(current.name)”") { AppServices.shared.putBackEarlierVersion(of: current.id) }
+                }
+                let deleted = AppServices.shared.deletedRoles
+                if !deleted.isEmpty {
+                    Menu("Restore a Role Deleted from a Device") {
+                        ForEach(deleted.reversed()) { gone in
+                            Button("\(gone.role.name) — deleted from \(gone.device), \(gone.date.formatted(date: .abbreviated, time: .shortened))") {
+                                AppServices.shared.restoreRole(gone.role.id)
+                            }
+                        }
+                    }
+                }
             } label: {
                 HStack(spacing: 4) {
                     Text(current?.name ?? "None").lineLimit(1)
@@ -318,6 +333,22 @@ private struct CardSettings: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("A role is an agent's settings saved under a name, so you can make more agents like it in any flow")
+        }
+        if let current, let changed = current.changedLine {
+            HStack(spacing: Theme.Space.s) {
+                Text("\(changed).")
+                    .font(.dsSans(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if current.earlier != nil {
+                    Button("Put back the earlier version") { AppServices.shared.putBackEarlierVersion(of: current.id) }
+                        .buttonStyle(.panel(.quiet))
+                        .help("Give the role what it held before the device changed it. Cards that have the role keep what they have.")
+                }
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.bottom, 6)
         }
         if let current, !current.matches(card) {
             HStack(spacing: Theme.Space.s) {

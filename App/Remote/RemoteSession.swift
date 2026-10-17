@@ -54,18 +54,33 @@ final class RemoteSession {
     /// The commands that can take time and haven't finished, by flow: the last one of each, which the next waits for.
     private var slow: [String: (turn: Int, task: Task<Void, Never>)] = [:]
 
-    /// The browser cards of the open flow the device has on screen, by card id. See `watchBrowsers`.
+    /// The browser cards of the open flow the device has on screen and is sent pictures of, by card id. See `watchBrowsers`.
     private var browsers: [String: BrowserWatch] = [:]
+    /// The cards the device last said it has on screen, and in which flow. Only a device with "Can control" is sent
+    /// anything of them, so this is kept while it has none, for the moment it is given it.
+    private var wantedBrowsers: (flowID: String, cardIDs: [String])?
+    /// Cards the device let go of a moment ago, with the pace their pictures and bar went at, until when they are
+    /// kept. A card taken off the screen and put straight back is held to the pace it had.
+    private var lettingGo: [String: (watch: BrowserWatch, until: Date)] = [:]
+    /// How fast the device may say which cards it has on screen: each time can start pictures of up to sixteen pages.
+    private var watchPace = TokenBucket(capacity: Remote.watchBurst, refill: Remote.watchesASecond)
+    /// Waits for the pace to allow the newest of what the device said, when it said it too fast.
+    private var watchLater: Task<Void, Never>?
     /// Pictures of pages sent, and dropped for newer ones, and the bytes sent, for a test and for measuring.
     private(set) var framesSent = 0
     fileprivate(set) var framesDropped = 0
     private(set) var pictureBytes = 0
+    /// How many times the device was told a card's bar, and how many times what it said it has on screen was taken up.
+    private(set) var pagesTold = 0
+    private(set) var watchesTaken = 0
     #if DEBUG
     /// The most that has been queued for the device at once, for a test to see that pictures don't pile up.
     private(set) var mostQueued = 0
     var queuedNow: Int { queuedBytes }
     var watchedBrowsers: [String] { browsers.keys.sorted() }
-    var picturesDropped: Int { framesDropped + browsers.values.reduce(0) { $0 + $1.pacer.dropped } }
+    var picturesDropped: Int { framesDropped + (Array(browsers.values) + lettingGo.values.map(\.watch)).reduce(0) { $0 + $1.pacer.dropped } }
+    /// How many changes to cards' bars were let go for newer ones.
+    var pagesDropped: Int { (Array(browsers.values) + lettingGo.values.map(\.watch)).reduce(0) { $0 + $1.pages.dropped } }
     func resetMostQueued() { mostQueued = queuedBytes }
     #endif
     private var turn = 0
@@ -131,13 +146,22 @@ final class RemoteSession {
             case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
             case .hello: break
             case .watchBrowsers(let flowID, let cardIDs): watchBrowsers(flowID, cardIDs)
+            // Copy asks the page, which can take a while or never answer. It is given a few seconds of its own, and
+            // what the device sends meanwhile is read and obeyed in the order it was sent.
+            case .command(let id, let command) where Self.isCopy(command):
+                let door = browserDoor, deviceID = device.id
+                Task { [weak self] in
+                    let refusal = await RemoteCommands.obey(command, from: deviceID, browser: door)
+                    self?.answer(id, command, refusal)
+                }
             // A card's browser is used only while this device has it on screen, and Copy's text comes back here.
             case .command(let id, let command) where Self.isBrowser(command):
                 answer(id, command, await RemoteCommands.obey(command, from: device.id, browser: browserDoor))
             case .command(let id, let command) where command.canTakeTime: obeyInTurn(id, command)
             // An edit sent after a Run that hasn't begun yet waits its turn behind it, so the run starts with
             // the flow as it was when Run was pressed. Keys and answers don't wait: a run can be starting for a while.
-            case .command(let id, let command) where command.isEdit && command.flowID.map({ slow[$0] != nil }) == true: obeyInTurn(id, command)
+            // Nor does turning a schedule on or off overtake an edit sent before it.
+            case .command(let id, let command) where command.waitsWithEdits && command.flowID.map({ slow[$0] != nil }) == true: obeyInTurn(id, command)
             // Done before the next message is read, so edits are made, and what is typed arrives, in the order sent.
             case .command(let id, let command): answer(id, command, await RemoteCommands.obey(command, from: device.id))
             }
@@ -177,11 +201,16 @@ final class RemoteSession {
         if !on { RemoteCommands.endDrag(of: device.id) }
         device.canControl = on
         send(.control(canControl: on))
+        // Pictures of pages, their addresses and titles go only to a device with control: they stop at once without
+        // it, and start again, for the cards the device has on screen, with it.
+        applyWatch()
     }
 
     func close() {
         open(nil)
         stopWatchingBrowsers()
+        watchLater?.cancel()
+        lettingGo.removeAll()
         hasGone = true
         isClosed = true
         outbox.finish()
@@ -286,8 +315,8 @@ final class RemoteSession {
         RemoteSnapshot.updates(from: old, to: new, revision: revision).forEach(send)
         last = new
         followTerminals()
-        // A card watched may have lost its browser, or gone.
-        if !browsers.isEmpty { watchBrowsers(new.flow.id, Array(browsers.keys)) }
+        // A card watched may have lost its browser, or gone, or gained one.
+        if wantedBrowsers != nil { applyWatch() }
     }
 
     // MARK: Terminals
@@ -337,16 +366,18 @@ final class RemoteSession {
 
 extension RemoteSession {
     /// One agent card's browser this device has on screen: its tab, the tab's note of it, and the pace its
-    /// pictures go at.
+    /// pictures and its bar go at.
     final class BrowserWatch {
         let cardID: String
         let tab: BrowserTab
         var token: UUID?
         var pacer = FramePacer<StreamFrame>()
-        /// What the device was last told of the card's bar and notice.
+        /// What the device was last told of the card's bar and notice, which is told at most four times a second.
         var told: RemoteBrowserPage?
-        /// Waits for the time the held picture may go.
+        var pages = LatestThrottle<RemoteBrowserPage>(perSecond: Remote.browserPagesASecond)
+        /// Waits for the time the held picture, or the held bar, may go.
         var wait: Task<Void, Never>?
+        var pageWait: Task<Void, Never>?
 
         init(cardID: String, tab: BrowserTab) { self.cardID = cardID; self.tab = tab }
     }
@@ -356,23 +387,64 @@ extension RemoteSession {
         return false
     }
 
-    /// What a card's browser commands need of this connection: which cards it is watching, and a way back for Copy.
-    private var browserDoor: RemoteCommands.BrowserDoor {
-        RemoteCommands.BrowserDoor(isWatching: { [weak self] in self?.browsers[$0] != nil }, send: { [weak self] in self?.send($0) })
+    private static func isCopy(_ command: RemoteCommand) -> Bool {
+        if case .browser(_, _, .copy) = command { return true }
+        return false
     }
 
-    /// The device said which browser cards of its open flow are on its screen. Only those are sent pictures.
-    /// Anything for a flow it doesn't have open is let go: it has just opened another.
+    /// What a card's browser commands need of this connection: the flow it has open, which cards it is watching,
+    /// and a way back for Copy.
+    private var browserDoor: RemoteCommands.BrowserDoor {
+        RemoteCommands.BrowserDoor(flowID: controller?.flow.id, isWatching: { [weak self] in self?.browsers[$0] != nil },
+                                   send: { [weak self] in self?.send($0) })
+    }
+
+    /// Whether this device may be sent pictures of pages, and their addresses and titles: only with "Can control",
+    /// asked of the list of devices as it is now. A page in a card can be one the person is signed in to.
+    private var maySeePages: Bool {
+        let host = RemoteHost.shared
+        return host.isOn && host.devices.canControl(device.id)
+    }
+
+    /// The device said which browser cards of its open flow are on its screen. Only those are sent pictures, and
+    /// only to a device with control. Said faster than its pace allows, the newest is taken up a moment later.
     func watchBrowsers(_ flowID: String, _ cardIDs: [String]) {
-        guard let controller, controller.flow.id == flowID else { return stopWatchingBrowsers() }
-        let wanted = Set(cardIDs.prefix(Remote.browserWatchLimit))
-        for (id, watch) in browsers where !wanted.contains(id) || controller.browserTab(forCard: id) !== watch.tab {
+        wantedBrowsers = (flowID, Array(cardIDs.prefix(Remote.browserWatchLimit)))
+        guard watchLater == nil else { return }
+        guard watchPace.take() else {
+            watchLater = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1 / Remote.watchesASecond))
+                guard let self, !Task.isCancelled else { return }
+                self.watchLater = nil
+                if let wanted = self.wantedBrowsers { self.watchBrowsers(wanted.flowID, wanted.cardIDs) }
+            }
+            return
+        }
+        watchesTaken += 1
+        applyWatch()
+    }
+
+    /// Watches the cards the device last said it has on screen, as far as it may now. Anything for a flow it
+    /// doesn't have open is let go: it has just opened another.
+    private func applyWatch() {
+        let now = Date()
+        for (id, kept) in lettingGo where kept.until <= now {
+            framesDropped += kept.watch.pacer.dropped
+            lettingGo[id] = nil
+        }
+        guard maySeePages, let controller, let wanted = wantedBrowsers, controller.flow.id == wanted.flowID else { return stopWatchingBrowsers() }
+        let cards = Set(wanted.cardIDs)
+        for (id, watch) in browsers where !cards.contains(id) || controller.browserTab(forCard: id) !== watch.tab {
             stopWatching(watch)
         }
-        for id in wanted where browsers[id] == nil {
+        for id in wanted.cardIDs where browsers[id] == nil {
             // A card with its Browser switch off has no tab, and nothing to watch.
             guard let tab = controller.browserTab(forCard: id) else { continue }
-            let watch = BrowserWatch(cardID: id, tab: tab)
+            // One let go of a moment ago keeps its pace, so putting it back on screen sends nothing sooner.
+            let kept = lettingGo.removeValue(forKey: id).flatMap { $0.watch.tab === tab ? $0.watch : nil }
+            let watch = kept ?? BrowserWatch(cardID: id, tab: tab)
+            // The device forgot the card's bar when it let go of it.
+            watch.told = nil
             browsers[id] = watch
             watch.token = tab.addWatcher(frame: { [weak self, weak watch] frame in
                 guard let self, let watch else { return }
@@ -395,18 +467,41 @@ extension RemoteSession {
         watch.token.map(watch.tab.removeWatcher)
         watch.token = nil
         watch.wait?.cancel()
-        framesDropped += watch.pacer.dropped
-        watch.pacer = FramePacer()
-        if browsers[watch.cardID] === watch { browsers[watch.cardID] = nil }
+        watch.wait = nil
+        watch.pageWait?.cancel()
+        watch.pageWait = nil
+        watch.pages.drop()
+        if browsers[watch.cardID] === watch {
+            browsers[watch.cardID] = nil
+            lettingGo[watch.cardID] = (watch, Date().addingTimeInterval(Remote.watchKeep))
+        }
     }
 
-    /// Sends the card's bar and notice, if they have changed since the device was last told.
+    /// Sends the card's bar and notice, if they have changed since the device was last told: at most four times a
+    /// second, the newest, and with the address and title cut short.
     private func tell(_ watch: BrowserWatch) {
-        guard browsers[watch.cardID] === watch, let flowID = controller?.flow.id else { return }
-        let page = watch.tab.remotePage
-        guard page != watch.told else { return }
+        guard browsers[watch.cardID] === watch else { return }
+        let page = watch.tab.remotePage.capped
+        guard page != watch.told else { return watch.pages.drop() }
+        if let now = watch.pages.offer(page) { tellNow(now, watch) } else { tellLater(watch) }
+    }
+
+    private func tellNow(_ page: RemoteBrowserPage, _ watch: BrowserWatch) {
+        guard let flowID = controller?.flow.id, page != watch.told else { return }
         watch.told = page
+        pagesTold += 1
         send(.browserPage(id: flowID, card: watch.cardID, page: page))
+    }
+
+    private func tellLater(_ watch: BrowserWatch) {
+        guard watch.pageWait == nil, let at = watch.pages.nextTry else { return }
+        watch.pageWait = Task { [weak self, weak watch] in
+            try? await Task.sleep(for: .seconds(max(0, at.timeIntervalSinceNow)))
+            guard let self, let watch, !Task.isCancelled else { return }
+            watch.pageWait = nil
+            guard self.browsers[watch.cardID] === watch else { return }
+            if let page = watch.pages.due() { self.tellNow(page, watch) } else { self.tellLater(watch) }
+        }
     }
 
     /// A new picture of a watched card's page. It goes now, or is held until it may, in place of any held before it.
@@ -430,8 +525,10 @@ extension RemoteSession {
     fileprivate func pictureSent(of cardID: String, bytes: Int) {
         framesSent += 1
         pictureBytes += bytes
-        guard let watch = browsers[cardID] else { return }
+        // A card let go of while its picture was on the way keeps its pace for when it comes back.
+        guard let watch = browsers[cardID] ?? lettingGo[cardID]?.watch else { return }
         watch.pacer.delivered()
+        guard browsers[cardID] === watch else { return }
         if let frame = watch.pacer.due() { send(frame, of: watch) } else { waitForTurn(watch) }
     }
 

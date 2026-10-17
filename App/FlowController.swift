@@ -507,6 +507,16 @@ final class FlowController: ToolHost {
         flow.links(into: cardID).compactMap { messages[$0.id]?.last }.max { $0.date < $1.date }
     }
 
+    /// A paired device's Clear: the log and the earlier runs go, but for the lines that say what a device did or that
+    /// a schedule went on or off, which stay, followed by one saying which device cleared it.
+    func clearLog(fromDevice device: String) {
+        let kept = LogLine.leftByDeviceClear(log: log, runs: runs)
+        clearLog()
+        log = kept
+        runLogStart = log.count
+        noteFromDevice("\(device) cleared the log")
+    }
+
     /// Empties the log. Answers and run marks stay until the next run replaces them.
     func clearLog() {
         log.removeAll()
@@ -820,8 +830,10 @@ final class FlowController: ToolHost {
     }
 
     /// Gives a card a role's settings and ties it to the role, or cuts the tie with nil.
+    /// A role a paired device saved or changed is asked about first, once: see `AppServices.agreesToUse`.
     func applyRole(_ role: AgentRole?, toCard id: String) {
         guard let role else { return setRole(nil, onCard: id, name: "Remove Role") }
+        guard services.agreesToUse(role) else { return }
         perform("Apply \(role.name)") {
             try $0.updateCard(id, patch: role.patch)
             if let index = $0.cards.firstIndex(where: { $0.id == id }) { $0.cards[index].role = role.id }
@@ -888,6 +900,8 @@ final class FlowController: ToolHost {
     /// Adds a card. With a point, as when one is dropped from the palette, the card is centred
     /// there. Without, it goes to the middle of what is on screen, stepped clear of other cards.
     func addCard(_ kind: CardKind, at point: CGPoint? = nil, role: AgentRole? = nil) {
+        // A role a paired device saved or changed is asked about first, once.
+        if let role, !services.agreesToUse(role) { return }
         var made: Card?
         let size = Card.make(kind: kind, name: "x", x: 0, y: 0)
         var spot: CGRect
@@ -1320,7 +1334,7 @@ final class FlowController: ToolHost {
             clearForRun()
             let first = command ?? (startCardID.flatMap { flow.card($0) } ?? flow.cards.first { $0.kind == .start })?.command ?? ""
             currentRun = (id, Date(), String(first.prefix(200)))
-            if let note { append(note) }
+            if let note { append(note, kept: true) }
         }
         absorb(output, sender: nil)
         return RunStart(began: began, status: output.log.last ?? (output.runID.map { "Run \($0) started" } ?? "Nothing to run"))
@@ -1346,7 +1360,7 @@ final class FlowController: ToolHost {
         if let id = output.runID {
             clearForRun()
             currentRun = (id, Date(), "From \(flow.card(cardID)?.name ?? "a card"): \(message.prefix(160))")
-            if let note { append(note) }
+            if let note { append(note, kept: true) }
         }
         absorb(output, sender: nil)
         return RunStart(began: output.runID != nil, status: output.log.last ?? "Nothing to run")
@@ -1377,7 +1391,7 @@ final class FlowController: ToolHost {
     @discardableResult
     private func absorb(_ output: RunOutput, sender: String?) -> [(to: String, text: String)] {
         guard !isClosed else { return [] }
-        output.log.forEach(append)
+        output.log.forEach { append($0) }
         record(output.visits, sender: sender)
         handOffs += output.deliveries.count
         for result in output.results {
@@ -1727,7 +1741,7 @@ final class FlowController: ToolHost {
         guard hold.needsAllow else { return "That command has already been allowed." }
         // Asked of what is kept now, not of what the hold said when it was made.
         guard hold.allowOnMac != true, !isFromDevice(hold.command, cardID: hold.cardID) else { return Remote.allowOnMacRefusal }
-        append("\(device) allowed \(flow.card(hold.cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card")'s command")
+        append("\(device) allowed \(flow.card(hold.cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card")'s command", kept: true)
         allowScript(id)
         return nil
     }
@@ -1808,10 +1822,11 @@ final class FlowController: ToolHost {
     }
 
     /// Adds a line to the log about something a paired device did, so the Mac shows what was done from elsewhere.
-    func noteFromDevice(_ text: String) { append(text) }
+    /// A device's Clear leaves these lines: see `clearLog(fromDevice:)`.
+    func noteFromDevice(_ text: String) { append(text, kept: true) }
 
-    private func append(_ text: String) {
-        log.append(LogLine(date: Date(), text: text))
+    private func append(_ text: String, kept: Bool = false) {
+        log.append(LogLine(date: Date(), text: text, isKept: kept))
         scheduleHistorySave()
         if log.count > 600 {
             log.removeFirst(log.count - 600)
@@ -1933,7 +1948,7 @@ final class FlowController: ToolHost {
         }
         guard agentsChanged else { return }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
-        append("The orchestrator changed what the flow does, so its schedule is off until you turn it on again")
+        append("The orchestrator changed what the flow does, so its schedule is off until you turn it on again", kept: true)
         banner = "The schedule is off: the orchestrator changed what the flow does. Turn it on again in the Start card's settings."
         reschedule()
     }
@@ -1958,7 +1973,7 @@ final class FlowController: ToolHost {
         let mine = wereOn.union(flow.cards.filter { $0.kind == .start && isArmed($0) }.map(\.id))
         for id in mine { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: id) }
         if !mine.isEmpty {
-            append("\(device) changed what the flow does, so its schedule is off until you turn it on again")
+            append("\(device) changed what the flow does, so its schedule is off until you turn it on again", kept: true)
             banner = "The schedule is off: \(device) changed what the flow does. Turn it on again in the Start card's settings."
         }
         if !mine.isEmpty || !turnedOn.isEmpty { reschedule() }
@@ -1981,7 +1996,7 @@ final class FlowController: ToolHost {
         let armed = flow.cards.filter { $0.kind == .start && isArmed($0) }
         guard !armed.isEmpty else { return }
         for card in armed { ScheduleArming.arm(nil, command: "", scope: allowScope, cardID: card.id) }
-        append("\(device) changed \(inner), which this flow runs, so its schedule is off until you turn it on again")
+        append("\(device) changed \(inner), which this flow runs, so its schedule is off until you turn it on again", kept: true)
         banner = "The schedule is off: \(device) changed \(inner), which this flow runs. Turn it on again in the Start card's settings."
         reschedule()
     }

@@ -369,7 +369,8 @@ while true {
              "flowIDs": Dictionary(flows.map { ($0.name, $0.id) }) { first, _ in first },
              "roles": library.roles.map(\.name),
              "roleInfo": library.roles.map { ["id": $0.id, "name": $0.name, "instructions": $0.instructions, "model": $0.model,
-                                              "effort": $0.effort, "permissionMode": $0.permissionMode] },
+                                              "effort": $0.effort, "permissionMode": $0.permissionMode, "changedFrom": $0.changedFrom ?? NSNull(),
+                                              "hash": $0.instructionsHash ?? NSNull()] as [String: Any] },
              "parents": Dictionary(flows.map { ($0.name, $0.parentID ?? "") }) { first, _ in first },
              "pinned": flows.filter(\.pinned).map(\.name),
              "cardNames": Dictionary(flows.map { ($0.name, $0.cardNames) }) { first, _ in first },
@@ -409,7 +410,7 @@ while true {
     case .control(let canControl):
         say(["type": "control", "canControl": canControl])
     case .browserPage(_, let card, let page):
-        say(["type": "browserPage", "card": card, "url": page.url, "title": page.title, "loading": page.isLoading,
+        say(["type": "browserPage", "card": card, "url": page.url, "title": page.title, "at": Date().timeIntervalSince1970, "loading": page.isLoading,
              "canGoBack": page.canGoBack, "canGoForward": page.canGoForward, "status": page.status.rawValue, "attached": page.isAttached,
              "notice": page.notice?.words ?? NSNull(), "offer": page.notice?.offer?.title ?? NSNull(), "addressProblem": page.addressProblem ?? NSNull()])
     case .browserFrame(_, let card, let frame):

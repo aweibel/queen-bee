@@ -15,16 +15,19 @@ import QueenBeeCore
 /// only turned on by `armSchedule`, as by the Mac's own "Turn on", and never by an edit.
 ///
 /// A role saved or updated from a device can't hold a permission mode that skips checks, and changing a role
-/// changes no card that has it. Downloading a browser is only ever the Mac's own offer taken up.
+/// changes no card that has it. The Mac marks it as the device's, keeps what it held before, and asks the person
+/// there before first using it; one a device deletes is kept for 30 days to be put back. Downloading a browser is
+/// only ever the Mac's own offer taken up. A card's browser is only used, and only seen, from a device with control.
 ///
 /// A device is also held to a pace. It may send a burst of commands, which is what a drag comes to, and then
 /// so many a second; past that they are refused. And each kind of edit is put in a flow's log once, with
 /// one more line half a minute later saying how many more there were, so no number of edits pushes what
 /// else happened out of the log.
 enum RemoteCommands {
-    /// What a card's browser commands need of the connection they came on: whether the device has that card
-    /// on its screen, which is the only browser it may use, and a way to send Copy's text back.
+    /// What a card's browser commands need of the connection they came on: the flow the device has open, whether
+    /// it has that card on its screen, which is the only browser it may use, and a way to send Copy's text back.
     struct BrowserDoor {
+        let flowID: String?
         let isWatching: (String) -> Bool
         let send: (HostMessage) -> Void
     }
@@ -381,15 +384,16 @@ enum RemoteCommands {
         case .clearLog:
             // The log's Clear is only there when the log has something in it.
             guard !controller.log.isEmpty else { return "The log is already empty." }
-            controller.clearLog()
-            // The first line of the new log, so the person at the Mac knows where the old one went.
-            controller.noteFromDevice("\(name) cleared the log")
+            // What devices did, and every schedule going on or off, stays, and a line says which device cleared the rest.
+            controller.clearLog(fromDevice: name)
             return nil
 
         case .dismissBanner:
-            guard controller.banner != nil else { return "There is no message to close." }
+            guard let banner = controller.banner else { return "There is no message to close." }
             controller.banner = nil
-            say(.banner, "closed the message at the top of the flow")
+            // Each time, with what the message said: the person at the Mac didn't see it go.
+            let said = Remote.plainLine(banner)
+            controller.noteFromDevice("\(name) closed the message: \(said.count > 80 ? String(said.prefix(80)) + "…" : said)")
             return nil
 
         case .stopAgents:
@@ -424,7 +428,8 @@ enum RemoteCommands {
             // The Mac's own "Turn on": agreed to for what the card starts with now. A change from a device to what
             // the flow does turns it off again.
             if on { controller.setTrigger(trigger, onCard: cardID) } else { controller.turnScheduleOff(onCard: cardID) }
-            say(on ? .scheduleOn : .scheduleOff, "turned the schedule \(on ? "on" : "off") for \(called(cardID))")
+            // Each time, never counted together with others: it is rare, and it is what lets a flow run unwatched.
+            controller.noteFromDevice("\(name) turned the schedule \(on ? "on" : "off") for \(called(cardID))")
             return nil
 
         // MARK: Editing, stage 4
@@ -438,11 +443,13 @@ enum RemoteCommands {
                 if let role = fragment.cards[index].role, !roles.contains(role) { fragment.cards[index].role = nil }
                 if let ref = fragment.cards[index].flowRef, !flows.contains(ref) { fragment.cards[index].flowRef = nil }
             }
-            let offset = FlowController.pasteOffset(of: fragment, at: at.map { CGPoint(x: $0.x, y: $0.y) })
+            // Every card it makes lands on the canvas.
+            let asked = FlowController.pasteOffset(of: fragment, at: at.map { CGPoint(x: $0.x, y: $0.y) })
+            let offset = fragment.offsetOnCanvas(dx: asked.dx, dy: asked.dy)
             // New ids, names nothing else has, and no session or schedule: see `Flow.insert`. The folder was left
-            // behind when the command was cleaned.
+            // behind when the command was cleaned. All or nothing: a link or group that can't be made pastes nothing.
             return edit("Paste", .paste, say: "pasted \(counted(fragment.cards.count, "card"))") {
-                $0.insert(fragment, dx: offset.dx, dy: offset.dy)
+                try $0.insertWhole(fragment, dx: offset.dx, dy: offset.dy)
             }
 
         case .addRoleCard(_, let roleID, let x, let y):
@@ -498,7 +505,8 @@ enum RemoteCommands {
             guard services.roles.count < Remote.roleLimit else { return "Your Mac already has \(Remote.roleLimit) roles. Save more on your Mac." }
             var role = AgentRole(from: card)
             role.name = roleName
-            let saved = services.save(role)
+            // Marked on the Mac as saved from this device, and asked about before the person there first uses it.
+            let saved = services.save(role, fromDevice: name)
             if let refusal = controller.edit(from: name, "Save Role", {
                 guard let index = $0.cards.firstIndex(where: { $0.id == cardID }) else { throw FlowError.notFound(cardGone) }
                 $0.cards[index].role = saved.id
@@ -517,12 +525,12 @@ enum RemoteCommands {
                 return "\(called(cardID)) doesn't have the role \(Remote.logName(role.name)), so it can't update it."
             }
             if let problem = roleProblem(card) { return problem }
-            var updated = AgentRole(from: card)
-            updated.id = role.id
-            updated.name = role.name
-            guard updated != role else { return nil }
-            // Only the role changes. A card that has it keeps what it has until somebody chooses Reset on it.
-            services.save(updated)
+            var updated = role
+            updated.settings = AgentRole(from: card).settings
+            guard updated.settings != role.settings else { return nil }
+            // Only the role changes. A card that has it keeps what it has until somebody chooses Reset on it. The Mac
+            // marks it as changed from this device, keeps what it held before, and asks before the person there uses it.
+            services.save(updated, fromDevice: name)
             say(.updateRole, "updated the role \(Remote.logName(role.name)) from \(called(cardID))")
             return nil
 
@@ -531,11 +539,11 @@ enum RemoteCommands {
             guard card.kind == .agent, card.browser == true, let tab = controller.browserTab(forCard: cardID) else {
                 return "\(called(cardID)) has no browser."
             }
-            // What isn't on the device's screen isn't used from it.
-            guard let door, door.isWatching(cardID) else { return "\(called(cardID))'s browser isn't on this device's screen." }
+            // What isn't on the device's screen, in the flow it has open, isn't used from it.
+            guard let door, door.flowID == controller.flow.id, door.isWatching(cardID) else { return "\(called(cardID))'s browser isn't on this device's screen." }
             // Said once in a while for each card, and never what was typed or where.
             if isFirst("\(controller.flow.id)/browser/\(cardID)", by: deviceID) { controller.noteFromDevice("\(name) used \(called(cardID))'s browser") }
-            return await use(tab, action, flowID: controller.flow.id, cardID: cardID, door: door)
+            return await use(tab, action, flowID: controller.flow.id, cardID: cardID, door: door, deviceID: deviceID)
 
         case .newFlow, .deleteRole, .clearBrowserData, .installBrowser, .restartBrowser:
             // Done above: none of them is for a flow.
@@ -545,7 +553,8 @@ enum RemoteCommands {
 
     /// One thing done in a card's browser, with the calls the Mac's own browser half makes for the person's
     /// mouse, keys and bar.
-    private static func use(_ tab: BrowserTab, _ action: RemoteBrowserAction, flowID: String, cardID: String, door: BrowserDoor) async -> String? {
+    private static func use(_ tab: BrowserTab, _ action: RemoteBrowserAction, flowID: String, cardID: String, door: BrowserDoor,
+                            deviceID: String) async -> String? {
         let notOpen = "The browser isn't open in that card yet."
         switch action {
         case .mouse(let mouse):
@@ -580,8 +589,17 @@ enum RemoteCommands {
             tab.reload()
         case .copy(let cut):
             guard tab.isAttached else { return notOpen }
-            let text = await tab.selectedText()
+            // Asked of the page in a world of the Mac's own, where nothing the page did to itself can answer, and
+            // given up on after a few seconds: see `BrowserTab.selectedText(within:)`. The connection goes on
+            // reading what else the device sends meanwhile.
+            guard let text = await tab.selectedText(within: Remote.browserCopyWait) else {
+                return "The page didn't say what is selected in time. Try again in a moment."
+            }
             guard !text.isEmpty else { return "Nothing is selected on the page." }
+            // "Can control" may have been turned off, or the card taken off the device's screen, while the page was asked.
+            let host = RemoteHost.shared
+            guard host.isOn, host.devices.canControl(deviceID) else { return Remote.watchOnlyRefusal }
+            guard door.isWatching(cardID) else { return "That browser isn't on this device's screen." }
             door.send(.browserCopied(id: flowID, card: cardID, text: String(text.prefix(Remote.browserCopyLimit))))
             if cut { tab.deleteSelection() }
         case .shortcut(let shortcut):
@@ -595,6 +613,10 @@ enum RemoteCommands {
     /// can't be set on a card from anywhere, but a flow's file can hold one, and a role would carry it into
     /// every card that is given it.
     private static func roleProblem(_ card: Card) -> String? {
+        // A card's instructions can be longer, typed on the Mac. A role saved from a device is held to what a device may send.
+        if !Remote.fitsText(card.instructions ?? "") {
+            return "\(Remote.logName(card.name, or: "This card"))'s instructions are too long to save as a role from a device. The most is \(Remote.textLimit) characters. Save it on your Mac."
+        }
         guard let mode = card.permissionMode, !mode.isEmpty, !Card.permissionModes.contains(mode) else { return nil }
         return "A role can't skip permission checks. Give \(Remote.logName(card.name, or: "the card")) one of these permissions first: \(Card.permissionModes.joined(separator: ", "))."
     }
@@ -603,7 +625,8 @@ enum RemoteCommands {
     private static func deleteRole(_ roleID: String, by name: String, deviceID: String) -> String? {
         let services = AppServices.shared
         guard let role = services.roles.first(where: { $0.id == roleID }) else { return roleGone }
-        services.deleteRole(roleID)
+        // Kept on the Mac for 30 days, where the role menu can put it back.
+        services.deleteRole(roleID, fromDevice: name)
         // A role belongs to no flow, so it is said where the person at the Mac will see it.
         if let shown = services.current ?? services.allFlows.first {
             note(.deleteRole, "deleted the role \(Remote.logName(role.name, or: "with no name"))", in: shown, by: deviceID, called: name)
@@ -726,7 +749,7 @@ enum RemoteCommands {
     private enum Kind: String {
         case addCard, move, resize, delete, link, linkLimit, duplicate, tidy, group, ungroup, renameGroup, foldGroup
         case settings, flowSettings, renameFlow, deleteFlow, undo, redo
-        case banner, revert, scheduleOn, scheduleOff, paste, subflow, pin, saveRole, updateRole, deleteRole
+        case revert, paste, subflow, pin, saveRole, updateRole, deleteRole
         case clearBrowser, installBrowser, restartBrowser
 
         /// What the device did, said of any number of them.
@@ -750,10 +773,7 @@ enum RemoteCommands {
             case .deleteFlow: "deleted a flow"
             case .undo: "chose Undo"
             case .redo: "chose Redo"
-            case .banner: "closed the message at the top of the flow"
             case .revert: "put an agent's settings back"
-            case .scheduleOn: "turned a schedule on"
-            case .scheduleOff: "turned a schedule off"
             case .paste: "pasted cards"
             case .subflow: "made a sub-flow"
             case .pin: "pinned or unpinned this flow"

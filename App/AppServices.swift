@@ -36,10 +36,17 @@ final class AppServices {
     /// Saved agent roles, shared by every flow.
     private(set) var roles: [AgentRole] = []
     private var rolesURL: URL { supportDirectory.appendingPathComponent("roles.json") }
+    /// Roles a paired device deleted in the last `deletedRolesKept`, newest last, which the role menu can put back.
+    private(set) var deletedRoles: [DeletedRole] = []
+    private var deletedRolesURL: URL { supportDirectory.appendingPathComponent("roles-deleted.json") }
+    static let deletedRolesKept: TimeInterval = 30 * 24 * 60 * 60
 
     private func loadRoles() {
-        guard let data = try? Data(contentsOf: rolesURL), let saved = try? JSONDecoder().decode([AgentRole].self, from: data) else { return }
-        roles = saved
+        if let data = try? Data(contentsOf: rolesURL), let saved = try? JSONDecoder().decode([AgentRole].self, from: data) { roles = saved }
+        if let data = try? Data(contentsOf: deletedRolesURL), let kept = try? JSONDecoder().decode([DeletedRole].self, from: data) {
+            deletedRoles = kept
+            pruneDeletedRoles()
+        }
     }
 
     private func saveRoles() {
@@ -47,9 +54,28 @@ final class AppServices {
         try? data.write(to: rolesURL, options: .atomic)
     }
 
-    /// Saves a role, replacing the one with the same id, or with the same name when it is new.
+    private func saveDeletedRoles() {
+        guard let data = try? JSONEncoder().encode(deletedRoles) else { return }
+        try? data.write(to: deletedRolesURL, options: .atomic)
+    }
+
+    private func pruneDeletedRoles(now: Date = Date()) {
+        let before = deletedRoles.count
+        deletedRoles.removeAll { now.timeIntervalSince($0.date) > Self.deletedRolesKept }
+        if deletedRoles.count != before { saveDeletedRoles() }
+    }
+
+    /// Saves a role from this Mac, replacing the one with the same id, or with the same name when it is new. The
+    /// person saved it here, so a mark from a device, and what the role held before the device changed it, go.
     @discardableResult
     func save(_ role: AgentRole) -> AgentRole {
+        var role = role
+        role.changedFrom = nil
+        role.earlier = nil
+        return store(role)
+    }
+
+    private func store(_ role: AgentRole) -> AgentRole {
         var role = role
         if let index = roles.firstIndex(where: { $0.id == role.id }) {
             roles[index] = role
@@ -63,10 +89,96 @@ final class AppServices {
         return role
     }
 
+    /// Saves a role a paired device saved or changed: marked with the device's name, and with what it held before
+    /// kept, so the person at the Mac is asked before using it and can put it back.
+    @discardableResult
+    func save(_ role: AgentRole, fromDevice device: String) -> AgentRole {
+        var role = role
+        let old = roles.first { $0.id == role.id }
+        // The first version a device changed is the one to put back, however many times it changes it after.
+        role.earlier = old.map { $0.changedFrom == nil ? $0.settings : ($0.earlier ?? $0.settings) }
+        role.changedFrom = RoleMark(device: device, date: Date())
+        return store(role)
+    }
+
     func deleteRole(_ id: String) {
         roles.removeAll { $0.id == id }
         saveRoles()
     }
+
+    /// A role a device deleted goes to the list of recently deleted ones, for 30 days.
+    func deleteRole(_ id: String, fromDevice device: String) {
+        guard let role = roles.first(where: { $0.id == id }) else { return }
+        deletedRoles.removeAll { $0.role.id == id }
+        deletedRoles.append(DeletedRole(role: role, device: device, date: Date()))
+        pruneDeletedRoles()
+        saveDeletedRoles()
+        deleteRole(id)
+    }
+
+    /// Puts back a role a device deleted. If another role has its name now, it comes back with "(restored)" after it.
+    @discardableResult
+    func restoreRole(_ id: String) -> AgentRole? {
+        guard let index = deletedRoles.firstIndex(where: { $0.role.id == id }) else { return nil }
+        var role = deletedRoles.remove(at: index).role
+        saveDeletedRoles()
+        if roles.contains(where: { $0.name.caseInsensitiveCompare(role.name) == .orderedSame }) { role.name += " (restored)" }
+        if roles.contains(where: { $0.id == role.id }) { role.id = Flow.newID() }
+        roles.append(role)
+        saveRoles()
+        return role
+    }
+
+    /// Puts a role back to what it held before a device changed it. The mark goes with it.
+    func putBackEarlierVersion(of id: String) {
+        guard let index = roles.firstIndex(where: { $0.id == id }), let earlier = roles[index].earlier else { return }
+        roles[index].settings = earlier
+        roles[index].earlier = nil
+        roles[index].changedFrom = nil
+        saveRoles()
+    }
+
+    /// Whether the person at this Mac agrees to use a role a device saved or changed. Asked once: agreed to, the
+    /// mark goes. A role with no mark is used without asking. A test copy is given its answer by the test.
+    func agreesToUse(_ role: AgentRole) -> Bool {
+        guard let mark = roles.first(where: { $0.id == role.id })?.changedFrom else { return true }
+        let agreed: Bool
+        #if DEBUG
+        if let answer = testRoleAnswer {
+            testRoleAsked.append(role.id)
+            agreed = answer
+        } else {
+            agreed = Self.askToUse(role, mark: mark)
+        }
+        #else
+        agreed = Self.askToUse(role, mark: mark)
+        #endif
+        guard agreed, let index = roles.firstIndex(where: { $0.id == role.id }) else { return agreed }
+        roles[index].changedFrom = nil
+        saveRoles()
+        return true
+    }
+
+    private static func askToUse(_ role: AgentRole, mark: RoleMark) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "This role was changed from \(mark.device). Use it?"
+        let settings = [role.model.isEmpty ? "Model: your default" : "Model: \(role.model)",
+                        role.effort.isEmpty ? "Effort: your default" : "Effort: \(role.effort)",
+                        role.permissionMode.isEmpty ? "Permissions: your default" : "Permissions: \(role.permissionMode)"].joined(separator: "\n")
+        let instructions = role.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.informativeText = "\(role.name) was saved or changed from \(mark.device) on \(mark.date.formatted(date: .abbreviated, time: .shortened)). "
+            + "It gives an agent these settings:\n\n\(settings)\n\nInstructions:\n\(instructions.isEmpty ? "None" : String(instructions.prefix(1_500)))"
+            + (instructions.count > 1_500 ? "…" : "")
+        alert.addButton(withTitle: "Use It")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    #if DEBUG
+    /// The answer a test gives in place of the person, and the roles it was asked about.
+    @ObservationIgnored var testRoleAnswer: Bool?
+    @ObservationIgnored var testRoleAsked: [String] = []
+    #endif
 
     /// The way into the flow on screen: the flow it was opened from, and that one's, back to
     /// the first. One entry when the flow was picked directly.

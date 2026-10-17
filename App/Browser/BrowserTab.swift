@@ -49,6 +49,15 @@ final class BrowserTab: BrowserToolHost {
     private var isClosed = false
     /// How many of the agent's own clicks, keys and page opens are under way.
     private var agentActions = 0
+    /// A world of the app's own in the page's main frame, where Copy asks what is selected: the page's own
+    /// scripts can't reach it, so nothing the page did to itself can answer for it. Made again for each new page.
+    private var copyWorld: (frame: String, context: Int)?
+    /// The history is asked for at most four times a second, however fast a page changes its own address.
+    private var historyCheck: Task<Void, Never>?
+    private var lastHistoryRead = Date.distantPast
+    /// Waits a moment before the page stops being drawn, so a device that takes a card off its screen and puts it
+    /// straight back doesn't stop and start it.
+    private var stopping: Task<Void, Never>?
 
     /// A new picture of the page.
     var onFrame: ((CGImage) -> Void)?
@@ -111,6 +120,7 @@ final class BrowserTab: BrowserToolHost {
 
     /// The tab is gone from the browser, because the browser stopped or the tab was closed.
     func detached(forgettingPage: Bool = false) {
+        copyWorld = nil
         attaching?.cancel()
         attaching = nil
         connection = nil
@@ -159,6 +169,7 @@ final class BrowserTab: BrowserToolHost {
         case "Page.frameNavigated":
             guard let frame = params["frame"], frame["parentId"] == nil else { return }
             mainFrame = frame["id"]?.stringValue
+            copyWorld = nil
             setAddress(frame["url"]?.stringValue ?? "")
             // A new page has new parts: the old numbers point at nothing.
             refs = [:]
@@ -205,7 +216,20 @@ final class BrowserTab: BrowserToolHost {
         if address.hasPrefix("http://") || address.hasPrefix("https://") { lastAddress = address }
         addressProblem = nil
         changed()
-        Task { await readHistory() }
+        readHistorySoon()
+    }
+
+    /// Asks for the history now, or as soon as a quarter of a second has passed since it was last asked for. A page
+    /// can change its own address many times a second, and each time would be one more question for the browser.
+    private func readHistorySoon() {
+        guard historyCheck == nil else { return }
+        let wait = max(0, 0.25 - Date().timeIntervalSince(lastHistoryRead))
+        historyCheck = Task {
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            historyCheck = nil
+            lastHistoryRead = Date()
+            await readHistory()
+        }
     }
 
     /// Whether Back and Forward have anywhere to go, asked of the browser after each change of page.
@@ -256,12 +280,22 @@ final class BrowserTab: BrowserToolHost {
     /// Streams the page while the Mac's card or any device is showing it, and stops when none is.
     private func streamingChanged() {
         let on = !isClosed && (paneWantsStream || !watchers.isEmpty)
+        if on { stopping?.cancel(); stopping = nil }
         guard on != wantsStream else { return }
         wantsStream = on
         if on {
             if isAttached { startStream() } else if hostState != .missing, !isClosed { Task { _ = try? await session() } }
-        } else {
+        } else if isClosed {
             stopStream()
+        } else {
+            // Nobody is looking now. The page goes on being drawn for a moment, in case a device that let go of the
+            // card, or the Mac's own card scrolled out of view, comes straight back.
+            stopping = Task {
+                try? await Task.sleep(for: .seconds(Remote.streamLinger))
+                guard !Task.isCancelled, !wantsStream else { return }
+                stopping = nil
+                stopStream()
+            }
         }
     }
 
@@ -387,9 +421,46 @@ final class BrowserTab: BrowserToolHost {
         }
     }
 
-    /// What is selected on the page, for Copy.
-    func selectedText() async -> String {
-        (try? await evaluate("window.getSelection().toString()"))?.stringValue ?? ""
+    /// What is selected on the page, for a device's Copy, or nil when the page didn't say within `seconds`.
+    ///
+    /// Asked in a world of the app's own in the page's main frame. That world shares the page but none of its
+    /// scripts, so a page that has replaced `getSelection` with something of its own isn't asked. A page busy with
+    /// a script of its own can't answer at all, and is given up on.
+    func selectedText(within seconds: TimeInterval) async -> String? {
+        let deadline = Date().addingTimeInterval(seconds)
+        func left() -> TimeInterval { max(0.05, deadline.timeIntervalSinceNow) }
+        guard let (connection, session) = try? await session() else { return nil }
+        for attempt in 0..<2 {
+            do {
+                let context = try await copyContext(connection, session, timeout: left())
+                let reply = try await connection.send("Runtime.evaluate", [
+                    "expression": "getSelection().toString()", "contextId": .number(Double(context)), "returnByValue": true,
+                    "timeout": .number((left() * 1000).rounded(.down)),
+                ], session: session, timeout: left())
+                guard reply["exceptionDetails"] == nil else { throw BrowserError("The page couldn't be read just now") }
+                return reply["result"]?["value"]?.stringValue ?? ""
+            } catch {
+                // The world goes with the page it was made in. Made once more, if there is time.
+                copyWorld = nil
+                if attempt == 1 || Date() >= deadline { return nil }
+            }
+        }
+        return nil
+    }
+
+    private func copyContext(_ connection: CDPConnection, _ session: String, timeout: TimeInterval) async throws -> Int {
+        var frame = mainFrame
+        if frame == nil {
+            let tree = try await connection.send("Page.getFrameTree", session: session, timeout: timeout)
+            frame = tree["frameTree"]?["frame"]?["id"]?.stringValue
+        }
+        guard let frame else { throw BrowserError("The page has no frame") }
+        if let copyWorld, copyWorld.frame == frame { return copyWorld.context }
+        let made = try await connection.send("Page.createIsolatedWorld", ["frameId": .string(frame), "worldName": "Queen Bee copy"],
+                                             session: session, timeout: timeout)
+        guard let context = made["executionContextId"]?.intValue else { throw BrowserError("The page didn't make a world") }
+        copyWorld = (frame, context)
+        return context
     }
 
     func reload() {
