@@ -48,10 +48,14 @@ struct CanvasFoot: View {
                 HStack(alignment: .bottom, spacing: Theme.Space.m) {
                     ConnectionBar(showSettings: showSettings)
                     Spacer(minLength: 0)
+                    CanvasMore()
                     RunBar(abilities: abilities)
                 }
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    RunBar(abilities: abilities)
+                    HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                        RunBar(abilities: abilities)
+                        CanvasMore()
+                    }
                     ConnectionBar(showSettings: showSettings)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -98,16 +102,30 @@ struct RunBar: View {
                         .padding(.leading, Theme.Space.s)
                 }
                 ForEach(abilities.bar) { button in
-                    Button { client.press(button.press) } label: {
-                        switch button.press {
-                        case .run: Label(button.title, systemImage: "play.fill")
-                        case .stop: Label(button.title, systemImage: "stop.fill")
-                        default: Text(button.title)
+                    if button.press == .run, !abilities.runMenu.isEmpty {
+                        // Several Start cards: the Mac's Run has a menu of them, "Run from X".
+                        Menu {
+                            ForEach(abilities.runMenu) { start in
+                                Button(start.title) { client.press(start.press) }.disabled(!start.isEnabled)
+                            }
+                        } label: {
+                            Label(button.title, systemImage: "play.fill")
                         }
+                        .buttonStyle(.panel(.run))
+                        .disabled(!button.isEnabled && abilities.runMenu.allSatisfy { !$0.isEnabled })
+                        .accessibilityHint("This flow has \(abilities.runMenu.count) Start cards. Lists them, to run the flow on your Mac from one.")
+                    } else {
+                        Button { client.press(button.press) } label: {
+                            switch button.press {
+                            case .run: Label(button.title, systemImage: "play.fill")
+                            case .stop: Label(button.title, systemImage: "stop.fill")
+                            default: Text(button.title)
+                            }
+                        }
+                        .buttonStyle(.panel(button.press == .run ? .run : button.press == .stop ? .stop : .outline))
+                        .disabled(!button.isEnabled)
+                        .accessibilityHint(button.hint)
                     }
-                    .buttonStyle(.panel(button.press == .run ? .run : button.press == .stop ? .stop : .outline))
-                    .disabled(!button.isEnabled)
-                    .accessibilityHint(button.hint)
                 }
             }
             .padding(Theme.Space.xs)
@@ -202,8 +220,18 @@ struct HoldAnswer: View {
     }
 }
 
-/// What can be done to the selected card from here: start or restart its agent, and start a run at it.
+/// What can be done to the selected card from here: start or restart its agent, put its settings back or restart it
+/// to apply them, run the flow from a Start card, and start a run at it.
 struct CardActions: View {
+    /// The buttons a card's details have at their foot, besides "Run from here…".
+    static func buttons(for card: Card, in abilities: Abilities) -> [PressButton] {
+        switch card.kind {
+        case .agent: abilities.details[card.id] ?? []
+        case .start: [abilities.starts[card.id]].compactMap { $0 }
+        default: []
+        }
+    }
+
     @Environment(RemoteClient.self) private var client
     let card: Card
     let buttons: [PressButton]
@@ -417,13 +445,14 @@ private struct AsksBeforeActing: ViewModifier {
                 switch ask {
                 case .reject(_, let name, let from, let text): RejectSheet(ask: ask, name: name, from: from, text: text)
                 case .allow(_, let name, let command): AllowSheet(ask: ask, name: name, command: command)
-                case .stop, .restart: EmptyView()
+                case .stop, .restart, .restartOrchestrator: EmptyView()
                 }
             }
             .alert(alertTitle, isPresented: Binding { alert.wrappedValue != nil } set: { if !$0 { alert.wrappedValue = nil } },
                    presenting: alert.wrappedValue) { ask in
                 switch ask {
                 case .stop: Button("Stop", role: .destructive) { client.confirm(ask) }
+                case .restartOrchestrator: Button("Restart") { client.confirm(ask) }
                 default: Button("Restart agent") { client.confirm(ask) }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -432,6 +461,8 @@ private struct AsksBeforeActing: ViewModifier {
                 case .stop: Text("The run on your Mac stops where it is.")
                 case .restart(_, _, let isWorking):
                     Text(isWorking ? "Restarting interrupts what the agent is doing now. It keeps its conversation so far." : "The agent keeps its conversation so far.")
+                case .restartOrchestrator(let isWorking):
+                    Text(isWorking ? "Restarting interrupts what the orchestrator is doing now. It keeps its conversation so far." : "The orchestrator keeps its conversation so far.")
                 default: Text("")
                 }
             }
@@ -444,6 +475,7 @@ private struct AsksBeforeActing: ViewModifier {
     private var alertTitle: String {
         switch client.controls.asking {
         case .restart(_, let name, _): "Restart \(name)?"
+        case .restartOrchestrator: "Restart the orchestrator?"
         default: "Stop the run?"
         }
     }
@@ -452,12 +484,13 @@ private struct AsksBeforeActing: ViewModifier {
 extension Abilities {
     /// Whether what a question is about can still be done.
     func stillOffers(_ ask: Ask) -> Bool {
-        let presses = (bar + cards.values.joined() + details.values.joined()).map(\.press)
+        let presses = (bar + cards.values.joined() + details.values.joined() + [orchestrator].compactMap { $0 }).map(\.press)
         return switch ask {
         case .stop: presses.contains(.stop)
         case .restart(let cardID, _, _): presses.contains(.startAgent(cardID: cardID))
         case .allow(let holdID, _, _): presses.contains(.allow(holdID: holdID))
         case .reject(let holdID, _, _, _): presses.contains(.reject(holdID: holdID))
+        case .restartOrchestrator: presses.contains(.startOrchestrator)
         }
     }
 }

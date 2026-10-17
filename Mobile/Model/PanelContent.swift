@@ -42,8 +42,8 @@ nonisolated struct RunOnShow: Equatable {
     var marks: [String: RunMark]
     /// Messages waiting at cards. An earlier run is over, so it has none.
     var holds: [PendingHold]
-    /// What each card used in this run, by card id. Nil while a run is going and for a moment after it ends:
-    /// the Mac works a run's share out once the run is over.
+    /// What each card used in this run, by card id. While a run is going, what it has used so far, when the Mac
+    /// says. Nil for a moment after it ends: the Mac works a run's share out once the run is over.
     var usage: [String: Usage]?
 
     /// The Mac's `shownLog`, `view(run:)` and `runUsage(forCard:)`.
@@ -56,7 +56,7 @@ nonisolated struct RunOnShow: Equatable {
         messages = viewed?.messages ?? snapshot.messages
         marks = viewed?.marks ?? run.marks
         holds = viewed == nil ? run.holds : []
-        usage = isRunning ? nil : (viewed ?? snapshot.runs.last)?.usage
+        usage = isRunning ? (run.runUsage.isEmpty ? nil : run.runUsage) : (viewed ?? snapshot.runs.last)?.usage
     }
 }
 
@@ -109,6 +109,8 @@ nonisolated struct DetailItem: Equatable {
         case waiting
         /// The run stopped at the card.
         case stopped
+        /// Settings an agent's running session doesn't have yet, as the Mac's "Not in use yet" line says.
+        case pending
     }
 
     var style: Style
@@ -136,7 +138,7 @@ nonisolated struct Details: Equatable {
 
     static let changes = "Changes are made on your Mac for now."
 
-    init?(selection: CanvasModel.Selection, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary]) {
+    init?(selection: CanvasModel.Selection, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary], roles: [RemoteRole] = []) {
         let flow = snapshot.flow
         switch selection {
         case .none, .cards:
@@ -144,7 +146,7 @@ nonisolated struct Details: Equatable {
             return nil
         case .card(let id):
             guard let card = flow.card(id) else { return nil }
-            self.init(card: card, snapshot: snapshot, run: run, siblings: siblings)
+            self.init(card: card, snapshot: snapshot, run: run, siblings: siblings, roles: roles)
         case .link(let id):
             guard let link = flow.links.first(where: { $0.id == id }) else { return nil }
             self.init(link: link, flow: flow, run: run)
@@ -154,7 +156,7 @@ nonisolated struct Details: Equatable {
         }
     }
 
-    init(card: Card, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary]) {
+    init(card: Card, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary], roles: [RemoteRole] = []) {
         let flow = snapshot.flow
         icon = CanvasGeometry.icon(for: card.kind)
         title = card.name
@@ -170,6 +172,10 @@ nonisolated struct Details: Equatable {
         case .agent:
             state = run.earlier == nil ? snapshot.run.sessions[card.id] ?? .notStarted : nil
             add(.text, "Instructions", said(card.instructions))
+            if let id = card.role, !id.isEmpty, let role = roles.first(where: { $0.id == id }) {
+                add(.row, "Role", role.name)
+                if !role.matches(card) { add(.note, EditForm.roleDrift) }
+            }
             let model = card.model ?? ""
             add(.row, "Model", model.isEmpty ? "Your default" : ["fable", "opus", "sonnet", "haiku"].contains(model) ? model.capitalized : model)
             add(.row, "Effort", (card.effort ?? "").isEmpty ? "Model default" : card.effort ?? "")
@@ -179,7 +185,12 @@ nonisolated struct Details: Equatable {
             }
             let modes = ["": "Your default", "manual": "Manual", "acceptEdits": "Accept edits", "plan": "Plan", "auto": "Auto"]
             add(.row, "Permissions", modes[card.permissionMode ?? ""] ?? card.permissionMode ?? "")
+            add(.row, "Browser", card.browser == true ? "On" : "Off")
             if let folder = card.cwd, !folder.isEmpty { add(.row, "Folder", folder) }
+            // What the session on the Mac is still going by, which the Mac says beside Restart to apply.
+            if let state, state != .notStarted, state != .exited, let names = snapshot.run.awaitingRestart[card.id], !names.isEmpty {
+                add(.pending, EditForm.notInUseYet(names))
+            }
             if state == .needsYou {
                 add(.waiting, "Waiting for you in its terminal.")
                 answerLine = true
@@ -189,7 +200,7 @@ nonisolated struct Details: Equatable {
             if flow.isSubflow == true {
                 add(.note, "This is a sub-flow. When a Flow card runs it, the message that card was given is used in place of the text above. The text above is for trying the sub-flow by itself.")
             }
-            Self.schedule(card.trigger).forEach { items.append($0) }
+            Self.schedule(card.trigger, isOn: snapshot.edit.armed.contains(card.id), next: snapshot.edit.nextFires[card.id]).forEach { items.append($0) }
         case .ifElse:
             Self.condition(card).forEach { items.append($0) }
         case .loop:
@@ -291,7 +302,7 @@ nonisolated struct Details: Equatable {
     }
 
     /// What starts runs from a Start card besides the Run button.
-    private static func schedule(_ trigger: Trigger?) -> [DetailItem] {
+    private static func schedule(_ trigger: Trigger?, isOn: Bool, next: Date?) -> [DetailItem] {
         guard let trigger else { return [DetailItem(style: .row, label: "Runs", value: "When you press Run")] }
         let clock = String(format: "%02d:%02d", min(max(trigger.hour, 0), 23), min(max(trigger.minute, 0), 59))
         var items: [DetailItem] = []
@@ -313,8 +324,9 @@ nonisolated struct Details: Equatable {
             items.append(DetailItem(style: .row, label: "Runs", value: "When a file changes"))
             items.append(DetailItem(style: .row, label: "File or folder in the project", value: path.isEmpty ? "No file chosen" : path))
         }
-        // Whether it is on just now is said where it can be changed: see `EditForm`.
-        items.append(DetailItem(style: .note, label: "A schedule only runs once it has been turned on on your Mac, and Queen Bee has to be open there."))
+        items.append(DetailItem(style: .note, label: isOn
+            ? "This schedule is on. \(next.map { "Next: \(Clock.run($0)). " } ?? "")Queen Bee has to be open on your Mac for it to run."
+            : "This schedule is switched off. It only runs once it is turned on."))
         return items
     }
 }
@@ -372,11 +384,34 @@ nonisolated struct CostSheet: Equatable {
     var runTotal: Usage?
     /// Why there is no figure for the run, when there isn't.
     var runPending: String?
+    /// The run's figure is what it has used so far: it is still going.
+    var runSoFar = false
+    /// The sub-flows below this flow, each with what its own sessions used and how far down it is. Empty when there are none.
+    var subflows: [Subflow] = []
+    /// What this flow and every sub-flow below it have used, as the Mac's cost pill counts it.
+    var withSubflows: Usage?
+    /// The flow above, when this is one of its sub-flows: "Part of X", and what that flow has used with all of its own.
+    var outer: (id: String, name: String, usage: Usage)?
+
+    struct Subflow: Equatable, Identifiable {
+        var id: String
+        var name: String
+        var depth: Int
+        var usage: Usage
+        var share: Double
+    }
+
+    static func == (a: CostSheet, b: CostSheet) -> Bool {
+        a.total == b.total && a.sessions == b.sessions && a.runTitle == b.runTitle && a.runLines == b.runLines && a.runTotal == b.runTotal
+            && a.runPending == b.runPending && a.runSoFar == b.runSoFar && a.subflows == b.subflows && a.withSubflows == b.withSubflows
+            && a.outer?.id == b.outer?.id && a.outer?.usage == b.outer?.usage
+    }
 
     static let orchestratorKey = "orchestrator"
     static let explanation = "An estimate of what this work would cost if you paid Anthropic by usage. On a Claude subscription you don't pay this, so read it as a measure of how much the flow uses. It updates each time an agent finishes a reply. A run's figure covers the agents and sub-flows it used, not the orchestrator."
 
-    init(_ snapshot: RemoteFlowSnapshot, run: RunOnShow) {
+    /// - Parameter flows: the project's flows as the Mac lists them, for the sub-flows below this one and the flow above.
+    init(_ snapshot: RemoteFlowSnapshot, run: RunOnShow, flows: [RemoteFlowSummary] = []) {
         let flow = snapshot.flow, used = snapshot.run.usage
         total = used.values.reduce(Usage(), +)
         let whole = max(total.cost, 0.000001)
@@ -404,12 +439,29 @@ nonisolated struct CostSheet: Equatable {
             if !gone.isZero { lines.append(Line(id: "", name: "Cards since deleted", icon: "trash", usage: gone, share: gone.cost / most)) }
             runLines = lines
             runTotal = all
+            runSoFar = run.isRunning
         } else if run.isRunning {
             runPending = "This run's figure appears a moment after it ends."
         } else if run.earlier != nil || !snapshot.runs.isEmpty {
             runPending = "There is no figure for this run."
         } else {
             runPending = "No run yet."
+        }
+        // The Mac's breakdown has the sub-flows below this one, each under the flow that runs it.
+        let listed = flows.first { $0.id == flow.id }
+        withSubflows = listed?.usageWithSubflows
+        var below: [Subflow] = []
+        func add(under parent: String, depth: Int) {
+            for child in flows where child.parentID == parent && !below.contains(where: { $0.id == child.id }) {
+                below.append(Subflow(id: child.id, name: child.name, depth: depth, usage: child.usage ?? Usage(), share: 0))
+                add(under: child.id, depth: depth + 1)
+            }
+        }
+        add(under: flow.id, depth: 0)
+        let all = max((withSubflows ?? total).cost, 0.000001)
+        subflows = below.map { var line = $0; line.share = line.usage.cost / all; return line }
+        if let parent = listed?.parentID, let above = flows.first(where: { $0.id == parent }) {
+            outer = (above.id, above.name, above.usageWithSubflows ?? above.usage ?? Usage())
         }
     }
 }

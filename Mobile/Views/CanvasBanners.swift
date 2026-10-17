@@ -1,14 +1,17 @@
 import QueenBeeCore
 import SwiftUI
 
-/// What floats over the top of the canvas when there is something to say about the flow as a whole: which
-/// cards are waiting on the person, and that an earlier run is on show. Nothing is there when neither is true.
+/// What floats over the top of the canvas when there is something to say about the flow as a whole: the way back
+/// out of a sub-flow, the Mac's message when something didn't work, which cards are waiting on the person, that an
+/// earlier run is on show, and the note an empty flow shows. Nothing is there when none of them is.
 struct CanvasBanners: View {
     @Environment(RemoteClient.self) private var client
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let snapshot = client.mirror.snapshot {
+                if let parent = client.parentOfOpenFlow { BackToParent(parent: parent) }
+                if let banner = snapshot.run.banner, client.canvas.viewedRun == nil { FailureBanner(text: banner) }
                 let waiting = WaitingCard.all(in: snapshot)
                 if !waiting.isEmpty { NeedsYouBanner(waiting: waiting) }
                 if let run = client.canvas.viewedRun {
@@ -16,6 +19,7 @@ struct CanvasBanners: View {
                         .padding(.horizontal, Theme.Space.m)
                         .floatingPanel()
                 }
+                if let callout = client.callout { CalloutView(callout: callout) }
             }
         }
         .frame(maxWidth: 380, alignment: .leading)

@@ -15,8 +15,16 @@ nonisolated enum Press: Hashable, Sendable {
     /// Lets a script's command run.
     case allow(holdID: String)
     case dontRun(holdID: String)
-    /// An agent card's "Start agent" or "Restart agent".
+    /// An agent card's "Start agent", "Restart agent" or "Restart to apply".
     case startAgent(cardID: String)
+    /// A Start card's "Run from This Start", and "Run from X" in the run bar's list of Start cards.
+    case runFromStart(cardID: String)
+    /// The Retry beside "The run stopped here.": the card is given the message it was given, again.
+    case retry(cardID: String)
+    /// The Undo beside "Restart to apply": the agent's settings go back to what its session is using.
+    case revert(cardID: String)
+    /// The orchestrator panel's Start, Restart or "Restart to apply".
+    case startOrchestrator
 
     /// The command this press sends. `note` is what the person said when rejecting.
     func command(flowID: String, note: String = "") -> RemoteCommand {
@@ -29,6 +37,10 @@ nonisolated enum Press: Hashable, Sendable {
         case .allow(let holdID): .allowScript(flowID: flowID, holdID: holdID)
         case .dontRun(let holdID): .refuseScript(flowID: flowID, holdID: holdID)
         case .startAgent(let cardID): .startSession(flowID: flowID, cardID: cardID)
+        case .runFromStart(let cardID): .runFromStart(flowID: flowID, startCardID: cardID)
+        case .retry(let cardID): .retry(flowID: flowID, cardID: cardID)
+        case .revert(let cardID): .revertSettings(flowID: flowID, cardID: cardID)
+        case .startOrchestrator: .startSession(flowID: flowID, cardID: Remote.orchestratorKey)
         }
     }
 
@@ -37,7 +49,12 @@ nonisolated enum Press: Hashable, Sendable {
     func isBusy(among waiting: [RemoteCommand]) -> Bool {
         waiting.contains { sent in
             switch (self, sent) {
-            case (.run, .run), (.run, .runFrom), (.stop, .stop), (.startAgents, .openOnMac): true
+            // Only one run can start, whichever button starts it.
+            case (.run, .run), (.run, .runFrom), (.run, .runFromStart), (.run, .retry), (.runFromStart, .run), (.runFromStart, .runFromStart),
+                 (.runFromStart, .runFrom), (.runFromStart, .retry), (.retry, .run), (.retry, .runFromStart), (.retry, .retry), (.retry, .runFrom),
+                 (.stop, .stop), (.startAgents, .openOnMac): true
+            case (.revert(let id), .revertSettings(_, let other)): id == other
+            case (.startOrchestrator, .startSession(_, let other)): other == Remote.orchestratorKey
             case (.approve(let id, _), .approve(_, let other, _)), (.approve(let id, _), .reject(_, let other, _)),
                  (.reject(let id), .approve(_, let other, _)), (.reject(let id), .reject(_, let other, _)),
                  (.allow(let id), .allowScript(_, let other)), (.allow(let id), .refuseScript(_, let other)),
@@ -90,6 +107,14 @@ nonisolated struct Abilities: Equatable {
     var inTerminal: Set<String> = []
     /// What typing into each session comes to, by the session's key. See `Typing`.
     var typing: [String: Typing] = [:]
+    /// The run bar's list of Start cards, "Run from X", when the flow has more than one. Empty otherwise.
+    var runMenu: [PressButton] = []
+    /// "Run from This Start" on each Start card, by card id, while no run is going.
+    var starts: [String: PressButton] = [:]
+    /// Retry, on each card the last run stopped at with a message to give it again, by card id.
+    var retry: [String: PressButton] = [:]
+    /// The orchestrator panel's own button: Start, Restart, or "Restart to apply". Nil when this device may not press it.
+    var orchestrator: PressButton?
 
     static let howToTurnOn = "This device can only watch. To run and answer from here, turn on “Can control” for it on your Mac: Settings, then Remote."
     static let nothingToRun = "Nothing to run yet. On your Mac, give the Start card something to start with and link it to a card."
@@ -120,12 +145,25 @@ nonisolated struct Abilities: Equatable {
             PressButton(title: title, press: press, isMain: main, isEnabled: !press.isBusy(among: waiting), hint: hint)
         }
 
+        // The Mac's `canRun`, for one Start card: something to start with and something linked from it.
+        func canStart(_ card: Card) -> Bool {
+            card.kind == .start && !(card.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !flow.links(from: card.id).isEmpty
+        }
         if run.isRunning {
             bar = [button("Stop", .stop, hint: "Stops the run on your Mac.")]
         } else {
-            // The Mac's `canRun`: a Start card with something to start with and something linked from it.
-            let canRun = flow.cards.contains { card in
-                card.kind == .start && !(card.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !flow.links(from: card.id).isEmpty
+            let canRun = flow.cards.contains(where: canStart)
+            let startCards = flow.cards.filter { $0.kind == .start }
+            for card in startCards {
+                var start = button("Run from This Start", .runFromStart(cardID: card.id), hint: "Runs the flow on your Mac from \(card.name).")
+                if !canStart(card) { start.isEnabled = false }
+                starts[card.id] = start
+            }
+            // The Mac's toolbar has a menu of them when there are several.
+            if startCards.count > 1 {
+                runMenu = startCards.compactMap { card in
+                    starts[card.id].map { PressButton(title: "Run from \(card.name)", press: $0.press, isEnabled: $0.isEnabled, hint: $0.hint) }
+                }
             }
             var runButton = button("Run", .run, main: true, hint: "Runs the flow on your Mac from its Start card.")
             if !canRun {
@@ -154,9 +192,29 @@ nonisolated struct Abilities: Equatable {
                                    hint: isLive ? "Restarts the agent on your Mac. It keeps its conversation so far." : "Starts the agent on your Mac.")
                 // The Mac's card has the button only while no session is running. A running one is restarted from its details.
                 if !isLive { cards[card.id] = [start] }
-                details[card.id] = [start]
+                // Settings changed since the session started, which it doesn't have yet: the Mac's "Undo" and "Restart to apply".
+                if isLive, !(run.awaitingRestart[card.id] ?? []).isEmpty {
+                    details[card.id] = [button("Undo", .revert(cardID: card.id), hint: "Puts these settings back to what the agent is using now."),
+                                        button("Restart to apply", .startAgent(cardID: card.id), main: true,
+                                               hint: "Restarts the agent on your Mac with these settings. It keeps its conversation so far.")]
+                } else {
+                    details[card.id] = [start]
+                }
+            }
+            if snapshot.canRetry(card.id) {
+                retry[card.id] = button("Retry", .retry(cardID: card.id), hint: "Gives this card the same message again and carries on from here.")
             }
             if !run.isRunning, acceptsInput(card) { runFrom.insert(card.id) }
+        }
+        // The orchestrator panel's button, as the Mac's panel has it.
+        let orchestratorState = run.sessions[Remote.orchestratorKey] ?? .notStarted
+        orchestrator = switch orchestratorState {
+        case .notStarted: button("Start", .startOrchestrator, hint: "Starts the session that runs this flow, on your Mac.")
+        case .exited: button("Restart", .startOrchestrator, hint: "Starts the session that runs this flow again. It keeps its conversation so far.")
+        default: run.orchestratorNeedsRestart
+            ? button("Restart to apply", .startOrchestrator, main: true,
+                     hint: "This flow was renamed or moved since the orchestrator started, and it still goes by the old details. It keeps its conversation so far.")
+            : button("Restart", .startOrchestrator, hint: "Restarts the orchestrator. It keeps its conversation so far.")
         }
         // A session that isn't running is offered its way of starting, beside the line that says so.
         for key in keys where typing[key]?.line == Typing.notRunning {
@@ -238,6 +296,8 @@ nonisolated enum Ask: Hashable, Identifiable, Sendable {
     case allow(holdID: String, name: String, command: String)
     /// A held message, to be turned down with a note saying why.
     case reject(holdID: String, name: String, from: String, text: String)
+    /// Restarting the orchestrator while its session is running. `isWorking` is whether it would be interrupted.
+    case restartOrchestrator(isWorking: Bool)
 
     var id: Self { self }
 
@@ -245,7 +305,7 @@ nonisolated enum Ask: Hashable, Identifiable, Sendable {
     var isSheet: Bool {
         switch self {
         case .allow, .reject: true
-        case .stop, .restart: false
+        case .stop, .restart, .restartOrchestrator: false
         }
     }
 }
@@ -397,7 +457,14 @@ extension RemoteClient {
             } else {
                 controls.ask(.restart(cardID: cardID, name: name(cardID), isWorking: state == .working || state == .needsYou), in: flowID)
             }
-        case .run, .startAgents, .approve, .dontRun:
+        case .startOrchestrator:
+            let state = snapshot.run.sessions[Remote.orchestratorKey] ?? .notStarted
+            if state == .notStarted || state == .exited {
+                Task { await perform(press, in: flowID) }
+            } else {
+                controls.ask(.restartOrchestrator(isWorking: state == .working || state == .needsYou), in: flowID)
+            }
+        case .run, .startAgents, .approve, .dontRun, .runFromStart, .retry, .revert:
             Task { await perform(press, in: flowID) }
         }
     }
@@ -413,6 +480,7 @@ extension RemoteClient {
         case .restart(let cardID, _, _): .startAgent(cardID: cardID)
         case .allow(let holdID, _, _): .allow(holdID: holdID)
         case .reject(let holdID, _, _, _): .reject(holdID: holdID)
+        case .restartOrchestrator: .startOrchestrator
         }
         Task { await perform(press, note: note, in: flowID) }
     }

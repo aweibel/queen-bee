@@ -57,7 +57,8 @@ struct EditDetails: View {
                     SettingField(field: field, label: label(for: field), placeholder: placeholder(for: field), order: order, focus: focus)
                 case .item(let item):
                     ItemView(item: item, answerLine: form.answerLine ? abilities.answerLine ?? WaitingCard.answer : nil,
-                             hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [], inTerminal: inTerminal)
+                             hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [], inTerminal: inTerminal,
+                             retry: card.flatMap { abilities.retry[$0.id] })
                 case .folder(let folder):
                     FolderRow(folder: folder)
                 case .open(let flowID, let name):
@@ -71,6 +72,12 @@ struct EditDetails: View {
                     }
                     .padding(.horizontal, Theme.Space.l)
                     .padding(.vertical, Theme.Space.s)
+                case .newSubflow(let cardID):
+                    NewSubflowRow(cardID: cardID)
+                case .roleDrift(let cardID):
+                    RoleDriftRow(cardID: cardID)
+                case .arm(let cardID, let isOn):
+                    ScheduleSwitch(cardID: cardID, isOn: isOn)
                 }
             }
             if let messages = form.messages {
@@ -78,7 +85,7 @@ struct EditDetails: View {
                 MessageList(title: form.messagesTitle, messages: messages)
             }
             if let card {
-                let start = card.kind == .agent ? abilities.details[card.id] ?? [] : []
+                let start = CardActions.buttons(for: card, in: abilities)
                 if !start.isEmpty || abilities.runFrom.contains(card.id) {
                     Hairline()
                     CardActions(card: card, buttons: start, canRunFrom: abilities.runFrom.contains(card.id),
@@ -217,6 +224,8 @@ struct SettingField: View {
                 block { TextBox(field: field, label: name, placeholder: placeholder ?? fallback, lines: 1...lines, order: order, focus: focus) }
             case .text(let fallback, let isMono):
                 block { TextBox(field: field, label: name, placeholder: placeholder ?? fallback, lines: 3...12, isMono: isMono, order: order, focus: focus) }
+            case .choice(let choices) where field.key.name == .role:
+                SettingRow(title: name) { RoleMenu(field: field, choices: choices) }
             case .choice(let choices):
                 SettingRow(title: name) {
                     ChoiceMenu(title: name, choices: choices, selection: client.shown(field).text) { picked in
@@ -614,7 +623,7 @@ private struct BranchesField: View {
 }
 
 /// What starts runs from a Start card besides the Run button: the Mac's `TriggerSettings`, with the same
-/// choices in the same order. A schedule set here is only what the card says. Turning it on is done at the Mac.
+/// choices in the same order. A schedule set here is only what the card says. Turning it on is a button of its own.
 private struct ScheduleField: View {
     @Environment(RemoteClient.self) private var client
     let field: EditField
@@ -820,6 +829,10 @@ struct FlowSettingsSheet: View {
                         Hairline()
                         help(EditForm.subflowText).padding(.top, Theme.Space.m)
                     }
+                    if let status = client.browserStatus {
+                        Hairline()
+                        BrowserSection(status: status)
+                    }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
             }
@@ -855,6 +868,64 @@ struct FlowSettingsSheet: View {
     }
 }
 
+/// The project's browser, which every agent card with a browser in the project shares: what it is doing, the
+/// Mac's Download, Restart or Try again when it offers one, and "Clear browser data", asked first.
+private struct BrowserSection: View {
+    @Environment(RemoteClient.self) private var client
+    let status: BrowserStatus
+    @State private var asksToClear = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Text("Browser for \(status.project)").dsSans(Theme.Touch.caption + 1).foregroundStyle(Theme.inkSecondary.ui).accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                Text(status.words)
+                    .dsSans()
+                    .foregroundStyle(Theme.ink.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let offer = status.offer {
+                    let command = client.browserCommand(offer.action)
+                    Button(offer.title) { Task { await client.browser(offer.action) } }
+                        .buttonStyle(.panel(.live))
+                        .fixedSize()
+                        .disabled(command.map(client.isSending) ?? true)
+                        .accessibilityHint(offer.action == .download ? "Has your Mac download the browser it offers, about 150 MB." : "Starts the browser again on your Mac.")
+                }
+            }
+            if let refusal = client.settings.browserRefusal {
+                Label(refusal, systemImage: "exclamationmark.triangle")
+                    .dsSans(Theme.Touch.caption + 1, .medium)
+                    .foregroundStyle(Theme.failInk.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: Theme.Space.s) {
+                Text(BrowserStatus.clearText)
+                    .dsSans(Theme.Touch.caption + 1)
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if status.canClear {
+                    let command = client.browserCommand(.clear)
+                    Button("Clear browser data") { asksToClear = true }
+                        .buttonStyle(.panel())
+                        .fixedSize()
+                        .disabled(command.map(client.isSending) ?? true)
+                        .accessibilityHint("Asks first, then signs the agents' browser out of every site in this project.")
+                }
+            }
+        }
+        .padding(.horizontal, Theme.Space.l)
+        .padding(.vertical, Theme.Space.m)
+        .confirmationDialog("Clear the browser data of \(status.project)?", isPresented: $asksToClear, titleVisibility: .visible) {
+            Button("Clear browser data", role: .destructive) { Task { await client.browser(.clear) } }
+        } message: {
+            Text("The agents' browser is signed out of every site and forgets the pages it kept, for every flow in \(status.project). This can't be undone.")
+        }
+        .onDisappear { client.settings.browserRefusal = nil }
+    }
+}
+
 /// Asks a new flow's name, a flow's new name, and before a flow is deleted. And puts up the flow's settings.
 private struct AsksAboutFlows: ViewModifier {
     @Environment(RemoteClient.self) private var client
@@ -868,12 +939,16 @@ private struct AsksAboutFlows: ViewModifier {
     private var naming: FlowAsk? {
         switch client.settings.asking {
         case .new, .rename: isMine ? client.settings.asking : nil
-        case .delete, nil: nil
+        case .delete, .stopAgents, nil: nil
         }
     }
 
+    /// Deleting a flow and stopping its agents: a yes or a no, the yes in red.
     private var deleting: FlowAsk? {
-        if case .delete = client.settings.asking, isMine { client.settings.asking } else { nil }
+        switch client.settings.asking {
+        case .delete, .stopAgents: isMine ? client.settings.asking : nil
+        case .new, .rename, nil: nil
+        }
     }
 
     private func isAsking(_ ask: FlowAsk?) -> Binding<Bool> {
@@ -919,6 +994,7 @@ extension FlowAsk {
         case .new(_, let project): "New flow in \(project)"
         case .rename: "Rename Flow"
         case .delete(_, let name): "Delete “\(name)”?"
+        case .stopAgents(_, let name): "Stop the agents of “\(name)”?"
         case nil: ""
         }
     }
@@ -928,6 +1004,7 @@ extension FlowAsk {
         case .new: "Give it a name, or leave this empty and your Mac names it."
         case .rename: "The flow is renamed on your Mac."
         case .delete: "The flow is taken out of this project on your Mac and its agents are stopped. It goes to the Trash on your Mac."
+        case .stopAgents: "Every session of this flow ends on your Mac, the orchestrator's included, and so does a run that is going."
         }
     }
 
@@ -936,6 +1013,7 @@ extension FlowAsk {
         case .new: "Make Flow"
         case .rename: "Rename"
         case .delete: "Delete Flow"
+        case .stopAgents: "Stop Its Agents"
         }
     }
 

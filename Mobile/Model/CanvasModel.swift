@@ -55,6 +55,15 @@ final class CanvasModel {
 
     /// Kept for as long as the app runs, by flow id.
     @ObservationIgnored var viewports: [String: Viewport] = [:]
+    /// The map of the whole flow is on show in the canvas's corner, as the Mac's minimap is.
+    var showsMap = false
+    /// The part of the canvas on screen, in canvas points, for the map to outline. Kept up to date while the map is on show.
+    private(set) var visibleRect = CGRect.zero
+    /// The flows whose "Describe the flow you want" note has been put away on this device, as "Build it by hand" does.
+    var calloutPutAway: Set<String> = []
+    /// A card Find went to in a flow that wasn't open: its flow and its name. It is selected and put in the middle of
+    /// the canvas once that flow is on it.
+    @ObservationIgnored var wantedCard: (flowID: String, name: String)?
     /// The canvas on screen, when there is one.
     @ObservationIgnored weak var view: CanvasView?
     /// Gives the terminal for a session, by its key: a card's id. Nil until there are terminals to give.
@@ -96,6 +105,20 @@ final class CanvasModel {
     func noteZoom(_ new: CGFloat) {
         if abs(zoom - new) > 0.004 { zoom = new }
     }
+
+    /// Shows or hides the map, which outlines what is on screen from the moment it comes.
+    func setMap(_ on: Bool) {
+        showsMap = on
+        if on, let view { noteVisible(view.visible) }
+    }
+
+    func noteVisible(_ rect: CGRect) {
+        // A pan moves this by fractions of a point many times a second. The map only needs whole points.
+        if abs(rect.minX - visibleRect.minX) > 1 || abs(rect.minY - visibleRect.minY) > 1 || abs(rect.width - visibleRect.width) > 1 { visibleRect = rect }
+    }
+
+    /// Pans so a canvas point is in the middle of the part of the canvas the panels leave clear, as a tap on the map does.
+    func look(at point: CGPoint) { view?.look(at: point) }
 
     /// Pans so a card is in the middle of the part of the canvas the panels leave clear, without changing the zoom.
     func centre(onCard id: String) { view?.centre(onCard: id) }

@@ -380,6 +380,14 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         let zoom = scrollView.zoomScale, offset = scrollView.contentOffset
         paper.show(origin: CGPoint(x: CanvasGeometry.margin * zoom - offset.x, y: CanvasGeometry.margin * zoom - offset.y), zoom: zoom)
         centre = canvasPoint(at: middleOfRoom)
+        // The map outlines what is on screen, and is the only thing that needs to know as the canvas moves.
+        if model.showsMap { model.noteVisible(visible) }
+    }
+
+    /// Pans so a canvas point is in the middle of the clear part of the canvas, at the zoom it is at, as a tap on the map does.
+    func look(at point: CGPoint) {
+        isFitted = false
+        travel(to: scrollView.zoomScale, point: point, animated: false)
     }
 
     private func zoomed() {
@@ -447,6 +455,8 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
         }
         sharpen()
         sharpenTerminals()
+        // A card Find went to in this flow, now that the flow is in view.
+        client.showWantedCard()
         #if DEBUG
         DebugLaunch.arrange(self, model: model, flow: inputs?.flow)
         model.didChangeWhatIsShown()

@@ -48,8 +48,50 @@ struct EditBar: View {
                 .accessibilityLabel(item.title)
                 .accessibilityHint(item.hint)
                 .accessibilityAddTraits(item.isOn ? .isSelected : [])
+                // While cards are being selected, all of them can be, as with the Mac's Select All.
+                if item.kind == .select, client.edit.isSelecting {
+                    Button("Select All") { Task { await client.act(.selectAll) } }
+                        .buttonStyle(.panel(.tool))
+                        .accessibilityHint("Selects every card in the flow.")
+                }
+                if item.kind == .tidy { EditMore() }
             }
         }
+    }
+}
+
+/// What the editing bar keeps out of the way: Paste, Select All, and whether a dragged card snaps to the others and
+/// the grid, which is the Mac's Option key held down.
+private struct EditMore: View {
+    @Environment(RemoteClient.self) private var client
+
+    var body: some View {
+        let edit = client.edit
+        Menu {
+            if edit.clipboard != nil {
+                Button { Task { await client.act(.paste(at: nil)) } } label: { Label(EditMore.pasteTitle(edit.clipboard), systemImage: "doc.on.clipboard") }
+                    .disabled(client.isBusy(.paste(at: nil)))
+            }
+            Button { Task { await client.act(.selectAll) } } label: { Label("Select All", systemImage: "checklist") }
+            Divider()
+            Toggle(isOn: Binding { edit.snaps } set: { edit.snaps = $0 }) {
+                Label("Snap to Cards and Grid", systemImage: "square.grid.3x3")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .medium))
+                .frame(minWidth: Theme.Touch.target - Theme.Space.s * 2, minHeight: Theme.Touch.target - Theme.Space.s)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.panel(.tool))
+        .accessibilityLabel("More")
+        .accessibilityHint("Paste, Select All, and whether dragged cards snap to the others and the grid.")
+    }
+
+    /// "Paste", with how many cards, so it is plain what is on the clipboard.
+    static func pasteTitle(_ fragment: FlowFragment?) -> String {
+        guard let cards = fragment?.cards, !cards.isEmpty else { return "Paste" }
+        return cards.count == 1 ? "Paste \(cards[0].name)" : "Paste \(cards.count) Cards"
     }
 }
 
@@ -164,6 +206,18 @@ private struct AsksBeforeEditing: ViewModifier {
         if case .renameGroup = client.edit.asking, isMine { client.edit.asking } else { nil }
     }
 
+    /// A name for a new role or a new sub-flow, which may be left empty for the card's own.
+    private var naming: EditAsk? {
+        switch client.edit.asking {
+        case .saveRole, .newSubflow: isMine ? client.edit.asking : nil
+        default: nil
+        }
+    }
+
+    private var deletingRole: EditAsk? {
+        if case .deleteRole = client.edit.asking, isMine { client.edit.asking } else { nil }
+    }
+
     private func isAsking(_ ask: EditAsk?) -> Binding<Bool> {
         Binding { ask != nil } set: { if !$0, ask != nil, client.edit.asking == ask { client.edit.asking = nil } }
     }
@@ -181,8 +235,30 @@ private struct AsksBeforeEditing: ViewModifier {
                 Button("Rename") { client.confirm(ask, name: name) }
                 Button("Cancel", role: .cancel) {}
             }
+            .alert(namingTitle, isPresented: isAsking(naming), presenting: naming) { ask in
+                TextField("Name (optional)", text: $name)
+                if case .saveRole = ask { Button("Save Role") { client.confirm(ask, name: name) } } else { Button("Make Sub-flow") { client.confirm(ask, name: name) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { ask in
+                if case .saveRole(_, let card) = ask {
+                    Text("Saves this agent's instructions, model, effort and permissions on your Mac, so more agents like it can be made in any flow. Left empty, it is called \(card).")
+                } else if case .newSubflow(_, let card) = ask {
+                    Text("Makes a flow with an Input and an Output on your Mac, which this card then runs. Left empty, it is called \(card).")
+                }
+            }
+            .alert(deleteRoleTitle, isPresented: isAsking(deletingRole), presenting: deletingRole) { ask in
+                Button("Delete Role", role: .destructive) { client.confirm(ask) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The role is deleted on your Mac. Cards that were given it keep their settings.")
+            }
             .onChange(of: client.edit.asking, initial: true) { _, ask in
-                if case .renameGroup(_, let current) = ask { name = current }
+                switch ask {
+                case .renameGroup(_, let current): name = current
+                // Left empty, the Mac names it after the card, as the message says.
+                case .saveRole, .newSubflow: name = ""
+                default: break
+                }
             }
             // What was being asked about may have gone while the question was up: editing turned itself off.
             .onChange(of: client.isEditing) { _, isEditing in
@@ -192,6 +268,14 @@ private struct AsksBeforeEditing: ViewModifier {
 
     private var deleteTitle: String {
         if case .delete(_, _, let title, _) = client.edit.asking { title } else { "Delete?" }
+    }
+
+    private var namingTitle: String {
+        if case .newSubflow = client.edit.asking { "New sub-flow" } else { "Save as a New Role" }
+    }
+
+    private var deleteRoleTitle: String {
+        if case .deleteRole(_, let name) = client.edit.asking { "Delete the role “\(name)”?" } else { "Delete the role?" }
     }
 }
 

@@ -374,6 +374,8 @@ class CardView: UIView {
                    action("Move up", .nudge([id], dx: 0, dy: -step)), action("Move down", .nudge([id], dx: 0, dy: step))]
         if !ports(of: card).isEmpty { all.append(action("Link to…", .showLinks(from: id))) }
         all.append(action("Duplicate", .duplicate([id])))
+        all.append(action("Copy", .copy([id])))
+        all.append(action("Cut", .cut([id])))
         all.append(action("Delete", .delete(cards: [id], links: [])))
         return all
     }

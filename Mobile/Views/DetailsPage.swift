@@ -19,7 +19,8 @@ struct DetailsPage: View {
                 if let form = client.editForm {
                     EditDetails(form: form, card: card, flow: snapshot.flow, run: run, abilities: client.abilities, focus: $focus)
                         .id(client.canvas.selection)
-                } else if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings) {
+                } else if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings,
+                                                roles: client.mirror.library?.roles ?? []) {
                     DetailsView(details: details, card: card, flow: snapshot.flow, run: run, abilities: client.abilities)
                         // A fresh view for each thing selected, so one card's opened-up text isn't left open on the next.
                         .id(client.canvas.selection)
@@ -118,14 +119,26 @@ private struct DetailsView: View {
             ForEach(Array(details.items.enumerated()), id: \.offset) { _, item in
                 Hairline()
                 ItemView(item: item, answerLine: details.answerLine ? abilities.answerLine ?? WaitingCard.answer : nil,
-                         hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [], inTerminal: inTerminal)
+                         hold: hold, buttons: hold.flatMap { abilities.cards[$0.cardID] } ?? [], inTerminal: inTerminal,
+                         retry: card.flatMap { abilities.retry[$0.id] })
             }
             if let messages = details.messages {
                 Hairline()
                 MessageList(title: details.messagesTitle, messages: messages)
             }
+            if let card {
+                // A Start card's schedule turned on or off, and the flow a Flow card runs, to go and look at.
+                if card.kind == .start, card.trigger != nil, abilities.canAct {
+                    Hairline()
+                    ScheduleSwitch(cardID: card.id, isOn: client.mirror.snapshot?.edit.armed.contains(card.id) == true)
+                }
+                if card.kind == .flow, let inner = client.innerFlow(of: card.id) {
+                    Hairline()
+                    SubflowRow(cardID: card.id, inner: inner)
+                }
+            }
             if let card, abilities.canAct {
-                let start = card.kind == .agent ? abilities.details[card.id] ?? [] : []
+                let start = CardActions.buttons(for: card, in: abilities)
                 if !start.isEmpty || abilities.runFrom.contains(card.id) {
                     Hairline()
                     CardActions(card: card, buttons: start, canRunFrom: abilities.runFrom.contains(card.id),
@@ -170,6 +183,8 @@ struct ItemView: View {
     var buttons: [PressButton] = []
     /// The agent this is about, when it is waiting in its terminal and that can be opened and answered here.
     var inTerminal: Card?
+    /// Retry, beside "The run stopped here.", when this device may give the card its message again.
+    var retry: PressButton?
 
     var body: some View {
         switch item.style {
@@ -217,13 +232,25 @@ struct ItemView: View {
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.m)
         case .stopped:
-            Text(item.label)
-                .dsSans(Theme.Touch.body, .medium)
-                .foregroundStyle(Theme.failInk.ui)
+            HStack(spacing: Theme.Space.s) {
+                Text(item.label)
+                    .dsSans(Theme.Touch.body, .medium)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let retry { PressButtons(buttons: [retry]).fixedSize() }
+            }
+            .foregroundStyle(Theme.failInk.ui)
+            .padding(.horizontal, Theme.Space.l)
+            .padding(.vertical, Theme.Space.m)
+            .background(Theme.failTint.ui)
+        case .pending:
+            Label(item.label, systemImage: "clock.arrow.circlepath")
+                .dsSans(Theme.Touch.caption + 1)
+                .foregroundStyle(Theme.liveInk.ui)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.m)
-                .background(Theme.failTint.ui)
+                .background(Theme.liveTint.ui)
         case .waiting:
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Text(item.label)

@@ -24,6 +24,20 @@ nonisolated enum EditAction: Equatable, Sendable {
     case showAdd(at: CGPoint?)
     /// Puts up the list of cards this card's outputs could be linked to. For VoiceOver, which can't drag.
     case showLinks(from: String)
+    /// The Mac's Copy: the cards, with the links and groups between them, go on this device's clipboard. Nothing is sent.
+    case copy([String])
+    /// Copy, then delete, as the Mac's Cut does.
+    case cut([String])
+    /// Copies of what is on this device's clipboard, with its top-left card at a canvas point, or round the middle of what is on screen.
+    case paste(at: CGPoint?)
+    /// Selects every card, as the Mac's Select All does.
+    case selectAll
+    /// A new agent made from a saved role, at a canvas point or in the middle of what is on screen.
+    case addRole(String, at: CGPoint?)
+    /// One of the run's buttons, from a card's menu: "Run from This Start" or Retry.
+    case press(Press)
+    /// A Flow card's "Open Its Flow".
+    case openSubflow(String)
 
     /// What kind of command it sends, to tell whether one like it is still on its way to the Mac.
     var kind: String? {
@@ -40,7 +54,10 @@ nonisolated enum EditAction: Equatable, Sendable {
         case .undo: "undo"
         case .redo: "redo"
         case .tidy: "tidy"
-        case .runFrom, .showAdd, .showLinks: nil
+        case .cut: "deleteItems"
+        case .paste: "paste"
+        case .addRole: "addCard"
+        case .runFrom, .showAdd, .showLinks, .copy, .selectAll, .press, .openSubflow: nil
         }
     }
 }
@@ -62,6 +79,9 @@ extension RemoteCommand {
         case .foldGroup: "foldGroup"
         case .undo: "undo"
         case .redo: "redo"
+        case .paste: "paste"
+        // A card from a role is added as any other card is, and waits behind one.
+        case .addRoleCard: "addCard"
         default: nil
         }
     }
@@ -77,8 +97,14 @@ nonisolated struct EditMenu: Equatable, Sendable {
         var isDestructive = false
         /// False while a command like it is on its way to the Mac and hasn't been answered.
         var isEnabled = true
+        /// Tells it from another of the same name, as a role can have a kind's name.
+        var key: String?
 
-        var id: String { title }
+        init(title: String, symbol: String?, action: EditAction, isDestructive: Bool = false, isEnabled: Bool = true, id: String? = nil) {
+            self.title = title; self.symbol = symbol; self.action = action; self.isDestructive = isDestructive; self.isEnabled = isEnabled; key = id
+        }
+
+        var id: String { key ?? title }
     }
 
     /// What it is about: a card's name, or what the list is of.
@@ -93,6 +119,12 @@ nonisolated enum EditAsk: Equatable, Sendable {
     /// Deleting more than one thing, or a card that has links.
     case delete(cards: [String], links: [String], title: String, message: String)
     case renameGroup(id: String, name: String)
+    /// "Save as a New Role": the role's name, which may be left empty for the card's own.
+    case saveRole(cardID: String, name: String)
+    /// A Flow card's "New sub-flow": the new flow's name, which may be left empty for the card's own.
+    case newSubflow(cardID: String, name: String)
+    /// Deleting a saved role can't be undone, so it is asked by the role's name.
+    case deleteRole(roleID: String, name: String)
 }
 
 /// One button of the editing bar.
@@ -119,6 +151,11 @@ nonisolated struct EditBarItem: Equatable, Identifiable, Sendable {
 final class EditModel {
     /// The flow being edited. Nil when editing is off, which is how the app always starts.
     private(set) var flowID: String?
+    /// What Copy and Cut last put on this device's clipboard. It is the device's own, and is kept from one flow
+    /// to the next for as long as the app runs, so cards can be copied out of one flow and pasted into another.
+    var clipboard: FlowFragment?
+    /// Whether a dragged card settles against the other cards and the grid, as on the Mac. Off is the Mac's Option key.
+    var snaps = true
     /// Select was pressed: a drag on bare canvas draws a box, and a tap on a card adds it or takes it out.
     var isSelecting = false
 

@@ -367,6 +367,9 @@ enum DebugEditing {
         case nil: NSNull()
         case .delete(_, _, let title, let message): "\(title) \(message)"
         case .renameGroup(_, let name): "rename:\(name)"
+        case .saveRole(_, let name): "saveRole:\(name)"
+        case .newSubflow(_, let name): "newSubflow:\(name)"
+        case .deleteRole(_, let name): "deleteRole:\(name)"
         }
         // What a held finger would bring up on each thing, and on bare canvas.
         if client.isEditing, let flow {

@@ -215,7 +215,7 @@ enum DebugLaunch {
         }
         state["viewedRun"] = viewed?.id ?? NSNull()
         state["lastViewedRun"] = client.canvas.debugLastViewed ?? NSNull()
-        let cost = CostSheet(snapshot, run: run)
+        let cost = CostSheet(snapshot, run: run, flows: client.openFlow?.project.flows ?? [])
         func lines(_ all: [CostSheet.Line]) -> [[String]] { all.map { [$0.name, $0.usage.price, $0.usage.tokenCount] } }
         state["cost"] = [
             "total": cost.total.price,
@@ -508,6 +508,7 @@ enum DebugLaunch {
         case .restart(_, let name, _): "restart:\(name)"
         case .allow(_, let name, let command): "allow:\(name):\(command)"
         case .reject(_, let name, _, _): "reject:\(name)"
+        case .restartOrchestrator: "restart:orchestrator"
         }
         let all = abilities.bar + abilities.cards.values.joined() + abilities.details.values.joined()
         return [

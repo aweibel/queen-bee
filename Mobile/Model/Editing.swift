@@ -1,5 +1,6 @@
 import Foundation
 import QueenBeeCore
+import UIKit
 
 /// Editing the open flow from this device: what the bar and the menus offer, and how each thing asked for
 /// becomes a command. Like the rest of the controls, what is offered is a courtesy. The Mac checks every
@@ -88,12 +89,24 @@ extension RemoteClient {
             let picked = canvas.selection.cardIDs.contains(id) ? canvas.selection.cardIDs : [id]
             let ids = flow.cards.map(\.id).filter(picked.contains)
             var items: [EditMenu.Item] = []
+            let can = abilities
             if ids.count > 1 {
                 items.append(item("Group", "rectangle.dashed", .group(ids)))
-            } else if abilities.runFrom.contains(id) {
-                items.append(item("Run from here…", "play", .runFrom(id)))
+            } else {
+                // The Mac's card menu: a Start card runs from itself, a card the run stopped at is tried again.
+                for button in [can.starts[id], can.retry[id]].compactMap({ $0 }) {
+                    var press = item(button.title, button.press == .retry(cardID: id) ? "arrow.clockwise" : "play", .press(button.press))
+                    press.isEnabled = button.isEnabled
+                    items.append(press)
+                }
+                if can.runFrom.contains(id) { items.append(item("Run from here…", "play", .runFrom(id))) }
+                if card.kind == .flow, CanvasContent.innerFlow(of: card, in: openFlow?.project.flows ?? [], excluding: flow.id) != nil {
+                    items.append(item("Open Its Flow", "arrow.turn.down.right", .openSubflow(id)))
+                }
             }
             items.append(item("Duplicate", "plus.square.on.square", .duplicate(ids)))
+            items.append(item("Copy", "doc.on.doc", .copy(ids)))
+            items.append(item("Cut", "scissors", .cut(ids)))
             items.append(item(ids.count > 1 ? "Delete \(ids.count) Cards" : "Delete", "trash", .delete(cards: ids, links: []), destructive: true))
             return EditMenu(title: ids.count > 1 ? "\(ids.count) cards" : card.name, items: items)
         case .cards:
@@ -111,12 +124,29 @@ extension RemoteClient {
                 item(group.isFolded ? "Unfold" : "Fold into One Card", group.isFolded ? "rectangle.expand.vertical" : "rectangle.compress.vertical", .fold(id, !group.isFolded)),
                 item("Ungroup", "rectangle.dashed", .ungroup(id)),
                 item("Duplicate", "plus.square.on.square", .duplicate(ids)),
+                item("Copy", "doc.on.doc", .copy(ids)),
                 item("Delete \(ids.count) Cards", "trash", .delete(cards: ids, links: []), destructive: true),
             ])
         case .none:
-            return EditMenu(title: "Add Card", items: Self.cardKinds.map { kind in
-                EditMenu.Item(title: kind.label, symbol: CanvasGeometry.icon(for: kind), action: .add(kind, at: point), isEnabled: !isWaiting(for: "addCard"))
-            })
+            // Held on bare canvas, what the Mac's canvas menu offers comes first: Paste there, and Select All.
+            var items: [EditMenu.Item] = []
+            if let point {
+                if edit.clipboard != nil { items.append(item("Paste", "doc.on.clipboard", .paste(at: point))) }
+                if !flow.cards.isEmpty { items.append(item("Select All", "checklist", .selectAll)) }
+            }
+            return EditMenu(title: "Add Card", items: items + addItems(at: point))
+        }
+    }
+
+    /// The kinds of card, in the order of the Mac's list, with the saved roles under Agent as the Mac's palette has them.
+    func addItems(at point: CGPoint?) -> [EditMenu.Item] {
+        let busy = isWaiting(for: "addCard")
+        return Self.cardKinds.flatMap { kind -> [EditMenu.Item] in
+            let plain = EditMenu.Item(title: kind.label, symbol: CanvasGeometry.icon(for: kind), action: .add(kind, at: point), isEnabled: !busy)
+            guard kind == .agent else { return [plain] }
+            return [plain] + (mirror.library?.roles ?? []).map { role in
+                EditMenu.Item(title: role.name, symbol: "person.crop.square", action: .addRole(role.id, at: point), isEnabled: !busy, id: "role:\(role.id)")
+            }
         }
     }
 
@@ -140,6 +170,23 @@ extension RemoteClient {
 
     static let notEditing = "Press Edit to change this flow from here."
     static let nothingToLink = "There is no card this one can be linked to."
+    static let nothingToPaste = "There is nothing to paste. Copy or cut some cards first."
+
+    /// Puts cards on this device's clipboard, as they are in the flow now, with the links and groups between them.
+    private func copy(_ ids: [String], from flow: Flow) {
+        let fragment = flow.fragment(of: Set(ids))
+        guard !fragment.cards.isEmpty else { return }
+        edit.clipboard = fragment
+        UIAccessibility.post(notification: .announcement, argument: fragment.cards.count == 1 ? "Copied \(fragment.cards[0].name)." : "Copied \(fragment.cards.count) cards.")
+    }
+
+    /// Where to ask for pasted cards to go so that they sit round a canvas point: their top-left card's place.
+    static func pastePlace(_ fragment: FlowFragment, around centre: CGPoint) -> CGPoint {
+        let box = fragment.cards.map(CanvasGeometry.frame(of:)).reduce(CGRect.null) { $0.union($1) }
+        guard !box.isNull else { return centre }
+        let left = fragment.cards.map(\.x).min() ?? box.minX, top = fragment.cards.map(\.y).min() ?? box.minY
+        return CGPoint(x: max(20, centre.x - box.width / 2 + (left - box.minX)), y: max(20, centre.y - box.height / 2 + (top - box.minY)))
+    }
 
     /// Does one thing that was asked for, and waits for the Mac. Returns nil when it was done, or is being
     /// asked about first, and otherwise why it wasn't: the Mac's own words, which also go in the notice
@@ -152,7 +199,32 @@ extension RemoteClient {
         edit.menu = nil
         switch action {
         case .showAdd(let point):
-            edit.menu = menu(for: .none, at: point)
+            edit.menu = EditMenu(title: "Add Card", items: addItems(at: point))
+            return nil
+        case .copy(let ids):
+            copy(ids, from: flow)
+            return nil
+        case .cut(let ids):
+            copy(ids, from: flow)
+            // The cards are on the clipboard, so nothing is lost, and nothing is asked: the Mac's Cut doesn't ask either.
+            return await perform(command: .deleteItems(flowID: flowID, cardIDs: ids, linkIDs: []))
+        case .paste(let point):
+            guard let fragment = edit.clipboard else { return Self.nothingToPaste }
+            let at = point ?? Self.pastePlace(fragment, around: canvas.view?.middleOfWhatShows ?? CGPoint(x: 400, y: 300))
+            return await adding(to: flow) { await perform(command: .paste(flowID: flowID, fragment: fragment, at: RemotePoint(x: at.x, y: at.y))) }
+        case .selectAll:
+            canvas.select(.of(Set(flow.cards.map(\.id))))
+            return nil
+        case .addRole(let roleID, let point):
+            let taken = flow.cards.map(CanvasGeometry.frame(of:))
+            let place = point ?? TouchEdit.placeForNewCard(.agent, centre: canvas.view?.middleOfWhatShows ?? CGPoint(x: 400, y: 300), taken: taken,
+                                                           titleHeight: CanvasGeometry.titleHeight)
+            return await adding(to: flow) { await perform(command: .addRoleCard(flowID: flowID, roleID: roleID, x: place.x, y: place.y)) }
+        case .press(let press):
+            self.press(press)
+            return nil
+        case .openSubflow(let cardID):
+            openSubflow(of: cardID)
             return nil
         case .showLinks(let cardID):
             guard let menu = linkMenu(from: cardID) else {
@@ -262,6 +334,9 @@ extension RemoteClient {
         switch ask {
         case .delete(let cards, let links, _, _): Task { await act(.delete(cards: cards, links: links), confirmed: true) }
         case .renameGroup(let id, _): Task { await act(.renameGroup(id, to: name)) }
+        case .saveRole(let cardID, _): Task { await saveRole(from: cardID, name: name) }
+        case .newSubflow(let cardID, _): Task { await newSubflow(for: cardID, name: name) }
+        case .deleteRole(let roleID, _): Task { await deleteRole(roleID) }
         }
     }
 

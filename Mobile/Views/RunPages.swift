@@ -4,10 +4,39 @@ import SwiftUI
 /// What the run on show did, step by step, newest at the bottom. It follows new lines as they arrive until
 /// the person scrolls up to read, and follows again once they are back at the bottom.
 struct LogPage: View {
+    @Environment(RemoteClient.self) private var client
     let lines: [LogLine]
+    /// The Mac's Clear is on offer: this device may act, the latest run is on show, and there is something to clear.
+    var canClear = false
     @State private var follows = true
+    @State private var asksToClear = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            if canClear {
+                let command = client.clearLogCommand()
+                HStack(spacing: Theme.Space.s) {
+                    Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")").dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                    Spacer(minLength: Theme.Space.s)
+                    Button("Clear") { asksToClear = true }
+                        .buttonStyle(.panel(.quiet))
+                        .disabled(command.map(client.isSending) ?? true)
+                        .accessibilityHint("Asks first, then clears the log and the list of earlier runs on your Mac.")
+                }
+                .padding(.leading, Theme.Space.l)
+                .padding(.trailing, Theme.Space.s)
+                Hairline()
+            }
+            list(lines)
+        }
+        .confirmationDialog("Clear the log?", isPresented: $asksToClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) { Task { await client.clearLog() } }
+        } message: {
+            Text("The log and the list of earlier runs are emptied on your Mac. This can't be undone.")
+        }
+    }
+
+    private func list(_ lines: [LogLine]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -202,6 +231,7 @@ private struct RunRowView: View {
 
 /// Where the cost went: the run on show card by card, then everything the flow has used so far.
 struct CostPage: View {
+    @Environment(RemoteClient.self) private var client
     let sheet: CostSheet
     let flowName: String
 
@@ -214,7 +244,7 @@ struct CostPage: View {
                             CostLine(line: line)
                             Hairline()
                         }
-                        TotalLine(label: "This run", usage: total)
+                        TotalLine(label: sheet.runSoFar ? "This run so far" : "This run", usage: total)
                     } else {
                         Text(sheet.runPending ?? "")
                             .dsSans()
@@ -236,6 +266,37 @@ struct CostPage: View {
                         TotalLine(label: "In all", usage: sheet.total)
                     }
                 }
+                if !sheet.subflows.isEmpty {
+                    PanelSection(title: "Sub-flows") {
+                        ForEach(sheet.subflows) { sub in
+                            Button { client.open(sub.id) } label: {
+                                CostLine(line: CostSheet.Line(id: sub.id, name: sub.name, icon: "arrow.turn.down.right", usage: sub.usage, share: sub.share),
+                                         indent: CGFloat(sub.depth) * 14, opens: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens \(sub.name), to see its own breakdown.")
+                            Hairline()
+                        }
+                        if let all = sheet.withSubflows { TotalLine(label: "With sub-flows", usage: all) }
+                    }
+                }
+                if let outer = sheet.outer {
+                    Button { client.open(outer.id) } label: {
+                        HStack(spacing: Theme.Space.s) {
+                            Image(systemName: "arrow.turn.left.up").font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
+                            Text("Part of \(outer.name)").dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                            Spacer(minLength: Theme.Space.s)
+                            Text("\(outer.usage.price) in all").dsMono(Theme.Touch.caption)
+                        }
+                        .foregroundStyle(Theme.ink.ui)
+                        .padding(.horizontal, Theme.Space.m)
+                        .frame(minHeight: Theme.Touch.target)
+                        .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Goes back to \(outer.name).")
+                }
                 Text(CostSheet.explanation)
                     .dsSans(Theme.Touch.caption + 1)
                     .foregroundStyle(Theme.inkSecondary.ui)
@@ -250,12 +311,17 @@ struct CostPage: View {
 /// One card or session: its name, what it used, and a bar for its share of the whole.
 private struct CostLine: View {
     let line: CostSheet.Line
+    /// How far in a sub-flow is, under the flow that runs it.
+    var indent: CGFloat = 0
+    /// A chevron, for a line that opens its flow.
+    var opens = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs + 2) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Image(systemName: line.icon).font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
                 Text(line.name).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                if opens { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true) }
                 Spacer(minLength: Theme.Space.s)
                 Text(line.usage.price).dsMono(Theme.Touch.body, .medium)
             }
@@ -268,7 +334,9 @@ private struct CostLine: View {
             .frame(height: 2)
             .accessibilityHidden(true)
         }
+        .padding(.leading, indent)
         .padding(Theme.Space.m)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(line.name), \(line.usage.price), \(line.usage.tokenCount)")
     }

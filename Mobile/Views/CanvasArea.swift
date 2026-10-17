@@ -48,6 +48,13 @@ struct CanvasArea: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { foot = $0 + Theme.Space.m * 2 }
                 .padding(Theme.Space.m)
         }
+        // In the corner over the run bar, where the banners at the top never reach.
+        .overlay(alignment: .bottomTrailing) {
+            Minimap()
+                .padding(.trailing, Theme.Space.m)
+                .padding(.bottom, foot)
+        }
+        .animation(Theme.Motion.standard, value: client.canvas.showsMap)
         // Over everything on the canvas, the bars included: a menu is the one thing being done while it is up.
         .overlay { EditMenuLayer(foot: foot) }
     }

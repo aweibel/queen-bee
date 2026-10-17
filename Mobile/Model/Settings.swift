@@ -155,7 +155,9 @@ extension RemoteClient {
     /// What a flow's row offers when a finger is held on it. Nothing when this device may only watch.
     func flowMenu(for flow: RemoteFlowSummary) -> [FlowMenuItem] {
         guard canChangeFlows else { return [] }
-        var items = [FlowMenuItem(kind: .rename, title: "Rename…", symbol: "pencil")]
+        var items = [FlowMenuItem(kind: .rename, title: "Rename…", symbol: "pencil"),
+                     FlowMenuItem(kind: .pin, title: flow.pinned ? "Unpin" : "Pin", symbol: flow.pinned ? "pin.slash" : "pin"),
+                     FlowMenuItem(kind: .stopAgents, title: "Stop Its Agents", symbol: "stop.circle")]
         // The flow's own settings are read from the flow, which the device only has for the one that is open.
         if flow.id == mirror.snapshot?.flow.id, abilities.canAct {
             items.append(FlowMenuItem(kind: .settings, title: "Flow Settings…", symbol: "slider.horizontal.3"))
@@ -170,6 +172,8 @@ extension RemoteClient {
         switch item {
         case .rename: settings.asking = .rename(flowID: flow.id, name: flow.name)
         case .delete: settings.asking = .delete(flowID: flow.id, name: flow.name)
+        case .pin: Task { await pin(flow.id, on: !flow.pinned) }
+        case .stopAgents: settings.asking = .stopAgents(flowID: flow.id, name: flow.name)
         case .settings: showFlowSettings()
         }
     }
@@ -194,13 +198,14 @@ extension RemoteClient {
             case .new(let projectID, _): await newFlow(in: projectID, name: name)
             case .rename(let flowID, _): await renameFlow(flowID, to: name)
             case .delete(let flowID, _): await deleteFlow(flowID)
+            case .stopAgents(let flowID, _): await stopAgents(flowID)
             }
         }
     }
 
     /// Every command about a flow in the list goes through here, so what the Mac turned down is said over
     /// the list, in its words, and goes when the next one works.
-    private func flowCommand(_ command: RemoteCommand) async -> String? {
+    func flowCommand(_ command: RemoteCommand) async -> String? {
         let refusal = await send(command)
         settings.refusal = refusal
         if let refusal { UIAccessibility.post(notification: .announcement, argument: refusal) }

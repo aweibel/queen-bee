@@ -2,8 +2,10 @@ import QueenBeeCore
 import SwiftUI
 
 /// The Mac's projects and their flows. Each flow's row says what it needs from you, in the Mac's words.
-/// It is the sidebar on an iPad and the first screen on an iPhone. When this device may control the Mac,
-/// a + beside a project's name makes a flow there, and a finger held on a row offers to rename or delete it.
+/// It is the sidebar on an iPad and the first screen on an iPhone. Pinned flows come first, and each sub-flow is
+/// under the flow that runs it, as in the Mac's sidebar. Find, over the list, finds flows and cards in every
+/// project. When this device may control the Mac, a + beside a project's name makes a flow there, and a finger
+/// held on a row offers to rename, pin, stop or delete it.
 struct FlowList: View {
     @Environment(RemoteClient.self) private var client
 
@@ -18,13 +20,24 @@ struct FlowList: View {
                     ScrollViewReader { scroll in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 2) {
+                                FindField()
+                                    .padding(.top, Theme.Space.s)
                                 if let refusal = client.settings.refusal {
                                     RefusalNotice(text: refusal, alignment: .leading) { client.settings.refusal = nil }
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(.top, Theme.Space.s)
                                 }
-                                ForEach(library.projects) { project in
-                                    section(for: project)
+                                if let found = client.found {
+                                    FindList(found: found)
+                                } else {
+                                    let pinned = client.pinnedFlows
+                                    if !pinned.isEmpty {
+                                        heading("Pinned")
+                                        ForEach(pinned) { row(for: $0, depth: 0, key: "pinned/") }
+                                    }
+                                    ForEach(library.projects) { project in
+                                        section(for: project)
+                                    }
                                 }
                             }
                             .padding(.horizontal, Theme.Space.s)
@@ -47,23 +60,24 @@ struct FlowList: View {
         .background(Theme.surface.ui)
     }
 
-    /// The device is told which flows are sub-flows, and not which flow uses each one. So they are not
-    /// tucked under a flow, as on the Mac, but listed together after the project's own flows.
+    /// A project's flows, each sub-flow under the flow whose Flow card runs it, as on the Mac.
     @ViewBuilder
     private func section(for project: RemoteProject) -> some View {
-        let subflows = project.flows.filter(\.isSubflow)
         header(project)
-        ForEach(project.flows.filter { !$0.isSubflow }) { row(for: $0) }
-        if !subflows.isEmpty {
-            Text("Sub-flows")
-                .dsMono(Theme.Touch.caption)
+        ForEach(FlowNesting.rows(project.flows)) { row(for: $0.flow, depth: $0.depth) }
+    }
+
+    private func heading(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(title)
+                .dsMono(Theme.Touch.caption, .medium)
                 .foregroundStyle(Theme.inkSecondary.ui)
-                .padding(.leading, Theme.Space.l + 2)
-                .padding(.top, Theme.Space.s)
-                .padding(.bottom, 2)
                 .accessibilityAddTraits(.isHeader)
-            ForEach(subflows) { row(for: $0) }
+            Hairline()
         }
+        .padding(.leading, Theme.Space.s)
+        .padding(.top, Theme.Space.l)
+        .padding(.bottom, Theme.Space.xs)
     }
 
     private func header(_ project: RemoteProject) -> some View {
@@ -94,22 +108,24 @@ struct FlowList: View {
         .padding(.bottom, Theme.Space.xs)
     }
 
+    /// - Parameter depth: how far down a sub-flow is, under the flow that runs it.
+    /// - Parameter key: tells a pinned flow's row from its row in its project, where it is listed too.
     @ViewBuilder
-    private func row(for flow: RemoteFlowSummary) -> some View {
+    private func row(for flow: RemoteFlowSummary, depth: Int, key: String = "") -> some View {
         let isOpen = client.mirror.openFlowID == flow.id
-        let menu = client.flowMenu(for: flow), isMenuOut = client.settings.flowMenu == flow.id && !menu.isEmpty
-        FlowRow(flow: flow, isOpen: isOpen, isMenuOut: isMenuOut) {
+        let menu = client.flowMenu(for: flow), isMenuOut = client.settings.flowMenu == key + flow.id && !menu.isEmpty
+        FlowRow(flow: flow, depth: depth, isOpen: isOpen, isMenuOut: isMenuOut) {
             client.settings.flowMenu = nil
             // Asking for the flow already on show would blank it for a moment for nothing. Unless it went from
             // the Mac's list and has come back: the Mac stopped sending it then, and what is on show is old.
             if !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) }
         } hold: {
             // Held again, the menu goes.
-            if !menu.isEmpty { client.settings.flowMenu = isMenuOut ? nil : flow.id }
+            if !menu.isEmpty { client.settings.flowMenu = isMenuOut ? nil : key + flow.id }
         }
-        .id(flow.id)
+        .id(key + flow.id)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(flow.isSubflow ? "\(flow.name), sub-flow" : flow.name)
+        .accessibilityLabel([flow.name, flow.isSubflow ? "sub-flow" : nil, flow.pinned ? "pinned" : nil].compactMap { $0 }.joined(separator: ", "))
         .accessibilityValue(flow.activity.words ?? "")
         .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { if !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) } }
@@ -142,6 +158,7 @@ struct FlowList: View {
 /// A tap opens it. A finger held on it brings out its menu, under it.
 private struct FlowRow: View {
     let flow: RemoteFlowSummary
+    var depth = 0
     let isOpen: Bool
     let isMenuOut: Bool
     let open: () -> Void
@@ -153,6 +170,7 @@ private struct FlowRow: View {
             Rectangle()
                 .fill(isOpen ? Theme.ink.ui : .clear)
                 .frame(width: 2, height: 18)
+                .padding(.trailing, CGFloat(max(0, depth - 1)) * 14)
             if flow.isSubflow {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 11, weight: .semibold))
@@ -163,6 +181,9 @@ private struct FlowRow: View {
                 .foregroundStyle((flow.isSubflow && !isOpen ? Theme.inkSecondary : Theme.ink).ui)
                 .lineLimit(1)
             Spacer(minLength: Theme.Space.xs)
+            if flow.pinned {
+                Image(systemName: "pin.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true)
+            }
             FlowActivityBadge(activity: flow.activity)
         }
         .padding(.horizontal, Theme.Space.s)
@@ -196,7 +217,7 @@ private struct FlowRowMenu: View {
                         Text(item.title).dsMono(Theme.Touch.body, .medium).lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle((item.kind == .delete ? Theme.failInk : Theme.ink).ui)
+                    .foregroundStyle((item.kind == .delete || item.kind == .stopAgents ? Theme.failInk : Theme.ink).ui)
                     .padding(.horizontal, Theme.Space.m)
                     .frame(minHeight: Theme.Touch.target)
                     .contentShape(Rectangle())
@@ -230,5 +251,91 @@ struct FlowActivityBadge: View {
         if let words = activity.words {
             Badge(text: words, tone: activity == .failed ? .fail : .live)
         }
+    }
+}
+
+/// Find, over the list of flows: what is written finds flows by their names and cards by theirs, in every project.
+private struct FindField: View {
+    @Environment(RemoteClient.self) private var client
+    @FocusState private var isWriting: Bool
+
+    var body: some View {
+        @Bindable var settings = client.settings
+        HStack(spacing: Theme.Space.s) {
+            Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true)
+            TextField("Flows and cards", text: $settings.search)
+                .dsSans()
+                .foregroundStyle(Theme.ink.ui)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($isWriting)
+                .accessibilityLabel("Find flows and cards")
+            if !settings.search.isEmpty {
+                Button { settings.search = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(Theme.inkSecondary.ui)
+                        .frame(width: 32, height: Theme.Touch.target).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Find")
+            }
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .frame(minHeight: Theme.Touch.target)
+        .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(isWriting ? Theme.select.ui : Theme.hairline.ui,
+                                                                                  lineWidth: isWriting ? Theme.Stroke.selected : Theme.Stroke.card))
+    }
+}
+
+/// What Find found: the flows, then the cards, each with the flow and the project it is in. A tap goes there.
+private struct FindList: View {
+    @Environment(RemoteClient.self) private var client
+    let found: FindResults
+
+    var body: some View {
+        if found.isEmpty {
+            Text("No card or flow has that in its name.")
+                .dsSans()
+                .foregroundStyle(Theme.inkSecondary.ui)
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.vertical, Theme.Space.l)
+        }
+        if !found.flows.isEmpty {
+            title("Flows")
+            ForEach(found.flows) { hit($0, icon: "point.3.connected.trianglepath.dotted", name: $0.flowName, place: $0.project) }
+        }
+        if !found.cards.isEmpty {
+            title("Cards")
+            ForEach(found.cards) { hit($0, icon: "square.on.square", name: $0.card ?? "", place: $0.flowName) }
+        }
+    }
+
+    private func title(_ text: String) -> some View {
+        Text(text)
+            .dsMono(Theme.Touch.caption, .medium)
+            .foregroundStyle(Theme.inkSecondary.ui)
+            .padding(.leading, Theme.Space.s)
+            .padding(.top, Theme.Space.l)
+            .padding(.bottom, Theme.Space.xs)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func hit(_ hit: FindResults.Hit, icon: String, name: String, place: String) -> some View {
+        Button { client.go(to: hit) } label: {
+            HStack(spacing: Theme.Space.s) {
+                Image(systemName: icon).font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
+                Text(name).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
+                Text(place).dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui).lineLimit(1)
+            }
+            .foregroundStyle(Theme.ink.ui)
+            .padding(.horizontal, Theme.Space.s)
+            .frame(maxWidth: .infinity, minHeight: Theme.Touch.target, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(hit.card == nil ? "Flow \(name), in \(place)" : "Card \(name), in \(place)")
+        .accessibilityHint(hit.card == nil ? "Opens the flow." : "Opens its flow and goes to the card.")
     }
 }

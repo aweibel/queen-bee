@@ -69,6 +69,8 @@ final class RemoteClient {
     @ObservationIgnored private var directAfterPairing: DebugLaunch.Direct?
     /// Stands in for the link when a test has no Mac: it is handed each command in place of one.
     @ObservationIgnored var debugOutbox: ((_ id: Int, _ command: RemoteCommand) -> Void)?
+    /// And is told which flow the device asks to see, as the Mac would be.
+    @ObservationIgnored var debugOpener: ((_ flowID: String?) -> Void)?
     /// Every command that left for the Mac, in order, for a test to see that nothing else did.
     private(set) var debugSent: [RemoteCommand] = []
     #endif
@@ -422,6 +424,9 @@ final class RemoteClient {
         terminals.reset()
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
         if state == .connected { link?.send(.open(flowID: flowID)) }
+        #if DEBUG
+        if state == .connected, link == nil { debugOpener?(flowID) }
+        #endif
     }
 
     /// The open flow as the Mac lists it, with the project it is in. Nil when none is open, or the Mac no longer lists it.
@@ -499,6 +504,8 @@ final class RemoteClient {
         controls.clear()
         composer.clear()
         stopEditing()
+        // What was copied came from that Mac's flows.
+        edit.clipboard = nil
         settings.clear()
         terminals.reset()
         canvas.viewports = [:]

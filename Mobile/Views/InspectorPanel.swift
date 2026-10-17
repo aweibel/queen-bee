@@ -70,10 +70,10 @@ struct InspectorPanel: View {
             let run = RunOnShow(snapshot, viewed: client.canvas.viewedRun)
             switch page {
             case .details: DetailsPage(snapshot: snapshot, run: run)
-            case .log: LogPage(lines: run.log)
+            case .log: LogPage(lines: run.log, canClear: client.canClearLog && run.earlier == nil)
             case .output: OutputPage(flow: snapshot.flow, results: run.results)
             case .runs: RunsPage(snapshot: snapshot)
-            case .cost: CostPage(sheet: CostSheet(snapshot, run: run), flowName: snapshot.flow.name)
+            case .cost: CostPage(sheet: CostSheet(snapshot, run: run, flows: client.openFlow?.project.flows ?? []), flowName: snapshot.flow.name)
             case .orchestrator: EmptyView()
             }
         } else {
@@ -234,6 +234,7 @@ struct OrchestratorPanel: View {
                     Text("Runs this flow").dsSans().foregroundStyle(Theme.inkSecondary.ui)
                     if let badge = caption.badge { Badge(text: badge.text, tone: badge.tone) }
                     Spacer(minLength: Theme.Space.s)
+                    if let button = client.abilities.orchestrator { OrchestratorButton(button: button) }
                     Button { client.openTerminal(key) } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 14, weight: .medium))
@@ -259,9 +260,41 @@ struct OrchestratorPanel: View {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Text("Not started").dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                 Text("The session that runs this flow hasn't been started on your Mac.").dsSans().foregroundStyle(Theme.inkSecondary.ui)
+                if let button = client.abilities.orchestrator { OrchestratorButton(button: button).padding(.top, Theme.Space.xs) }
             }
             .padding(Theme.Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The orchestrator panel's own button, as the Mac's panel has it: Start, Restart, "Restart to apply" when the flow's
+/// details have changed under it, or a small ↻ while it runs as it should.
+private struct OrchestratorButton: View {
+    @Environment(RemoteClient.self) private var client
+    let button: PressButton
+
+    var body: some View {
+        let state = client.mirror.snapshot?.run.sessions[Remote.orchestratorKey] ?? .notStarted
+        let isLive = state != .notStarted && state != .exited
+        Group {
+            if isLive, button.title == "Restart" {
+                Button { client.press(button.press) } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.ink.ui)
+                        .frame(width: Theme.Touch.target, height: Theme.Touch.target)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Restart the orchestrator")
+            } else {
+                Button(button.title) { client.press(button.press) }
+                    .buttonStyle(.panel(button.isMain ? .live : .outline))
+                    .fixedSize()
+            }
+        }
+        .disabled(!button.isEnabled)
+        .accessibilityHint(button.hint)
     }
 }

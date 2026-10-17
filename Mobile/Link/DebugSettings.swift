@@ -59,7 +59,7 @@ enum DebugSettings {
         switch name {
         case .maxTries, .limit, .subflowLimit:
             return .number(Int(written) ?? 0)
-        case .notify:
+        case .notify, .browser:
             return .flag(written == "on")
         case .branches:
             return .list(written.split(separator: ",", omittingEmptySubsequences: false).map(String.init))
@@ -234,7 +234,7 @@ enum DebugSettings {
         case .patchCard(_, _, let patch):
             let named: [(Bool, String)] = [
                 (patch.name != nil, "name"), (patch.instructions != nil, "instructions"), (patch.model != nil, "model"), (patch.effort != nil, "effort"),
-                (patch.permissionMode != nil, "permissionMode"), (patch.role != nil, "role"), (patch.command != nil, "command"),
+                (patch.permissionMode != nil, "permissionMode"), (patch.role != nil, "role"), (patch.browser != nil, "browser"), (patch.command != nil, "command"),
                 (patch.trigger != nil, "trigger"), (patch.removesTrigger == true, "removesTrigger"), (patch.check != nil, "check"), (patch.value != nil, "value"),
                 (patch.maxTries != nil, "maxTries"), (patch.branches != nil, "branches"), (patch.template != nil, "template"),
                 (patch.saveTo != nil, "saveTo"), (patch.text != nil, "text"), (patch.flowRef != nil, "flowRef"),
@@ -302,6 +302,9 @@ enum DebugSettings {
                 case .item(let item): ["item": item.style.rawValue, "label": item.label, "value": item.value]
                 case .folder(let folder): ["folder": folder, "label": EditForm.folderLine]
                 case .open(_, let name): ["open": name]
+                case .newSubflow: ["newSubflow": "New sub-flow"]
+                case .roleDrift: ["roleDrift": EditForm.roleDrift]
+                case .arm(_, let isOn): ["arm": isOn ? "Turn off" : "Turn on"]
                 }
             }
             state["actions"] = form.actions.map(\.title)
@@ -323,7 +326,7 @@ enum DebugSettings {
 
         // What the Mac has in every card's settings, by the card's name, for a test to read a change back.
         let siblings = client.openFlow?.project.flows ?? []
-        let names: [FieldKey.Name] = [.instructions, .model, .effort, .permissionMode, .role, .command, .trigger, .check, .value, .maxTries, .branches,
+        let names: [FieldKey.Name] = [.instructions, .model, .effort, .permissionMode, .role, .browser, .command, .trigger, .check, .value, .maxTries, .branches,
                                       .template, .saveTo, .text, .flowRef]
         state["cards"] = Dictionary((flow?.cards ?? []).map { card in
             (card.name, Dictionary(uniqueKeysWithValues: names.compactMap { name -> (String, String)? in

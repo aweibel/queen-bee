@@ -204,17 +204,23 @@ extension CanvasView {
             guard let leading = frames[lead] else { return }
             // Settled against the cards on show that aren't being dragged, where the Mac has them now.
             let others = flow.cards.filter { frames[$0.id] == nil && !content.folded.contains($0.id) }.map(CanvasGeometry.frame(of:))
-            let moved = TouchEdit.moved(frames.mapValues(\.origin), lead: leading, by: travel, others: others,
-                                        grid: CanvasGeometry.gridStep, zoom: scrollView.zoomScale)
             var now = frames
-            for (id, place) in moved.places { now[id]?.origin = place }
-            edit.carry(now, drag: .move, in: flow.id, guides: moved.guides)
+            if edit.snaps {
+                let moved = TouchEdit.moved(frames.mapValues(\.origin), lead: leading, by: travel, others: others,
+                                            grid: CanvasGeometry.gridStep, zoom: scrollView.zoomScale)
+                for (id, place) in moved.places { now[id]?.origin = place }
+                edit.carry(now, drag: .move, in: flow.id, guides: moved.guides)
+            } else {
+                // Snapping off, as with Option held on the Mac: the cards go exactly where the finger takes them.
+                for id in now.keys { now[id]?.origin.x += travel.x; now[id]?.origin.y += travel.y }
+                edit.carry(now, drag: .move, in: flow.id)
+            }
             client.dragMoved()
         case .resize(let id, let start):
             guard var card = flow.card(id) else { return }
             card.x = start.minX
             card.y = start.minY
-            let size = TouchEdit.resized(card, from: start.size, by: travel, grid: CanvasGeometry.gridStep)
+            let size = TouchEdit.resized(card, from: start.size, by: travel, grid: edit.snaps ? CanvasGeometry.gridStep : 0)
             edit.carry([id: CGRect(origin: start.origin, size: size)], drag: .resize(cardID: id), in: flow.id)
             client.dragMoved()
         case .link(let cardID, let port):

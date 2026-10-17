@@ -50,7 +50,7 @@ nonisolated struct FieldKey: Hashable, Sendable {
 
     /// The names are `RemoteCardPatch`'s for a card's settings.
     enum Name: String, Sendable {
-        case name, instructions, model, effort, permissionMode, role, command, trigger, check, value, maxTries, branches, template, saveTo, text, flowRef
+        case name, instructions, model, effort, permissionMode, role, browser, command, trigger, check, value, maxTries, branches, template, saveTo, text, flowRef
         /// A link's limit.
         case limit
         case groupName
@@ -86,6 +86,7 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .effort: return .text(card.effort ?? "")
             case .permissionMode: return .text(card.permissionMode ?? "")
             case .role: return .text(card.role ?? "")
+            case .browser: return .flag(card.browser == true)
             case .command: return .text(card.command ?? "")
             case .trigger: return .schedule(card.trigger)
             case .check: return .text((card.check ?? .judge).rawValue)
@@ -107,7 +108,7 @@ nonisolated struct FieldKey: Hashable, Sendable {
         case .name, .groupName, .flowName, .branches: Remote.nameLimit
         case .instructions, .command, .value, .template, .text: Remote.textLimit
         case .saveTo, .trigger: Remote.pathLimit
-        case .model, .effort, .permissionMode, .role, .check, .maxTries, .flowRef, .limit, .subflowLimit, .notify: nil
+        case .model, .effort, .permissionMode, .role, .browser, .check, .maxTries, .flowRef, .limit, .subflowLimit, .notify: nil
         }
     }
 
@@ -178,6 +179,7 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .effort: patch.effort = value.text
             case .permissionMode: patch.permissionMode = value.text
             case .role: patch.role = value.text
+            case .browser: patch.browser = value.flag
             case .command: patch.command = value.text
             case .trigger:
                 if let trigger = value.schedule { patch.trigger = trigger } else { patch.removesTrigger = true }
@@ -258,6 +260,12 @@ nonisolated struct EditForm: Equatable {
         case folder(String)
         /// The flow a Flow card runs, to go and look at.
         case open(flowID: String, name: String)
+        /// A Flow card that runs nothing yet: "New sub-flow" makes one for it.
+        case newSubflow(cardID: String)
+        /// "Changed since the role was saved.", with Reset and "Update role".
+        case roleDrift(cardID: String)
+        /// A Start card's schedule, set and on or off, with "Turn on" or "Turn off".
+        case arm(cardID: String, isOn: Bool)
     }
 
     var icon: String
@@ -272,8 +280,9 @@ nonisolated struct EditForm: Equatable {
 
     static let folderLine = "Change the folder on your Mac."
     static let scriptLine = "A command changed from here was not typed on your Mac, so the next run stops and asks before running it."
-    static let scheduleOffLine = "A schedule set here stays off until it is turned on on your Mac."
-    static let scheduleOnLine = "This schedule is on. Changing it here, or what the run starts with, turns it off until it is turned on again on your Mac."
+    static let scheduleOffLine = "A schedule set here starts switched off. Turn it on once it is set."
+    static let switchedOff = "This schedule is switched off. It stays off until you turn it on."
+    static let scheduleOnLine = "This schedule is on. A change to what this flow does, made from a device, turns it off again."
     static let branchLine = "A link from a branch that is renamed or removed goes with it."
     static let editing = "Editing. Changes go to your Mac as you make them."
     static let pressEdit = "Press Edit to change these from here."
@@ -308,7 +317,7 @@ nonisolated struct EditForm: Equatable {
     init(card: Card, snapshot: RemoteFlowSnapshot, run: RunOnShow, siblings: [RemoteFlowSummary], roles: [RemoteRole]) {
         let flow = snapshot.flow
         // What the read-only details say that isn't a setting is said here too, in the same words.
-        let details = Details(card: card, snapshot: snapshot, run: run, siblings: siblings)
+        let details = Details(card: card, snapshot: snapshot, run: run, siblings: siblings, roles: roles)
         icon = details.icon
         title = card.name
         kind = details.kind
@@ -331,8 +340,10 @@ nonisolated struct EditForm: Equatable {
         switch card.kind {
         case .agent:
             add(.instructions, "Instructions", .text(placeholder: "A standing brief for this agent", isMono: false))
-            if !roles.isEmpty {
-                add(.role, "Role", choices([("", "None")] + roles.map { ($0.id, $0.name) }))
+            // Always there, as on the Mac: it is also where a card is saved as a new role.
+            add(.role, "Role", choices([("", "None")] + roles.map { ($0.id, $0.name) }))
+            if let id = card.role, let role = roles.first(where: { $0.id == id }), !role.matches(card) {
+                rows.append(.roleDrift(cardID: card.id))
             }
             let known = ["fable", "opus", "sonnet", "haiku"], model = card.model ?? ""
             add(.model, "Model", choices([("", "Your default")] + known.map { ($0, $0.capitalized) } + (model.isEmpty || known.contains(model) ? [] : [(model, model)])))
@@ -340,6 +351,8 @@ nonisolated struct EditForm: Equatable {
             if let cost = details.items.first(where: { $0.style == .row && $0.label == "Cost" }) { rows.append(.item(cost)) }
             // The Mac's choices and no others. A mode that skips permission checks is never one of them.
             add(.permissionMode, "Permissions", choices([("", "Your default"), ("manual", "Manual"), ("acceptEdits", "Accept edits"), ("plan", "Plan"), ("auto", "Auto")]))
+            add(.browser, "Browser", .toggle)
+            note(Self.browserLine)
             rows.append(.folder((card.cwd ?? "").isEmpty ? "The project's folder" : card.cwd ?? ""))
         case .start:
             add(.command, "What the run starts with", .text(placeholder: "The message the first card gets", isMono: false))
@@ -352,8 +365,10 @@ nonisolated struct EditForm: Equatable {
                      ? "A run starts whenever it changes, and is told which file changed. Queen Bee has to be open, and a change made while a run is going doesn't start another."
                      : "\(snapshot.edit.nextFires[card.id].map { "Next: \(Clock.run($0)). " } ?? "")Queen Bee has to be open for it to run. A run that falls due while another is going is skipped.")
                 caution(Self.scheduleOnLine)
+                rows.append(.arm(cardID: card.id, isOn: true))
             } else if card.trigger != nil {
-                caution("This schedule is switched off. " + Self.scheduleOffLine)
+                caution(Self.switchedOff)
+                rows.append(.arm(cardID: card.id, isOn: false))
             } else {
                 note(Self.scheduleOffLine)
             }
@@ -387,6 +402,8 @@ nonisolated struct EditForm: Equatable {
             add(.flowRef, "Runs", choices([("", "Nothing yet")] + others.map { ($0.id, $0.name) }))
             if let inner = CanvasContent.innerFlow(of: card, in: siblings, excluding: flow.id) {
                 rows.append(.open(flowID: inner.id, name: inner.name))
+            } else {
+                rows.append(.newSubflow(cardID: card.id))
             }
             note("This card runs a whole flow as one step. The message that arrives here goes to that flow's Input, and what reaches its Output comes back out Done. If it stops early or fails, the message goes out Fail.")
         case .script:
@@ -394,11 +411,13 @@ nonisolated struct EditForm: Equatable {
             caution(Self.scriptLine)
             note("Runs this command in the project's folder, as if you had typed it in Terminal. If the command succeeds, the run carries on from Pass. If it fails, from Fail. Whatever the command prints is what gets passed on.")
         }
-        // What a run is waiting with at this card, what is wrong with its wiring, and that the run stopped here.
-        details.items.filter { [.waiting, .warning, .stopped].contains($0.style) }.forEach { rows.append(.item($0)) }
+        // What a run is waiting with at this card, what is wrong with its wiring, that the run stopped here, and what its
+        // session doesn't have yet.
+        details.items.filter { [.waiting, .warning, .stopped, .pending].contains($0.style) }.forEach { rows.append(.item($0)) }
 
         actions = [FormAction(title: "Delete", symbol: "trash", action: .delete(cards: [card.id], links: []), isDestructive: true),
-                   FormAction(title: "Duplicate", action: .duplicate([card.id]))]
+                   FormAction(title: "Duplicate", action: .duplicate([card.id])),
+                   FormAction(title: "Copy", action: .copy([card.id]))]
     }
 
     init(link: QueenBeeCore.Link, flow: Flow, run: RunOnShow) {
@@ -437,7 +456,8 @@ nonisolated struct EditForm: Equatable {
         rows = [.item(DetailItem(style: .note, label: "Drag any of them to move them together. With Select on, tap a card to add it or take it out."))]
         actions = [FormAction(title: "Delete", symbol: "trash", action: .delete(cards: cards, links: []), isDestructive: true),
                    FormAction(title: "Duplicate", action: .duplicate(cards)),
-                   FormAction(title: "Group", action: .group(cards))]
+                   FormAction(title: "Group", action: .group(cards)),
+                   FormAction(title: "Copy", action: .copy(cards))]
     }
 
     /// What the Mac calls an If or Loop card's text, which depends on how it checks.
@@ -474,11 +494,13 @@ nonisolated enum FlowAsk: Equatable, Sendable {
     case rename(flowID: String, name: String)
     /// Deleting a flow can't be undone, so it is asked by the flow's name.
     case delete(flowID: String, name: String)
+    /// "Stop Its Agents" ends every session of the flow and any run, so it is asked first.
+    case stopAgents(flowID: String, name: String)
 }
 
 /// One thing a flow's row in the list offers when a finger is held on it.
 nonisolated struct FlowMenuItem: Equatable, Identifiable, Sendable {
-    enum Kind: String, Sendable { case rename, settings, delete }
+    enum Kind: String, Sendable { case rename, pin, stopAgents, settings, delete }
 
     var kind: Kind
     var title: String
@@ -505,6 +527,10 @@ final class SettingsModel {
     var showsFlowSettings = false
     /// The last thing about a flow that the Mac turned down, in its words, shown over the list of flows.
     var refusal: String?
+    /// What is written in Find, over the list of flows. Empty for the list itself.
+    var search = ""
+    /// The last thing the Mac turned down about the project's browser, said in the flow's settings beside its buttons.
+    var browserRefusal: String?
     /// A new flow was asked for in this project, and is opened when the Mac lists it: the flows the project
     /// had before, the name that was asked for, which may be none, and when the Mac said it had made it.
     @ObservationIgnored var awaitingNew: NewFlowAwaited?
@@ -534,6 +560,8 @@ final class SettingsModel {
         asking = nil
         showsFlowSettings = false
         refusal = nil
+        search = ""
+        browserRefusal = nil
         awaitingNew = nil
     }
 }
