@@ -39,9 +39,9 @@ extension Remote {
     }
 
     /// Whether a one-line setting from a device fits, by characters and by bytes.
-    static func fitsName(_ text: String) -> Bool { text.utf8.count <= nameByteLimit && text.count <= nameLimit }
+    public static func fitsName(_ text: String) -> Bool { text.utf8.count <= nameByteLimit && text.count <= nameLimit }
     /// Whether a long text from a device fits, by characters and by bytes.
-    static func fitsText(_ text: String, characters: Int = textLimit) -> Bool { text.utf8.count <= textByteLimit && text.count <= characters }
+    public static func fitsText(_ text: String, characters: Int = textLimit) -> Bool { text.utf8.count <= textByteLimit && text.count <= characters }
     static func fitsPath(_ text: String) -> Bool { text.utf8.count <= pathByteLimit && text.count <= pathLimit }
 
     /// What the Mac answers a device that sends commands faster than a person makes changes.
@@ -106,6 +106,37 @@ extension FlowFragment {
             if group.cardIDs.count > Remote.cardLimit { return RemoteCommand.tooMany }
         }
         return nil
+    }
+
+    /// Why a fragment a device sent can't be pasted whole. A paste from a device is all or nothing: a link that
+    /// names a card that isn't in it, a link that couldn't be made by hand, a group with a card that isn't in it or
+    /// in another of its groups, or two cards with one id, and nothing at all is pasted. Nil when it can be.
+    public var wholeProblem: String? {
+        let ids = cards.map(\.id)
+        guard Set(ids).count == ids.count else { return "Two of the cards being pasted have the same id, so nothing was pasted." }
+        let known = Set(ids)
+        for link in links where !known.contains(link.from) || !known.contains(link.to) {
+            return "A link being pasted joins a card that isn't being pasted, so nothing was pasted."
+        }
+        var grouped = Set<String>()
+        for group in groups ?? [] {
+            guard group.cardIDs.count >= 2, group.cardIDs.allSatisfy(known.contains), Set(group.cardIDs).count == group.cardIDs.count,
+                  grouped.isDisjoint(with: group.cardIDs) else {
+                return "A group being pasted doesn't hold two or more of the cards being pasted on its own, so nothing was pasted."
+            }
+            grouped.formUnion(group.cardIDs)
+        }
+        return nil
+    }
+
+    /// The step a paste is moved by, kept so that every card it makes is still on the canvas: within
+    /// `Remote.farthestPoint` of its corner.
+    public func offsetOnCanvas(dx: Double, dy: Double) -> (dx: Double, dy: Double) {
+        func kept(_ step: Double, _ places: [Double]) -> Double {
+            guard step.isFinite, let low = places.min(), let high = places.max() else { return 0 }
+            return min(max(step, -Remote.farthestPoint - low), Remote.farthestPoint - high)
+        }
+        return (kept(dx, cards.map(\.x)), kept(dy, cards.map(\.y)))
     }
 
     /// The fragment with its text made safe to show and to enter into a terminal, and without what a device

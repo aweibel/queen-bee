@@ -28,6 +28,27 @@ extension Remote {
     /// and this many a second after that.
     public static let pointerBurst = 60.0
     public static let pointersASecond = 40.0
+
+    /// The most of a page's address, and of its title, a device is sent, in characters. A page can make its
+    /// own address as long as it likes, and change it many times a second.
+    public static let browserURLLimit = 2_048
+    public static let browserTitleLimit = 300
+    /// How many times a second at most a device is told of one card's bar. The newest is always sent, a
+    /// moment late if it has to wait.
+    public static let browserPagesASecond = 4.0
+    /// How many times a device may say which browser cards it has on screen, in a burst and then a second.
+    /// Each time can start pictures of up to `browserWatchLimit` pages, so it is held to a pace of its own,
+    /// whatever "Can control" says.
+    public static let watchBurst = 8.0
+    public static let watchesASecond = 4.0
+    /// How long a card's pace is kept after a device lets go of it, so a card that comes straight back on
+    /// screen is not sent its picture again at once; and how long a page goes on being drawn after the last
+    /// device lets go of it, so that a quick toggle does not stop and start it.
+    public static let watchKeep: TimeInterval = 5
+    public static let streamLinger: TimeInterval = 2
+    /// How long the Mac waits for a page to say what is selected in it, for Copy, in seconds. A page that is
+    /// stuck is given up on.
+    public static let browserCopyWait: TimeInterval = 3
 }
 
 /// One picture of a card's page, as the browser drew it.
@@ -71,6 +92,9 @@ public struct RemoteBrowserPage: Codable, Equatable, Sendable {
     public var canGoForward: Bool
     /// Why the last address typed into the bar didn't open, as the Mac's bar shows it until the page changes.
     public var addressProblem: String?
+    /// Never sent: set on a device that may only watch, which is sent no page at all. Its card shows
+    /// `watchOnlyWords` in place of the page.
+    public var isWatchOnly: Bool?
 
     public init(status: RemoteBrowserState.Status = .idle, progress: Double? = nil, problem: String? = nil, isAttached: Bool = false,
                 hasPicture: Bool = false, url: String = "", title: String = "", isLoading: Bool = false, canGoBack: Bool = false,
@@ -82,7 +106,30 @@ public struct RemoteBrowserPage: Codable, Equatable, Sendable {
 
     /// What the Mac's card shows over the page, and the button under it.
     public var notice: BrowserNotice? {
-        BrowserNotice.of(status, progress: progress, problem: problem, isAttached: isAttached, hasPicture: hasPicture)
+        if isWatchOnly == true { return BrowserNotice(words: Self.watchOnlyWords) }
+        return BrowserNotice.of(status, progress: progress, problem: problem, isAttached: isAttached, hasPicture: hasPicture)
+    }
+
+    /// What a card's browser half says on a device that may only watch. Pictures of pages, their addresses and
+    /// their titles go only to a device with "Can control": a page can be one the person is signed in to.
+    public static let watchOnlyWords = "Turn on “Can control” for this device to see the page."
+
+    /// What a device that may only watch shows for every card's browser.
+    public static var watchOnly: RemoteBrowserPage {
+        var page = RemoteBrowserPage()
+        page.isWatchOnly = true
+        return page
+    }
+
+    /// The page as a device is sent it: its address and title cut to `Remote.browserURLLimit` and
+    /// `Remote.browserTitleLimit`, and the address bar's complaint to the title's length.
+    public var capped: RemoteBrowserPage {
+        var page = self
+        page.url = String(url.prefix(Remote.browserURLLimit))
+        page.title = String(title.prefix(Remote.browserTitleLimit))
+        page.addressProblem = addressProblem.map { String($0.prefix(Remote.browserTitleLimit)) }
+        page.isWatchOnly = nil
+        return page
     }
 }
 
@@ -338,6 +385,44 @@ public struct FramePacer<Frame> {
         isInFlight = false
         lastSent = nil
     }
+}
+
+/// Lets something that changes often go at most so many times a second, and always the newest: one that
+/// comes too soon is held, in place of any held before it, until `due` says it may go.
+public struct LatestThrottle<Value> {
+    public let interval: TimeInterval
+    private var lastSent: Date?
+    /// The newest one held back.
+    public private(set) var held: Value?
+    /// How many were let go for a newer one before they could be sent.
+    public private(set) var dropped = 0
+
+    public init(perSecond: Double) { interval = 1 / perSecond }
+
+    /// A new one. Returns it if it may go now; otherwise it is held.
+    public mutating func offer(_ value: Value, now: Date = Date()) -> Value? {
+        if held != nil { dropped += 1 }
+        held = value
+        return due(now: now)
+    }
+
+    /// The held one, if the time has come for it.
+    public mutating func due(now: Date = Date()) -> Value? {
+        guard let value = held else { return nil }
+        if let lastSent, now.timeIntervalSince(lastSent) < interval { return nil }
+        held = nil
+        lastSent = now
+        return value
+    }
+
+    /// When to ask `due` again, if one is held. Nil when nothing is.
+    public var nextTry: Date? {
+        guard held != nil else { return nil }
+        return lastSent.map { $0.addingTimeInterval(interval) } ?? Date.distantPast
+    }
+
+    /// Forgets the one held, as when nobody wants it any more.
+    public mutating func drop() { held = nil }
 }
 
 /// The pointer moving, or scrolls, added together on a device and let go at most so many times a second.

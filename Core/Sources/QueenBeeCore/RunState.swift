@@ -70,8 +70,20 @@ public struct LogLine: Identifiable, Equatable, Sendable, Codable {
     public var id = UUID()
     public let date: Date
     public let text: String
+    /// True for a line that says what a paired device did, or that a schedule went on or off. A device's Clear
+    /// leaves these, so a device can't wipe out the record of what it did. Nil for every other line.
+    public var isKept: Bool?
 
-    public init(date: Date, text: String) { self.date = date; self.text = text }
+    public init(date: Date, text: String, isKept: Bool = false) {
+        self.date = date; self.text = text; self.isKept = isKept ? true : nil
+    }
+
+    /// What a log is after a device's Clear: the kept lines of the log and of the earlier runs, once each, oldest
+    /// first. The person's own Clear on the Mac empties it.
+    public static func leftByDeviceClear(log: [LogLine], runs: [RunRecord]) -> [LogLine] {
+        var seen = Set<UUID>()
+        return (runs.flatMap(\.log) + log).filter { $0.isKept == true && seen.insert($0.id).inserted }.sorted { $0.date < $1.date }
+    }
 }
 
 /// One message a link carried in a run.

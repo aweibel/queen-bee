@@ -30,6 +30,21 @@ extension Flow {
     /// it could have been made by hand.
     @discardableResult
     public mutating func insert(_ fragment: FlowFragment, dx: Double = 0, dy: Double = 0) -> [Card] {
+        (try? insert(fragment, dx: dx, dy: dy, whole: false)) ?? []
+    }
+
+    /// The same, all or nothing, as a paste from a device is: a link or a group of the fragment that can't be
+    /// made throws, and the flow is left as it was. See `FlowFragment.wholeProblem`.
+    @discardableResult
+    public mutating func insertWhole(_ fragment: FlowFragment, dx: Double = 0, dy: Double = 0) throws -> [Card] {
+        if let problem = fragment.wholeProblem { throw FlowError.invalid(problem) }
+        var copy = self
+        let made = try copy.insert(fragment, dx: dx, dy: dy, whole: true)
+        self = copy
+        return made
+    }
+
+    private mutating func insert(_ fragment: FlowFragment, dx: Double, dy: Double, whole: Bool) throws -> [Card] {
         var newIDs: [String: String] = [:]
         var made: [Card] = []
         for original in fragment.cards {
@@ -51,11 +66,20 @@ extension Flow {
         }
         for link in fragment.links {
             guard let from = newIDs[link.from], let to = newIDs[link.to] else { continue }
-            _ = try? addLink(from: from, port: link.port, to: to, maxPasses: link.maxPasses)
+            do {
+                _ = try addLink(from: from, port: link.port, to: to, maxPasses: link.maxPasses)
+            } catch where whole {
+                throw FlowError.invalid("A link being pasted couldn't be made (\(error)), so nothing was pasted.")
+            } catch {}
         }
         for group in fragment.groups ?? [] {
             let members = group.cardIDs.compactMap { newIDs[$0] }
-            if members.count >= 2 { _ = try? addGroup(name: group.name, cardIDs: members) }
+            guard members.count >= 2 else { continue }
+            do {
+                _ = try addGroup(name: group.name, cardIDs: members)
+            } catch where whole {
+                throw FlowError.invalid("A group being pasted couldn't be made (\(error)), so nothing was pasted.")
+            } catch {}
         }
         return made
     }

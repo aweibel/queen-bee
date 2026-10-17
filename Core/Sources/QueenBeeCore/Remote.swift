@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What the Mac app and a paired device say to each other. Each message is one frame of JSON.
@@ -32,6 +33,9 @@ public enum Remote {
     public static let nameLimit = 200
     /// The longest instructions, command, template or other long text a device may give a card, in characters.
     public static let textLimit = 16_000
+    /// How much of a role's instructions the flow list carries, in characters. A device needs no more: it
+    /// shows the start of them, and tells a card that has drifted from its role by `RemoteRole.instructionsHash`.
+    public static let roleInstructionsListed = 2_000
     /// The longest file path a device may give an End card or a schedule, in characters.
     public static let pathLimit = 1_000
     /// The most cards and links a flow may have and still be added to from a device. A flow that already has
@@ -190,21 +194,54 @@ public struct RemoteProject: Codable, Equatable, Sendable, Identifiable {
 public struct RemoteRole: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
+    /// The role's instructions, or their first `Remote.roleInstructionsListed` characters when they are longer.
+    /// `instructionsHash` is of the whole, so a card can still be told apart from the role.
     public var instructions: String
     /// "" for the person's default, as with effort and permissions.
     public var model: String
     public var effort: String
     public var permissionMode: String
+    /// A fingerprint of the role's whole instructions: see `RemoteRole.fingerprint`. Nil from a Mac that sends
+    /// them whole.
+    public var instructionsHash: String?
+    /// The device that saved or last changed the role, and when, until the person at the Mac has looked at it.
+    /// The Mac marks such a role "Changed from" that device, and asks before using it.
+    public var changedFrom: String?
+    public var changedAt: Date?
 
-    public init(id: String, name: String, instructions: String = "", model: String = "", effort: String = "", permissionMode: String = "") {
+    public init(id: String, name: String, instructions: String = "", model: String = "", effort: String = "", permissionMode: String = "",
+                instructionsHash: String? = nil, changedFrom: String? = nil, changedAt: Date? = nil) {
         self.id = id; self.name = name; self.instructions = instructions; self.model = model; self.effort = effort
-        self.permissionMode = permissionMode
+        self.permissionMode = permissionMode; self.instructionsHash = instructionsHash; self.changedFrom = changedFrom; self.changedAt = changedAt
     }
+
+    /// A role as the flow list carries it: long instructions cut short, with the fingerprint of the whole.
+    public static func listed(id: String, name: String, instructions: String, model: String, effort: String, permissionMode: String,
+                              changedFrom: String? = nil, changedAt: Date? = nil) -> RemoteRole {
+        RemoteRole(id: id, name: name, instructions: String(instructions.prefix(Remote.roleInstructionsListed)), model: model, effort: effort,
+                   permissionMode: permissionMode, instructionsHash: fingerprint(instructions), changedFrom: changedFrom, changedAt: changedAt)
+    }
+
+    /// "Changed from iPad 14:02", as the Mac marks a role a device saved or changed. Nil for any other role.
+    public var changedLine: String? {
+        guard let changedFrom else { return nil }
+        let when = changedAt.map { " " + $0.formatted(date: Calendar.current.isDateInToday($0) ? .omitted : .abbreviated, time: .shortened) } ?? ""
+        return "Changed from \(changedFrom)\(when)"
+    }
+
+    /// Whether the instructions sent are all of them.
+    public var hasAllInstructions: Bool { instructionsHash == nil || instructionsHash == Self.fingerprint(instructions) }
 
     /// Whether a card still has exactly what the role holds. When it hasn't, the Mac says "Changed since the role was saved."
     public func matches(_ card: Card) -> Bool {
-        instructions == (card.instructions ?? "") && model == (card.model ?? "")
-            && effort == (card.effort ?? "") && permissionMode == (card.permissionMode ?? "")
+        let theirs = card.instructions ?? ""
+        let same = instructionsHash.map { $0 == Self.fingerprint(theirs) } ?? (instructions == theirs)
+        return same && model == (card.model ?? "") && effort == (card.effort ?? "") && permissionMode == (card.permissionMode ?? "")
+    }
+
+    /// The SHA-256 of a text's UTF-8, in hexadecimal.
+    public static func fingerprint(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -590,7 +627,8 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     /// The settings panel's Retry, on a card the last run stopped at: it is given the message it was given, again.
     /// See `RemoteFlowSnapshot.canRetry(_:)` for when the Mac offers it.
     case retry(flowID: String, cardID: String)
-    /// The log's Clear: the log and the list of earlier runs are emptied.
+    /// The log's Clear: the log and the list of earlier runs are emptied, but for the lines that say what a device
+    /// did or that a schedule went on or off, which a device can't clear.
     case clearLog(flowID: String)
     /// Closes the message at the top of the flow, the run state's `banner`.
     case dismissBanner(flowID: String)
@@ -681,6 +719,14 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
              .renameGroup, .foldGroup, .patchCard, .setFlowOption, .newFlow, .renameFlow, .deleteFlow, .undo, .redo,
              .revertSettings, .paste, .addRoleCard, .newSubflow, .saveRole: true
         }
+    }
+
+    /// Whether this waits behind a run of the same flow that hasn't begun yet, with the edits. Turning a schedule on
+    /// or off is not an edit, but it must not overtake one sent before it: a schedule turned on after an edit is
+    /// agreed to for the flow as that edit left it.
+    public var waitsWithEdits: Bool {
+        if case .armSchedule = self { return true }
+        return isEdit
     }
 
     // MARK: Drags
