@@ -2513,7 +2513,7 @@ def scenario_mobile(app):
         def parity(state):
             return state.get("parity") or {}
 
-        steps = ("wait:q1;runStart:Start 2;wait:q2;clearLog;wait:q3;edit:on;copy:Shout;paste:312,600;wait:q4;link:Start:Shout 2;edit:off;runStart:Start;"
+        steps = ("wait:q1;runStart:Start 2;wait:q2;clearLog;wait:q3;edit:on;copy:Start,Shout;paste:0,600;wait:q4;edit:off;runStart:Start 3;"
                  "wait:q5;edit:on;set:Start 2:trigger:daily/3/15;arm:Start 2:on;wait:q6;arm:Start 2:off;set:Start 2:trigger:none;wait:q7;"
                  "openFlow:Touch;edit:on;add:flow:300,600;add:agent:700,600;newSubflow:Flow:Inner afar;wait:q8;saveRole:Agent:E2E role;wait:q9;"
                  "deleteRole:E2E role;set:Agent:browser:on;wait:q10;pin:Touch:on;wait:q11;pin:Touch:off")
@@ -2532,23 +2532,23 @@ def scenario_mobile(app):
         s = step("q3", 8, also=lambda s: shown(s, "Shout 2"))
         f = saved_flow(app, gid, lambda f: any(c["name"] == "Shout 2" for c in f["cards"]))
         pasted = next((c for c in (f or {}).get("cards", []) if c["name"] == "Shout 2"), {})
-        check("a Script card copied and pasted on the device is saved by the Mac as a copy, where it was pasted",
+        check("a Script card copied and pasted on the device, with the Start card linked to it, is saved by the Mac as copies, where they were pasted",
               [r for _, r in did(s)[-3:]] == [None] * 3 and pasted.get("command") == "tr a-z A-Z" and (pasted.get("x"), pasted.get("y")) == (312, 600),
               f"{did(s)[-3:]} {pasted}")
-        s = step("q4", 12, also=lambda s: "Shout 2" in needing(s))
+        s = step("q4", 11, also=lambda s: "Shout 2" in needing(s))
         h = held(app, gid, "Shout 2")
-        check("and a run that reaches it holds it for Allow on the Mac, and the device says to allow it there",
+        check("and a run from the pasted Start holds the pasted command for Allow on the Mac, and the device says to allow it there",
               bool(h) and h[0]["needsAllow"] and h[0]["allowOnMac"]
               and {"name": "Shout 2", "reason": "Waiting for you to allow its command on your Mac"} in panel(s).get("needsYou", []), f"{h} {panel(s).get('needsYou')}")
         app.op(gid, "stop")
         app.wait(gid, lambda s: not s["isRunning"], 20, "the held run to stop")
-        s = step("q5", 16)
+        s = step("q5", 15)
         armed = app.wait(gid, lambda s: len(s["armed"]) == 1, 15, "the schedule to be turned on")["armed"]
         check("a schedule set and turned on from the device is on on the Mac", [r for _, r in did(s)[-2:]] == [None, None] and len(armed) == 1, f"{did(s)[-2:]} {armed}")
-        s = step("q6", 19)
+        s = step("q6", 18)
         armed = app.wait(gid, lambda s: s["armed"] == [], 15, "the schedule to be turned off")["armed"]
         check("and turned off from the device", [r for _, r in did(s)[-2:]] == [None, None] and armed == [], f"{did(s)[-2:]} {armed}")
-        s = step("q7", 25, also=lambda s: s.get("openFlow") == "Touch")
+        s = step("q7", 24, also=lambda s: s.get("openFlow") == "Touch")
         deadline = time.time() + 8
         while "Inner afar" not in flow_names() and time.time() < deadline:
             time.sleep(0.2)
@@ -2556,11 +2556,11 @@ def scenario_mobile(app):
         check("New sub-flow on the device makes the flow on the Mac, and the Flow card runs it",
               did(s)[-1] == ("newSubflow:Flow:Inner afar", None) and "Inner afar" in flow_names() and bool((card_named(f, "Flow") or {}).get("flowRef")),
               f"{did(s)[-1]} {flow_names()} {card_named(f, 'Flow')}")
-        s = step("q8", 27, also=lambda s: any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
+        s = step("q8", 26, also=lambda s: any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
         check("a role saved from the device is saved on the Mac, and the card has it",
               did(s)[-1] == ("saveRole:Agent:E2E role", None) and bool((card_named(on_mac(lambda f: (card_named(f, "Agent") or {}).get("role")), "Agent") or {}).get("role")),
               f"{did(s)[-1]} {parity(s).get('roles')}")
-        s = step("q9", 30, also=lambda s: not any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
+        s = step("q9", 29, also=lambda s: not any(r["name"] == "E2E role" for r in parity(s).get("roles", [])))
         f = on_mac(lambda f: (card_named(f, "Agent") or {}).get("browser") is True)
         check("and deleted from the device", did(s)[-2] == ("deleteRole:E2E role", None), str(did(s)[-2:]))
         check("the Browser switch turned on from the device is saved on a card of a flow the Mac hasn't opened",
@@ -2568,10 +2568,10 @@ def scenario_mobile(app):
         mine = app.state(eid)
         check("and no browser and no session starts for it", (parity(s).get("browser") or {}).get("words", "").startswith("Not running")
               and mine["orchestrator"]["state"] == "notStarted", f"{parity(s).get('browser')} {mine['orchestrator']['state']}")
-        s = step("q10", 32, also=lambda s: "Touch" in parity(s).get("pinned", []))
+        s = step("q10", 31, also=lambda s: "Touch" in parity(s).get("pinned", []))
         check("a flow pinned from the device is pinned in the Mac's sidebar, and every device is told", did(s)[-1] == ("pin:Touch:on", None), str(did(s)[-1]))
         mobile.shot("mobile-10-pinned")
-        s = step("q11", 34, also=lambda s: "Touch" not in parity(s).get("pinned", []))
+        s = step("q11", 33, also=lambda s: "Touch" not in parity(s).get("pinned", []))
         check("and unpinned", did(s)[-1] == ("pin:Touch:off", None), str(did(s)[-1]))
         app.op(gid, "close")
 
