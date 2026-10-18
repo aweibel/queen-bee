@@ -82,12 +82,17 @@ public struct RemoteMirror: Equatable, Sendable {
     public mutating func clearRefusal() { lastRefusal = nil }
 
     /// Call just before asking the Mac for a flow, or nil for none. What was on show goes at once,
-    /// so the old flow is never drawn under the new one's name.
-    public mutating func willOpen(_ flowID: String?) {
+    /// so the old flow is never drawn under the new one's name. Returns false, and changes nothing, for the
+    /// flow already open: the Mac doesn't send that one again, so clearing it would leave nothing on show.
+    /// A flow that went from the Mac's list is asked for afresh, since the Mac stopped sending it then.
+    @discardableResult
+    public mutating func willOpen(_ flowID: String?) -> Bool {
+        guard flowID != openFlowID || openFlowWentAway else { return false }
         openFlowID = flowID
         snapshot = nil
         revision = 0
         openFlowWentAway = false
+        return true
     }
 
     /// The terminal bytes a message carries for the open flow, if it carries any. Reading them changes nothing
@@ -140,7 +145,8 @@ public struct RemoteMirror: Equatable, Sendable {
             snapshot?.edit = state
         case .log(let id, let lines, let reset):
             guard isShowing(id) else { break }
-            if reset { snapshot?.log = lines } else { snapshot?.log += lines }
+            // A log at its cap loses its oldest lines as new ones come, as the Mac's does.
+            if reset { snapshot?.log = lines } else if let log = snapshot?.log { snapshot?.log = RemoteSnapshot.appending(lines, to: log) }
         case .messages(let id, let link, let all):
             guard isShowing(id) else { break }
             // An empty list means the link carried nothing, which the Mac shows as no entry at all.

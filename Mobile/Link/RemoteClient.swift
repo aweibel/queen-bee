@@ -458,7 +458,8 @@ final class RemoteClient {
             browsers.reset()
             browserInput.clear()
         }
-        mirror.willOpen(flowID)
+        // The flow already on show is not sent again by the Mac, so nothing of it is cleared here either.
+        guard mirror.willOpen(flowID) else { return }
         terminals.reset()
         // When not connected there is nobody to ask: the flow is asked for as soon as the Mac lets the device in.
         if state == .connected { link?.send(.open(flowID: flowID)) }

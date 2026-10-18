@@ -21,11 +21,15 @@ enum KeyVault {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
 
-    static func read(_ account: String) -> Data? {
-        if TestHarness.isEnabled { return memory[account] }
+    static func read(_ account: String) -> Data? { lookUp(account).key }
+
+    /// The key, or whether it is known to be gone or only couldn't be read this time: see `StoredKey`.
+    static func lookUp(_ account: String) -> StoredKey {
+        if TestHarness.isEnabled { return memory[account].map(StoredKey.found) ?? .missing }
         var found: CFTypeRef?
         let wanted = query(account).merging([kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]) { $1 }
-        return SecItemCopyMatching(wanted as CFDictionary, &found) == errSecSuccess ? found as? Data : nil
+        let status = SecItemCopyMatching(wanted as CFDictionary, &found)
+        return StoredKey(status: status, data: found as? Data)
     }
 
     /// Fails every write, so a test can see what pairing does when a key can't be kept. Only a test copy sets it.
@@ -67,8 +71,10 @@ final class RemoteDevices {
     init() {
         if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
             macID = saved.macID
-            // A device whose key has gone from the Keychain can't connect, so it isn't listed.
-            devices = saved.devices.filter { KeyVault.read(Self.account($0.id)) != nil }
+            // A device whose key has gone from the Keychain can't connect, so it isn't listed. One whose key couldn't be
+            // read, as when the Keychain is locked or its prompt was turned down, is kept: dropped here, the next save
+            // would write it out of the file for good. Its listener waits until the key can be read.
+            devices = saved.devices.filter { KeyVault.lookUp(Self.account($0.id)).keepsDevice }
         }
     }
 
@@ -80,6 +86,7 @@ final class RemoteDevices {
     }
 
     func key(for id: String) -> Data? { KeyVault.read(Self.account(id)) }
+    func storedKey(for id: String) -> StoredKey { KeyVault.lookUp(Self.account(id)) }
 
     /// Pairs a device, or pairs it again with a new key, and returns that key. Nil if the key couldn't be
     /// kept: nothing has changed then, because a device listed without its key could never connect.

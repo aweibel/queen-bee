@@ -835,7 +835,8 @@ final class FlowController: ToolHost {
     /// see `AppServices.whenAgreed`.
     func applyRole(_ role: AgentRole?, toCard id: String) {
         guard let role else { return setRole(nil, onCard: id, name: "Remove Role") }
-        services.whenAgreed(toUse: role) { [weak self] in
+        // What is applied is the role as the person agreed to it, not as it was when it was picked.
+        services.whenAgreed(toUse: role) { [weak self] role in
             guard let self else { return }
             perform("Apply \(role.name)") {
                 try $0.updateCard(id, patch: role.patch)
@@ -907,7 +908,7 @@ final class FlowController: ToolHost {
         // A role a paired device saved or changed is asked about first, once, and the card added only if agreed
         // to. The point is kept for then.
         guard let role else { return placeCard(kind, at: point, role: nil) }
-        services.whenAgreed(toUse: role) { [weak self] in self?.placeCard(kind, at: point, role: role) }
+        services.whenAgreed(toUse: role) { [weak self] agreed in self?.placeCard(kind, at: point, role: agreed) }
     }
 
     private func placeCard(_ kind: CardKind, at point: CGPoint?, role: AgentRole?) {
@@ -1837,8 +1838,8 @@ final class FlowController: ToolHost {
     private func append(_ text: String, kept: Bool = false) {
         log.append(LogLine(date: Date(), text: text, isKept: kept))
         scheduleHistorySave()
-        if log.count > 600 {
-            log.removeFirst(log.count - 600)
+        if log.count > LogLine.mostKept {
+            log.removeFirst(log.count - LogLine.mostKept)
             runLogStart = max(0, runLogStart - 1)
         }
     }

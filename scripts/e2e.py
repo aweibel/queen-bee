@@ -766,11 +766,35 @@ def remote_edits(app, device, send, ask, done, refused, since):
     check("and the log and the banner of the flow above say which device changed which flow",
           "Test device changed Underneath, which this flow runs, so its schedule is off until you turn it on again" in s["log"]
           and "Test device changed Underneath" in (s["banner"] or ""), f"{s['log'][-3:]} {s['banner']}")
+    # A flow's history is kept in the app's folder under a hash of its project's folder and its id.
+    def history_of(fid):
+        folders = app.op("app", "projects")["projects"]
+        named = [os.path.join(app.support, "history", hashlib.sha256(f"{p}|{fid}".encode()).hexdigest() + ".json") for p in folders]
+        return [n for n in named if os.path.exists(n)]
+
+    deadline = time.time() + 10
+    while not history_of(inner) and time.time() < deadline:
+        time.sleep(0.3)
+    had_history = history_of(inner)
     was_on = armed_again()
     check("and so does deleting the sub-flow", was_on and done(ask("deleteFlow", flow=inner)) and app.state(edits)["armed"] == []
           and os.path.isdir(app.trash) and len(os.listdir(app.trash)) == 1, f"{was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    time.sleep(1)
+    kept = history_of(inner)
+    check("and its history is kept, so putting it back from the Trash brings back its runs and the lines saying what devices did",
+          bool(had_history) and kept == had_history and "Test device" in open(kept[0]).read(), f"{had_history} {kept}")
     e("deleteItems", cards=[flow_card], links=[])
     on_disk(lambda f: all(c["id"] != flow_card for c in f["cards"]))
+    was_on = armed_again()
+    check("changing how deep sub-flows can go, from a device, turns a schedule off too", was_on and done(e("setFlowOption", limit=2))
+          and app.state(edits)["armed"] == [] and on_disk(lambda f: f.get("subflowLimit") == 2).get("subflowLimit") == 2,
+          f"{was_on} {app.state(edits)['armed']} {device.seen[-1:]}")
+    was_on = armed_again()
+    check("and telling the orchestrator when a run ends, which changes nothing the flow does, leaves it on",
+          was_on and done(e("setFlowOption", notify=False)) and app.state(edits)["armed"] == ["Start"]
+          and on_disk(lambda f: not f["notifyOrchestrator"])["notifyOrchestrator"] is False, f"{was_on} {app.state(edits)['armed']}")
+    # Later checks count on one level below Edits.
+    e("setFlowOption", limit=1)
     e("patchCard", card=wrap, patch={"template": "Loudly: {{message}}"})
     check("it can take a schedule away", done(e("patchCard", card=start, patch={"removesTrigger": True}))
           and "trigger" not in by_id(on_disk(lambda f: "trigger" not in by_id(f, start)), start), str(by_id(on_disk(), start)))
@@ -1010,6 +1034,35 @@ def remote_edits(app, device, send, ask, done, refused, since):
     check("and no kind of change has a line for each time it was made", len(settings) <= 10 and not any("\u001b" in line for line in log)
           and 1 <= sum(line.startswith("Test device moved ") for line in log) <= 10, f"{len(settings)} {settings}")
 
+    # Two open projects with a flow of one id, as a copied project or a second worktree has. A device names a flow
+    # by its id alone, so the Mac changes and opens neither, and says why.
+    write(app.project, 91, TWIN)
+    twin = TWIN["id"]
+    mark = len(device.seen)
+    listed = since(mark, lambda m: m["type"] == "library" and "Twin" in m["flows"], 15)
+    copy = tempfile.mkdtemp(prefix="qb-e2e-twin-")
+    try:
+        write(copy, 0, TWIN)
+        mark = len(device.seen)
+        app.op("app", "remote-project", path=copy, add=True)
+        marked = since(mark, lambda m: m["type"] == "library" and twin in m["shared"], 15)
+        check("a flow whose id a flow of another open project has too is marked in the device's list, in both projects",
+              listed is not None and marked is not None and marked["shared"] == [twin, twin], f"{listed is not None} {marked and marked['shared']}")
+        check("and a command for it is refused, saying why", refused(ask("tidy", flow=twin), "Two projects on your Mac have a flow with this id"),
+              str(device.seen[-1:]))
+        device.tell(f"open {twin}")
+        check("and it isn't opened", device.until(lambda m: m["type"] == "opened" and m["name"] == "Twin", 4) is None, str(device.seen[-2:]))
+        mark = len(device.seen)
+        app.op("app", "remote-project", path=copy, add=False)
+        check("once only one project has it, it opens and can be changed again",
+              since(mark, lambda m: m["type"] == "library" and m["shared"] == [], 15) is not None
+              and since(mark, lambda m: m["type"] == "opened" and m["name"] == "Twin", 15) is not None and done(ask("tidy", flow=twin)),
+              str(device.seen[-2:]))
+    finally:
+        shutil.rmtree(copy, ignore_errors=True)
+    device.tell(f"open {edits}")
+    device.until(lambda m: m["type"] == "opened" and m["name"] == "Edits")
+
     # A device that sends faster than a person makes changes is refused, and then let back in.
     time.sleep(3.5)
     burst = [send(None) for _ in range(150)]
@@ -1070,6 +1123,9 @@ PASTED = {
     ],
     "links": [{"id": "plink", "from": "pscript", "port": "pass", "to": "pagent", "maxPasses": 3}],
 }
+
+# Nothing in it runs. A copy of it goes in a second project, with the same id.
+TWIN = flow("Twin", [card("start", "Start", 0, 0, command="hello")], [])
 
 # Two agents, never opened on the Mac, so neither starts. Reckless came in its file with a permission mode
 # that skips checks, which nothing on the Mac or a device can set.
@@ -1337,6 +1393,12 @@ def remote_parity(app, device, send, ask, done, refused, since):
     check("Put back the earlier version on the Mac gives the role what it held before the device changed it",
           back["instructions"] == "Check twice." and back["earlier"] is None and back["changedFrom"] is None, str(back))
     ask("updateRole", flow=roles, role=rid, card=careful)
+    asked = app.op(roles, "pickRole", card="Careful", role=rid, answer=True, changeWhileAsked="Check four times.")
+    now = next(r for r in macs()["roles"] if r["id"] == rid)
+    given = saved_flow(app, roles, lambda f: by_id(f, careful).get("instructions") == "Check four times.")
+    check("a role changed again from a device while the person was being asked is asked about again, and only what they agreed to is used",
+          asked.get("askedTimes") == 2 and now["changedFrom"] is None and now["instructions"] == "Check four times."
+          and by_id(given, careful).get("instructions") == "Check four times.", f"{asked} {now} {by_id(given, careful)}")
     app.op(roles, "saveRoleOnMac", card="Careful")
     check("and a role saved on the Mac is no longer marked", next(r for r in macs()["roles"] if r["id"] == rid)["changedFrom"] is None, str(macs()["roles"]))
     check("and a card that already had the role keeps what it had", named(saved_flow(app, edits), "Double checker").get("instructions") == "Check twice.",
@@ -1636,6 +1698,44 @@ def remote_control(app, device, device_id):
         check("and the run that was slow to start does start, and ends", False, str(e)[:300])
     ask("patchCard", flow=slow, card=opening["id"], patch={"command": opening["command"]})
     app.op(slow, "close")
+
+    def slow_run_with(burst, paced):
+        """Starts a run of Slow, sends `burst` edits to it while it is starting, and gives back the answers in the order they came."""
+        time.sleep(3.5)
+        mark = len(device.seen)
+        run = send("run", flow=slow)
+        ids = []
+        for _ in range(burst):
+            if paced:
+                ids.append(send("foldGroup", flow=slow, group="nogroup", folded=True))
+            else:
+                sent[0] += 1
+                ids.append(sent[0])
+                device.tell(json.dumps(dict(id=sent[0], do="foldGroup", flow=slow, group="nogroup", folded=True)))
+        wanted = set(ids + [run])
+        deadline = time.time() + 120
+        while time.time() < deadline and len([m for m in device.seen[mark:] if m["type"] == "answer" and m["id"] in wanted]) < burst + 1:
+            if device.until(lambda m: m["type"] == "answer" and m["id"] in wanted, 10) is None:
+                break
+        answers = [m for m in device.seen[mark:] if m["type"] == "answer" and m["id"] in wanted]
+        try:
+            app.wait(slow, lambda s: not s["isRunning"], 60, "the slow run to end")
+        except TimeoutError:
+            ask("stop", flow=slow)
+        app.op(slow, "close")
+        return run, ids, answers
+
+    run, ids, answers = slow_run_with(90, paced=True)
+    slowed = [m for m in answers if m["id"] in ids and "Too many changes" in (m["refusal"] or "")]
+    started_at = next((i for i, m in enumerate(answers) if m["id"] == run), None)
+    check("edits sent no faster than a device may while a run is slow to start are all heard once it begins, not refused for coming at once",
+          len(answers) == 91 and not slowed and all("no longer in the flow" in (m["refusal"] or "") for m in answers if m["id"] in ids),
+          f"{len(answers)} answers, {len(slowed)} too fast, the run answered {started_at}th")
+    run, ids, answers = slow_run_with(230, paced=False)
+    started_at = next((i for i, m in enumerate(answers) if m["id"] == run), len(answers))
+    at_once = [m for m in answers[:started_at] if m["id"] in ids and "Too many changes" in (m["refusal"] or "")]
+    check("and no more than 200 wait for one flow: the rest are refused at once, as coming too fast",
+          len(answers) == 231 and len(at_once) >= 25, f"{len(answers)} answers, {len(at_once)} refused before the run began, run answered {started_at}th")
 
     was = app.state(guard)["sessions"]["Alice"]["lastReply"]
     check("it can send an agent a message", done(ask("prompt", flow=guard, key=alice, text="Reply with exactly the word PINEAPPLE and nothing else.")),

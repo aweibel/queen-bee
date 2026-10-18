@@ -192,6 +192,23 @@ import Testing
         #expect(mirror.snapshot == second)
     }
 
+    @Test func openingTheFlowAlreadyOpenKeepsWhatIsOnShow() throws {
+        // The Mac doesn't send the open flow again when it is asked for again, so clearing it would leave nothing.
+        let held = try base()
+        var mirror = mirror(holding: held)
+        _ = mirror.apply(.flow(id: held.flow.id, revision: 4, flow: held.flow))
+        let cleared = mirror.willOpen(held.flow.id)
+        #expect(!cleared)
+        #expect(mirror.snapshot == held)
+        #expect(mirror.revision == 4)
+        // Still waiting for it: nothing to clear, and the Mac's reply is still on its way.
+        var waiting = RemoteMirror()
+        let first = waiting.willOpen(held.flow.id), again = waiting.willOpen(held.flow.id)
+        #expect(first && !again)
+        _ = waiting.apply(.opened(held))
+        #expect(waiting.snapshot == held)
+    }
+
     @Test func closingTheFlowLeavesNothingOpen() throws {
         var mirror = mirror(holding: try base())
         mirror.willOpen(nil)
@@ -263,6 +280,17 @@ import Testing
         #expect(mirror.snapshot?.log.map(\.text) == ["one", "two"])
         _ = mirror.apply(.log(id: held.flow.id, lines: [line(9, "fresh")], reset: true))
         #expect(mirror.snapshot?.log.map(\.text) == ["fresh"])
+    }
+
+    @Test func aLogAtItsCapDropsItsOldestLinesAsTheMacsDoes() throws {
+        var held = try base()
+        held.log = (0..<LogLine.mostKept).map { line(Double($0), "line \($0)") }
+        var mirror = mirror(holding: held)
+        var mac = held
+        let added = line(9_999, "newest")
+        mac.log = Array((mac.log + [added]).suffix(LogLine.mostKept))
+        for message in RemoteSnapshot.updates(from: held, to: mac, revision: 1) { _ = mirror.apply(message) }
+        #expect(mirror.snapshot?.log == mac.log)
     }
 
     @Test func aLinkWithNoMessagesLeftIsDropped() throws {

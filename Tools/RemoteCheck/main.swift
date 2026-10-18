@@ -373,6 +373,7 @@ while true {
                                               "hash": $0.instructionsHash ?? NSNull()] as [String: Any] },
              "parents": Dictionary(flows.map { ($0.name, $0.parentID ?? "") }) { first, _ in first },
              "pinned": flows.filter(\.pinned).map(\.name),
+             "shared": flows.filter { $0.sharedID == true }.map(\.id),
              "cardNames": Dictionary(flows.map { ($0.name, $0.cardNames) }) { first, _ in first },
              "costs": Dictionary(flows.map { ($0.name, [$0.usage?.cost ?? 0, $0.usageWithSubflows?.cost ?? 0]) }) { first, _ in first },
              "browsers": library.projects.map { project -> [String: Any] in

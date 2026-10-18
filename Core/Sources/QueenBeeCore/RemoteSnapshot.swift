@@ -10,9 +10,11 @@ public enum RemoteSnapshot {
         if new.edit != old.edit { out.append(.edit(id: id, state: new.edit)) }
         if new.log != old.log {
             // Lines are only ever added to the end, until the log is cleared or an earlier run is put on show.
-            let grew = new.log.count >= old.log.count && Array(new.log.prefix(old.log.count)) == old.log
-            out.append(grew ? .log(id: id, lines: Array(new.log.dropFirst(old.log.count)), reset: false)
-                            : .log(id: id, lines: new.log, reset: true))
+            if let added = linesAdded(from: old.log, to: new.log) {
+                out.append(.log(id: id, lines: added, reset: false))
+            } else {
+                out.append(.log(id: id, lines: new.log, reset: true))
+            }
         }
         if new.messages != old.messages {
             for link in Set(old.messages.keys).union(new.messages.keys).sorted() where new.messages[link] != old.messages[link] {
@@ -21,6 +23,25 @@ public enum RemoteSnapshot {
         }
         if new.runs != old.runs { out.append(.history(id: id, runs: new.runs)) }
         return out
+    }
+
+    /// The lines added to the end of a log, or nil when it changed some other way and is to be sent whole. A log
+    /// at its cap drops its oldest lines as new ones come, so what it held still counts as there when the end
+    /// of it is the start of the new log, matched line by line with their ids: the device drops the same old
+    /// lines when it adds these, which is only so when the new log is exactly at the cap.
+    static func linesAdded(from old: [LogLine], to new: [LogLine]) -> [LogLine]? {
+        if new.count >= old.count, new.starts(with: old) { return Array(new.dropFirst(old.count)) }
+        guard new.count == LogLine.mostKept, let first = new.first, let dropped = old.firstIndex(where: { $0.id == first.id }) else { return nil }
+        let kept = old[dropped...]
+        guard kept.count <= new.count, new.starts(with: kept) else { return nil }
+        return Array(new.dropFirst(kept.count))
+    }
+
+    /// A log as a device holds it once `lines` have been added to the end: no longer than the Mac's.
+    public static func appending(_ lines: [LogLine], to log: [LogLine]) -> [LogLine] {
+        let all = log + lines
+        // Only ever trimmed when lines were added: a log the Mac sent whole is kept as it came.
+        return lines.isEmpty || all.count <= LogLine.mostKept ? all : Array(all.suffix(LogLine.mostKept))
     }
 }
 

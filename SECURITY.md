@@ -121,7 +121,8 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   move, resize, link, copy, paste, group and delete cards; add an agent from a saved role; change a card's
   settings, its Browser switch included, a link's limit and a group's name; undo and redo; make a new sub-flow for
   a Flow card; and make, rename and delete flows in the projects already in your sidebar. A flow deleted from a
-  device goes to the Trash on your Mac, with its file whole. The Mac did not see you make these changes, so it
+  device goes to the Trash on your Mac, with its file whole, and its runs and log are kept, so a flow put back from
+  the Trash has them again. The Mac did not see you make these changes, so it
   holds them to rules its own canvas is not held to:
   - **A Script card's command changed from a device is allowed on the Mac itself.** It stops the run and asks, and
     no device can give the answer, the one that changed it or any other: somebody at the Mac has to read it and
@@ -156,8 +157,10 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
     device** in the role menu puts it back. These are kept with the app's roles, not in any flow file.
   - **Sizes and rates are capped.** A name is 200 characters and 800 bytes at most, any other text 16,000
     characters and 48,000 bytes, a flow 200 cards, 400 links and 2 MB when it is added to from a device, and a
-    project 200 flows. A device may send 60 commands in a burst and 20 a second after that; more are refused. Key
-    presses for a terminal are not counted in that. A drag the Mac hears no more of ends after two seconds.
+    project 200 flows, and no one message from a device is over 64 KB: the device refuses a bigger one before
+    sending it. A device may send 60 commands in a burst and 20 a second after that; more are refused. Key
+    presses for a terminal are not counted in that. Changes sent while a run is starting wait for it, counted as
+    they arrive, and at most 200 wait for one flow. A drag the Mac hears no more of ends after two seconds.
   - **Every kind of change is noted in the flow's log with the device's name.** The first of each kind is written
     at once, and half a minute later one more line says how many more there were. So a device adds two lines at
     most for each kind of change in half a minute, however many changes it makes. Turning a schedule on or off,
@@ -265,7 +268,7 @@ account and talks to no server.
   sessions keep working when Queen Bee is closed.
 - Two project folders open together that hold a flow with the same id cross-wire: a session of one can be
   answered by the other's flow. A project folder copied along with its `.queenbee` folder does this. Open one
-  of the two at a time.
+  of the two at a time. A paired device can't open or change either of them: its list says why.
 - A reply carries no mark of the run it answers. After a run is stopped, a late reply from it can be taken as
   the answer in the next run, if that agent has been handed a message there.
 - Allowing a Script card's command allows that command line, not the files it runs. If it runs a script in

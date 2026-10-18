@@ -32,8 +32,10 @@ enum RemoteCommands {
         let send: (HostMessage) -> Void
     }
 
-    /// Nil when it was done. Otherwise why not, in words the device shows the person.
-    static func obey(_ sent: RemoteCommand, from deviceID: String, browser door: BrowserDoor? = nil) async -> String? {
+    /// Nil when it was done. Otherwise why not, in words the device shows the person. `paced` is what `pace` said
+    /// when the command arrived, for one that waited its turn: it is held to the pace it came at, not to how many
+    /// were let go at once when the run in front of them began. Nil to ask now.
+    static func obey(_ sent: RemoteCommand, from deviceID: String, browser door: BrowserDoor? = nil, paced: Bool? = nil) async -> String? {
         let host = RemoteHost.shared
         // Asked of the list as it is now, for every command: "Can control" turned off a moment ago is off.
         let device = host.isOn ? host.devices.devices.first(where: { $0.id == deviceID && $0.canControl }) : nil
@@ -45,17 +47,8 @@ enum RemoteCommands {
         // The last step of a drag ends it whatever becomes of the step: refused for its size, for coming too
         // fast, or for a flow or a card that has gone.
         defer { if sent.dragStep?.isLast == true { endDrag(of: deviceID) } }
-        // Keys are not counted: a held key repeats faster than this, and typing is not an edit. The pointer moving
-        // and scrolling in a card's page have a pace of their own, so a drag in it can't use up what the click
-        // that ends it needs. Every other use of a card's browser is counted like any command.
-        if case .keys = sent {} else if case .browser(_, _, let action) = sent, action.isPointer {
-            guard pointerBuckets[deviceID, default: TokenBucket(capacity: Remote.pointerBurst, refill: Remote.pointersASecond)].take() else {
-                return Remote.tooFastRefusal
-            }
-        } else if !buckets[deviceID, default: TokenBucket()].take() {
-            // A step of a drag that isn't the last is never answered, so this goes nowhere and the step is dropped.
-            return Remote.tooFastRefusal
-        }
+        // A step of a drag that isn't the last is never answered, so this goes nowhere and the step is dropped.
+        guard paced ?? pace(sent, from: deviceID) else { return Remote.tooFastRefusal }
         // Text from a device is entered into terminals as a paste. Nothing in it may end the paste.
         let command = sent.cleaned
         // The size is checked here whatever the device's own app would have let through.
@@ -70,7 +63,8 @@ enum RemoteCommands {
             return browser(command, inProject: projectID, by: name, deviceID: deviceID)
         default: break
         }
-        guard let controller = services.allFlows.first(where: { $0.flow.id == command.flowID }) else { return flowGone }
+        if let flowID = command.flowID, services.isSharedFlowID(flowID) { return Remote.sharedFlowIDRefusal }
+        guard let controller = command.flowID.flatMap(services.deviceFlow) else { return flowGone }
         /// What a card is called in a line of the log.
         func called(_ cardID: String) -> String { controller.flow.card(cardID).map { Remote.logName($0.name, or: "a card") } ?? "a card" }
         /// Says in the flow's log that the device made an edit of this kind, the first time in a while.
@@ -291,6 +285,8 @@ enum RemoteCommands {
                 try flow.updateCard(cardID, patch: patch.cardPatch)
             }
 
+        // Made as any other edit from a device is, so a limit that changes what a scheduled flow does turns its
+        // schedules off, and those of the flows above it. The Mac's own Flow Settings set these directly.
         case .setFlowOption(_, let option):
             switch option {
             case .subflowLimit(let levels):
@@ -299,15 +295,16 @@ enum RemoteCommands {
                 guard top.count == 1, top[0] === controller else {
                     return "The limit is set on \(top.first(where: { $0 !== controller })?.flow.name ?? "the flow above this one")."
                 }
-                guard Nesting.clamped(levels) != controller.ownSubflowLimit else { return nil }
-                controller.setSubflowLimit(levels)
-                say(.flowSettings, "changed how deep sub-flows can go")
+                let wanted = Nesting.clamped(levels)
+                guard wanted != controller.ownSubflowLimit else { return nil }
+                return edit("Change Sub-flow Limit", key: "limit", .flowSettings, say: "changed how deep sub-flows can go") {
+                    $0.subflowLimit = wanted == Nesting.usualLimit ? nil : wanted
+                }
             case .notifyOrchestrator(let on):
                 guard controller.flow.notifyOrchestrator != on else { return nil }
-                controller.setNotifiesOrchestrator(on)
-                say(.flowSettings, "turned \(on ? "on" : "off") telling the orchestrator when a run ends")
+                return edit(on ? "Tell Orchestrator of Runs" : "Stop Telling Orchestrator of Runs", .flowSettings,
+                            say: "turned \(on ? "on" : "off") telling the orchestrator when a run ends") { $0.notifyOrchestrator = on }
             }
-            return nil
 
         // MARK: Flows
 
@@ -698,6 +695,18 @@ enum RemoteCommands {
 
     // MARK: Pace
 
+    /// Whether a command is within the pace its device may send at, and counts it. Keys are not counted: a held key
+    /// repeats faster than this, and typing is not an edit. The pointer moving and scrolling in a card's page have a
+    /// pace of their own, so a drag in it can't use up what the click that ends it needs. Every other use of a card's
+    /// browser is counted like any command.
+    static func pace(_ sent: RemoteCommand, from deviceID: String) -> Bool {
+        if case .keys = sent { return true }
+        if case .browser(_, _, let action) = sent, action.isPointer {
+            return pointerBuckets[deviceID, default: TokenBucket(capacity: Remote.pointerBurst, refill: Remote.pointersASecond)].take()
+        }
+        return buckets[deviceID, default: TokenBucket()].take()
+    }
+
     /// How fast each device may send commands, by device id.
     private static var buckets: [String: TokenBucket] = [:]
     /// And how fast it may move the pointer and scroll in cards' pages.
@@ -740,7 +749,7 @@ enum RemoteCommands {
         case .move: "Move"
         case .resize: "Resize"
         }
-        AppServices.shared.allFlows.first { $0.flow.id == open.flowID }?.endDrag(from: deviceID, name)
+        AppServices.shared.deviceFlow(open.flowID)?.endDrag(from: deviceID, name)
     }
 
     // MARK: The log
@@ -801,7 +810,7 @@ enum RemoteCommands {
             try? await Task.sleep(for: .seconds(EditTally.window))
             let extra = tally.close(key)
             guard extra > 0 else { return }
-            AppServices.shared.allFlows.first { $0.flow.id == flowID }?.noteFromDevice("\(name) \(kind.phrase) \(EditTally.more(extra))")
+            AppServices.shared.deviceFlow(flowID)?.noteFromDevice("\(name) \(kind.phrase) \(EditTally.more(extra))")
         }
     }
 

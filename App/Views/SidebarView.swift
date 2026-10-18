@@ -27,8 +27,10 @@ struct SidebarView: View {
             .background(Theme.bar.ui)
             Rectangle().fill(Theme.hairline.ui).frame(height: 1)
             if !RemoteHost.shared.sessions.isEmpty {
-                let controls = RemoteHost.shared.sessions.contains { $0.device.canControl }
-                let names = RemoteHost.shared.sessions.map { $0.device.canControl ? "\($0.device.name) · can control" : $0.device.name }
+                // "Can control" is read from the list of devices, which is watched, so turning it on or off shows here at once.
+                let devices = RemoteHost.shared.devices
+                let controls = RemoteHost.shared.sessions.contains { devices.canControl($0.device.id) }
+                let names = RemoteHost.shared.sessions.map { devices.canControl($0.device.id) ? "\($0.device.name) · can control" : $0.device.name }
                     .joined(separator: ", ")
                 Label(names, systemImage: "ipad.and.iphone")
                     .font(.dsMono(Theme.Size.caption))

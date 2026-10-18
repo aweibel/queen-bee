@@ -88,8 +88,10 @@ final class ProjectModel {
     }
 
     /// Deletes a flow and its file. With `toTrash` the file goes to the Trash instead, which is how a paired
-    /// device's delete is done: a mistake there, or a device in the wrong hands, destroys nothing. False
-    /// when the file couldn't be moved there, and then the flow is still in the project.
+    /// device's delete is done: a mistake there, or a device in the wrong hands, destroys nothing. Its history
+    /// is kept too, under the same name, so a flow put back from the Trash has its runs and its log again, with
+    /// the lines saying what devices did. False when the file couldn't be moved there, and then the flow is
+    /// still in the project.
     @discardableResult
     func delete(_ controller: FlowController, toTrash: Bool = false) -> Bool {
         if toTrash {
@@ -102,8 +104,8 @@ final class ProjectModel {
             // Saves what was not saved yet, so the file is the flow as it last was.
             controller.shutDown()
             try? store.delete(controller.fileURL)
+            controller.forgetHistory()
         }
-        controller.forgetHistory()
         AppServices.shared.unregister(flowID: controller.flow.id)
         controllers.removeAll { $0 === controller }
         if AppServices.shared.selectedFlowID == controller.flow.id {

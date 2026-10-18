@@ -69,6 +69,31 @@ import Testing
         #expect(RemoteSnapshot.updates(from: old, to: new, revision: 1) == [.log(id: old.flow.id, lines: new.log, reset: true)])
     }
 
+    /// Past the cap the oldest line goes as each new one comes. Only the new lines are sent, not the whole log again.
+    @Test func aLogAtItsCapSendsOnlyItsNewLines() throws {
+        var old = try base()
+        old.log = (0..<LogLine.mostKept).map { LogLine(date: Date(timeIntervalSince1970: Double($0)), text: "line \($0)") }
+        var new = old
+        let added = [LogLine(date: Date(timeIntervalSince1970: 9_000), text: "a"), LogLine(date: Date(timeIntervalSince1970: 9_001), text: "b")]
+        new.log = Array((old.log + added).suffix(LogLine.mostKept))
+        #expect(RemoteSnapshot.updates(from: old, to: new, revision: 1) == [.log(id: old.flow.id, lines: added, reset: false)])
+        // And the device, adding them, holds what the Mac holds.
+        #expect(RemoteSnapshot.appending(added, to: old.log) == new.log)
+    }
+
+    @Test func aLogThatSharesNothingWithTheOldOneIsSentWhole() throws {
+        var old = try base()
+        old.log = (0..<LogLine.mostKept).map { LogLine(date: Date(timeIntervalSince1970: Double($0)), text: "line \($0)") }
+        var new = old
+        // Each line has an id of its own, so the same words are not the same lines.
+        new.log = old.log.map { LogLine(date: $0.date, text: $0.text) }
+        #expect(RemoteSnapshot.updates(from: old, to: new, revision: 1) == [.log(id: old.flow.id, lines: new.log, reset: true)])
+        // Lines that went from the start of a log under its cap aren't dropped by the device on its own, so that is sent whole too.
+        var short = old
+        short.log = Array(old.log.dropFirst(10)) + [LogLine(date: Date(timeIntervalSince1970: 9_000), text: "a")]
+        #expect(RemoteSnapshot.updates(from: old, to: short, revision: 1) == [.log(id: old.flow.id, lines: short.log, reset: true)])
+    }
+
     @Test func onlyChangedLinksAreSent() throws {
         let old = try base()
         var new = old

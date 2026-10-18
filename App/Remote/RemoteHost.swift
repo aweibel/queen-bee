@@ -22,8 +22,11 @@ final class RemoteHost {
 
     /// How long a new connection has to say who it is.
     static let openingLimit: TimeInterval = 10
-    /// A device only ever sends a few words, so nothing bigger is taken from one.
-    static let largestFromDevice = 64 * 1024
+    /// A device only ever sends a few words, so nothing bigger is taken from one. A device checks what it sends
+    /// against the same number, so it refuses a command this big itself rather than have the connection end.
+    static let largestFromDevice = Remote.largestFromDevice
+    /// How long to leave it before reading a device's key again when the Keychain wouldn't give it.
+    static let keyRetry: TimeInterval = 60
 
     let devices = RemoteDevices()
     private(set) var isOn = false
@@ -38,6 +41,8 @@ final class RemoteHost {
     @ObservationIgnored private(set) var ports: [String: UInt16] = [:]
     /// The devices whose listener failed and hasn't come back yet.
     @ObservationIgnored private var failing: Set<String> = []
+    /// Devices whose key is to be read again, after the Keychain wouldn't give it.
+    @ObservationIgnored private var keyRetries: Set<String> = []
     /// Connections that haven't yet said who they are, with the device each should be. Nil is one that came to pair.
     @ObservationIgnored private var unannounced: [(deviceID: String?, connection: LinkConnection)] = []
     @ObservationIgnored private var pairingListener: LinkListener?
@@ -122,8 +127,16 @@ final class RemoteHost {
     // MARK: Paired devices
 
     private func listen(for device: PairedDevice) {
-        guard isOn, listeners[device.id] == nil, let key = devices.key(for: device.id) else { return }
+        guard isOn, listeners[device.id] == nil else { return }
         let id = device.id
+        let key: Data
+        switch devices.storedKey(for: id) {
+        case .found(let found): key = found
+        // Gone from the Keychain: nothing can connect as the device.
+        case .missing: return
+        // The Keychain was locked, or its prompt turned down. The device stays paired and is tried again in a while.
+        case .unreadable(let status): return keyUnreadable(id, status: status)
+        }
         do {
             // The record lets a device pick out its own listener on its own Mac without connecting to try.
             let service = localOnly ? nil : NWListener.Service(
@@ -170,6 +183,18 @@ final class RemoteHost {
         Task {
             try? await Task.sleep(for: .seconds(Self.listenRetry))
             // `listen` itself checks that Remote is still on and nothing else is listening for the device.
+            if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
+        }
+    }
+
+    /// Says so, and reads the key again later. One wait at a time for each device.
+    private func keyUnreadable(_ id: String, status: OSStatus) {
+        failing.insert(id)
+        listeningProblem = "Queen Bee couldn't read a device's key from the Keychain (\(status)) and will try again in a minute."
+        guard keyRetries.insert(id).inserted else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(Self.keyRetry))
+            keyRetries.remove(id)
             if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
         }
     }
@@ -275,6 +300,9 @@ final class RemoteHost {
     private func libraryWithoutUsage() -> RemoteLibrary {
         let services = AppServices.shared
         let found = browserName()
+        // Ids that flows of more than one open project have: a device can't open or change those.
+        var seen = Set<String>(), shared = Set<String>()
+        for controller in services.allFlows where !seen.insert(controller.flow.id).inserted { shared.insert(controller.flow.id) }
         return RemoteLibrary(projects: services.projects.map { project in
             // One for the project, as working it out reads every flow.
             let nesting = project.nesting
@@ -283,7 +311,8 @@ final class RemoteHost {
                 let outer = nesting.outerFlows(of: id)
                 return RemoteFlowSummary(id: id, name: controller.flow.name, isSubflow: controller.flow.isSubflow == true,
                                          activity: controller.activity, parentID: outer.count == 1 ? outer[0] : nil,
-                                         pinned: services.pinnedFlowIDs.contains(id), cardNames: Remote.listedNames(of: controller.flow))
+                                         pinned: services.pinnedFlowIDs.contains(id), cardNames: Remote.listedNames(of: controller.flow),
+                                         sharedID: shared.contains(id) ? true : nil)
             }, browser: Self.browserState(of: project, browser: found))
         // What a role holds, so a device can say when a card has drifted from it, with the start of its instructions and a
         // fingerprint of the whole. A role has no folder. A role a device saved or changed says which.

@@ -101,6 +101,16 @@ enum TestHarness {
         case "remote-remove":
             host.remove(payload["device"]?.stringValue ?? "")
             return [:]
+        case "remote-project":
+            // A second project in the sidebar, as a copied project or another worktree is, or taken out again.
+            let services = AppServices.shared
+            let root = URL(fileURLWithPath: payload["path"]?.stringValue ?? "", isDirectory: true).standardizedFileURL
+            if payload["add"]?.boolValue ?? true {
+                services.addProject(root, select: false)
+            } else if let project = services.projects.first(where: { $0.root == root }) {
+                services.removeProject(project)
+            }
+            return ["projects": .number(Double(services.projects.count))]
         default:
             return nil
         }
@@ -227,12 +237,22 @@ enum TestHarness {
             guard let cardID, let role = services.roles.first(where: { $0.id == payload["role"]?.stringValue }) else { return ["error": "pickRole needs card and role"] }
             services.testRoleAnswer = payload["answer"]?.boolValue ?? true
             services.testRoleAsked = []
+            // A device changing the role's instructions while the question is up. Taken when it is asked, a turn later.
+            services.testRoleChange = nil
+            if let changed = payload["changeWhileAsked"]?.stringValue {
+                services.testRoleChange = {
+                    guard var now = services.roles.first(where: { $0.id == role.id }) else { return }
+                    now.instructions = changed
+                    services.save(now, fromDevice: "Other device")
+                }
+            }
             defer { services.testRoleAnswer = nil }
             controller.applyRole(role, toCard: cardID)
             // A marked role is asked about on the next turn: wait for the answer, so what is read below is what it did.
             for _ in 0..<500 where services.rolesBeingAsked > 0 { try? await Task.sleep(for: .milliseconds(10)) }
             guard services.rolesBeingAsked == 0 else { return ["error": "the role's question was never answered"] }
-            return ["asked": .bool(!services.testRoleAsked.isEmpty), "role": controller.flow.card(cardID)?.role.map(JSONValue.string) ?? .null]
+            return ["asked": .bool(!services.testRoleAsked.isEmpty), "askedTimes": .number(Double(services.testRoleAsked.count)),
+                    "role": controller.flow.card(cardID)?.role.map(JSONValue.string) ?? .null]
         case "saveRoleOnMac":
             guard let cardID else { return ["error": "saveRoleOnMac needs card"] }
             controller.saveRole(fromCard: cardID)

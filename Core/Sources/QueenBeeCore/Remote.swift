@@ -49,6 +49,14 @@ public enum Remote {
     public static let farthestPoint = 100_000.0
     public static let largestSide = 10_000.0
 
+    /// The most the Mac takes from a device in one message, in bytes. A device only ever sends a few words, and a
+    /// bigger message ends the connection, so a device checks every command against this before sending it.
+    public static let largestFromDevice = 64 * 1024
+
+    /// What the Mac answers a command for a flow whose id a flow of another open project has too, as when a
+    /// project was copied. The Mac can't tell which of them the device means, so it changes neither.
+    public static let sharedFlowIDRefusal = "Two projects on your Mac have a flow with this id. Open only one of them on your Mac."
+
     /// What the Mac answers a command from a device that may only watch.
     public static let watchOnlyRefusal = "This device can only watch. To let it control this Mac, turn on “Can control” for it in Settings on your Mac."
 
@@ -134,11 +142,15 @@ public struct RemoteFlowSummary: Codable, Equatable, Sendable, Identifiable {
     /// breakdown counts them. Nil when nothing has been used.
     public var usage: Usage?
     public var usageWithSubflows: Usage?
+    /// True when a flow of another project open on the Mac has the same id. The Mac refuses to open or change
+    /// either from a device, and the device says why: see `Remote.sharedFlowIDRefusal`. Nil otherwise.
+    public var sharedID: Bool?
 
     public init(id: String, name: String, isSubflow: Bool, activity: FlowActivity, parentID: String? = nil, pinned: Bool = false,
-                cardNames: [String] = [], usage: Usage? = nil, usageWithSubflows: Usage? = nil) {
+                cardNames: [String] = [], usage: Usage? = nil, usageWithSubflows: Usage? = nil, sharedID: Bool? = nil) {
         self.id = id; self.name = name; self.isSubflow = isSubflow; self.activity = activity; self.parentID = parentID
         self.pinned = pinned; self.cardNames = cardNames; self.usage = usage; self.usageWithSubflows = usageWithSubflows
+        self.sharedID = sharedID
     }
 }
 
@@ -797,6 +809,14 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     /// Why this command can't be obeyed whatever state the Mac is in: it carries too much, or nothing.
     /// Nil when it is fine. A device can ask before sending. The Mac asks every time, whatever was sent.
     public var problem: String? {
+        if let problem = contentProblem { return problem }
+        // Each part may be within its own cap and the whole still be more than the Mac takes in one message,
+        // as with a paste of many long cards. Sent, it would end the connection instead of being refused.
+        let size = (try? Remote.encode(DeviceMessage.command(id: Int.max, command: self)).count) ?? Int.max
+        return size > Remote.largestFromDevice ? Self.tooBig : nil
+    }
+
+    private var contentProblem: String? {
         switch self {
         case .prompt(_, _, let text):
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "There is nothing to send." }
@@ -859,6 +879,7 @@ public enum RemoteCommand: Codable, Equatable, Sendable {
     static let textTooLong = "That text is too long. The most a device can send is \(Remote.textLimit) characters."
     static let offCanvas = "That is off the edge of the canvas."
     static let tooMany = "That is too many at once."
+    static let tooBig = "That is too much to send from a device in one go. Try fewer cards, or less text."
 }
 
 /// What a device sends to the pairing listener.

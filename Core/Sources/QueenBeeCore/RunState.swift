@@ -78,6 +78,10 @@ public struct LogLine: Identifiable, Equatable, Sendable, Codable {
         self.date = date; self.text = text; self.isKept = isKept ? true : nil
     }
 
+    /// The most lines a flow's log holds. Past it the oldest go as each new one comes, on the Mac and on a device
+    /// alike, so a device can be sent only the new lines and drop the same old ones.
+    public static let mostKept = 600
+
     /// What a log is after a device's Clear: the kept lines of the log and of the earlier runs, once each, oldest
     /// first. The person's own Clear on the Mac empties it.
     public static func leftByDeviceClear(log: [LogLine], runs: [RunRecord]) -> [LogLine] {

@@ -143,7 +143,9 @@ final class RemoteSession {
             switch message {
             // Asking again for the flow already open would send the whole of it and every screen again.
             case .open(let flowID) where flowID == controller?.flow.id: break
-            case .open(let flowID): open(flowID.flatMap { id in AppServices.shared.allFlows.first { $0.flow.id == id } })
+            // A flow whose id another open project's flow has too is opened for neither: the device can't say which
+            // it means. Its list marks such a flow and says why.
+            case .open(let flowID): open(flowID.flatMap(AppServices.shared.deviceFlow))
             case .hello: break
             case .watchBrowsers(let flowID, let cardIDs): watchBrowsers(flowID, cardIDs)
             // Copy asks the page, which can take a while or never answer. It is given a few seconds of its own, and
@@ -180,20 +182,37 @@ final class RemoteSession {
     /// Those for one flow are done in the order they came, so a Stop sent after a Run stops that run, and so
     /// are the edits to that flow that arrive while any of them is still waiting.
     /// Whether the device may control the Mac is asked when each one's turn comes, not when it arrived.
+    ///
+    /// Each is held to the pace it arrived at, counted as it arrives: counted when its turn came, every edit
+    /// made while a run was slow to start would be counted at once and most of them refused. And no more than
+    /// `waitingLimit` wait for one flow: past that they are refused at once, as coming too fast.
     private func obeyInTurn(_ id: Int, _ command: RemoteCommand) {
         guard let flowID = command.flowID else { return }
         let deviceID = device.id
+        guard waiting[flowID, default: 0] < Self.waitingLimit else {
+            // A step of a drag that isn't the last goes unanswered, so it is dropped. A drag whose last step is
+            // refused here ends when the Mac hears no more of it, behind the steps still waiting.
+            return answer(id, command, Remote.tooFastRefusal)
+        }
+        let paced = RemoteCommands.pace(command, from: deviceID)
+        waiting[flowID, default: 0] += 1
         turn += 1
         let mine = turn
         slow[flowID] = (mine, Task { [weak self, earlier = slow[flowID]?.task] in
             await earlier?.value
-            let refusal = await RemoteCommands.obey(command, from: deviceID)
+            let refusal = await RemoteCommands.obey(command, from: deviceID, paced: paced)
             guard let self else { return }
+            self.waiting[flowID, default: 1] -= 1
+            if self.waiting[flowID] == 0 { self.waiting[flowID] = nil }
             if self.slow[flowID]?.turn == mine { self.slow[flowID] = nil }
             // A connection that has closed since is told nothing: `send` drops it.
             self.answer(id, command, refusal)
         })
     }
+
+    /// How many commands are waiting their turn for each flow, and the most that may.
+    private var waiting: [String: Int] = [:]
+    private static let waitingLimit = 200
 
     /// "Can control" was changed in Settings while the device was connected.
     func controlChanged(_ on: Bool) {

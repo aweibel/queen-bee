@@ -118,7 +118,8 @@ struct FlowList: View {
             client.settings.flowMenu = nil
             // Asking for the flow already on show would blank it for a moment for nothing. Unless it went from
             // the Mac's list and has come back: the Mac stopped sending it then, and what is on show is old.
-            if !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) }
+            // One whose id another project's flow has too is not opened: the row says why.
+            if flow.sharedID != true, !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) }
         } hold: {
             // Held again, the menu goes.
             if !menu.isEmpty { client.settings.flowMenu = isMenuOut ? nil : key + flow.id }
@@ -126,9 +127,9 @@ struct FlowList: View {
         .id(key + flow.id)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([flow.name, flow.isSubflow ? "sub-flow" : nil, flow.pinned ? "pinned" : nil].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityValue(flow.activity.words ?? "")
+        .accessibilityValue(flow.sharedID == true ? Remote.sharedFlowIDRefusal : flow.activity.words ?? "")
         .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { if !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) } }
+        .accessibilityAction { if flow.sharedID != true, !isOpen || client.mirror.openFlowWentAway { client.open(flow.id) } }
         // VoiceOver can't hold a finger down, so what the menu offers is offered as the row's own actions.
         .accessibilityActions {
             ForEach(menu) { item in
@@ -176,10 +177,20 @@ private struct FlowRow: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.inkSecondary.ui)
             }
-            Text(flow.name)
-                .dsMono(Theme.Touch.body, isOpen ? .medium : .regular)
-                .foregroundStyle((flow.isSubflow && !isOpen ? Theme.inkSecondary : Theme.ink).ui)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(flow.name)
+                    .dsMono(Theme.Touch.body, isOpen ? .medium : .regular)
+                    .foregroundStyle((flow.isSubflow && !isOpen ? Theme.inkSecondary : Theme.ink).ui)
+                    .lineLimit(1)
+                // The Mac opens and changes neither of two flows with one id, so the row says why it won't open.
+                if flow.sharedID == true {
+                    Text(Remote.sharedFlowIDRefusal)
+                        .dsSans(Theme.Touch.caption)
+                        .foregroundStyle(Theme.inkSecondary.ui)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.vertical, flow.sharedID == true ? Theme.Space.xs : 0)
             Spacer(minLength: Theme.Space.xs)
             if flow.pinned {
                 Image(systemName: "pin.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true)

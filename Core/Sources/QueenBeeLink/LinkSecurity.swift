@@ -10,6 +10,31 @@ public struct LinkError: Error, Equatable, CustomStringConvertible {
     public init(_ description: String, keyRefused: Bool = false) { self.description = description; self.keyRefused = keyRefused }
 }
 
+/// What looking for a paired device's key in the Keychain found.
+public enum StoredKey: Equatable, Sendable {
+    case found(Data)
+    /// There is no such key: it was deleted, so the device can never connect with it again.
+    case missing
+    /// The Keychain didn't say, with this status: it was locked, its prompt was turned down, or it couldn't
+    /// ask. The key may well be there, and may be read later.
+    case unreadable(OSStatus)
+
+    /// What `SecItemCopyMatching` answered, as this.
+    public init(status: OSStatus, data: Data?) {
+        switch status {
+        case errSecSuccess: self = data.map(StoredKey.found) ?? .unreadable(status)
+        case errSecItemNotFound: self = .missing
+        default: self = .unreadable(status)
+        }
+    }
+
+    public var key: Data? { if case .found(let key) = self { key } else { nil } }
+
+    /// Whether the device stays paired. Only a key known to have gone takes it off the list: one that couldn't be
+    /// read this time is still there, and a device dropped for that would be written out of the list for good.
+    public var keepsDevice: Bool { self != .missing }
+}
+
 public enum LinkSecurity {
     /// 32 random bytes: a device's key, or a pairing code's secret.
     public static func randomKey() -> Data {

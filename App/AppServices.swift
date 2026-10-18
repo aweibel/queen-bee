@@ -141,35 +141,53 @@ final class AppServices {
     /// Uses a role once the person at this Mac agrees to it, if a device saved or changed it. Asked once: agreed
     /// to, the mark goes. A role with no mark is used at once, without asking. A marked one is asked about on the
     /// next turn of the main thread, never inside the click, toggle or drop that picked it, and `use` runs only
-    /// after "Use It". A test copy is given its answer by the test.
-    func whenAgreed(toUse role: AgentRole, _ use: @escaping @MainActor () -> Void) {
-        guard roles.first(where: { $0.id == role.id })?.changedFrom != nil else { return use() }
+    /// after "Use It", with the role as it was shown. A test copy is given its answer by the test.
+    func whenAgreed(toUse role: AgentRole, _ use: @escaping @MainActor (AgentRole) -> Void) {
+        guard let stored = roles.first(where: { $0.id == role.id }), stored.changedFrom != nil else {
+            return use(roles.first { $0.id == role.id } ?? role)
+        }
         #if DEBUG
         let testAnswer = testRoleAnswer
+        #else
+        let testAnswer: Bool? = nil
         #endif
         rolesBeingAsked += 1
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self] in self?.ask(toUse: role.id, testAnswer: testAnswer, use) }
+    }
+
+    /// Asks about the role as it is now. What is used is what was shown: a device that changed the role again
+    /// while the question was up gets nothing it changed trusted, and the person is asked about that instead.
+    private func ask(toUse id: String, testAnswer: Bool?, _ use: @escaping @MainActor (AgentRole) -> Void) {
+        // Deleted while this waited: there is nothing to use.
+        guard let shown = roles.first(where: { $0.id == id }) else { rolesBeingAsked -= 1; return }
+        // Agreed to while this waited, as when the same role was picked twice: nothing more to ask.
+        guard let mark = shown.changedFrom else { rolesBeingAsked -= 1; return use(shown) }
+        let finish: (Bool) -> Void = { [weak self] agreed in
             guard let self else { return }
-            let finish: (Bool) -> Void = { [weak self] agreed in
-                guard let self else { return }
-                defer { self.rolesBeingAsked -= 1 }
-                guard agreed else { return }
-                if let index = self.roles.firstIndex(where: { $0.id == role.id }), self.roles[index].changedFrom != nil {
-                    self.roles[index].changedFrom = nil
-                    self.saveRoles()
-                }
-                use()
+            defer { self.rolesBeingAsked -= 1 }
+            guard agreed, let index = self.roles.firstIndex(where: { $0.id == id }) else { return }
+            guard self.roles[index] == shown else {
+                // Changed since it was shown, here or from a device. The next turn asks about what it holds now.
+                self.rolesBeingAsked += 1
+                Task { @MainActor [weak self] in self?.ask(toUse: id, testAnswer: testAnswer, use) }
+                return
             }
-            // Agreed to while this waited, as when the same role was picked twice: nothing more to ask.
-            guard let mark = self.roles.first(where: { $0.id == role.id })?.changedFrom else { return finish(true) }
-            #if DEBUG
-            if let testAnswer {
-                self.testRoleAsked.append(role.id)
-                return finish(testAnswer)
-            }
-            #endif
-            Self.askToUse(role, mark: mark, then: finish)
+            self.roles[index].changedFrom = nil
+            self.saveRoles()
+            use(self.roles[index])
         }
+        #if DEBUG
+        if let testAnswer {
+            testRoleAsked.append(id)
+            // What a device does while the question is up, for a test.
+            if let change = testRoleChange {
+                testRoleChange = nil
+                change()
+            }
+            return finish(testAnswer)
+        }
+        #endif
+        Self.askToUse(shown, mark: mark, then: finish)
     }
 
     /// How many "Use it?" questions are waiting or on screen. A test waits for them to be answered.
@@ -199,6 +217,8 @@ final class AppServices {
     /// The answer a test gives in place of the person, and the roles it was asked about.
     @ObservationIgnored var testRoleAnswer: Bool?
     @ObservationIgnored var testRoleAsked: [String] = []
+    /// Run once while the first question is up, as a device changing the role then would.
+    @ObservationIgnored var testRoleChange: (() -> Void)?
     #endif
 
     /// The way into the flow on screen: the flow it was opened from, and that one's, back to
@@ -343,6 +363,21 @@ final class AppServices {
     private var remembersProjects: Bool { !TestHarness.isEnabled }
 
     var allFlows: [FlowController] { projects.flatMap(\.controllers) }
+
+    /// The flow a paired device means by this id: the one open project that has it. Nil when none has, and when
+    /// two have, as a copied project or a second worktree of one does: a device names a flow by its id alone,
+    /// so it can't be told which, and is refused rather than sent to the wrong one. See `isSharedFlowID`.
+    func deviceFlow(_ id: String) -> FlowController? {
+        var found: FlowController?
+        for controller in allFlows where controller.flow.id == id {
+            if found != nil { return nil }
+            found = controller
+        }
+        return found
+    }
+
+    /// Whether flows of more than one open project have this id.
+    func isSharedFlowID(_ id: String) -> Bool { allFlows.count { $0.flow.id == id } > 1 }
     var current: FlowController? { allFlows.first { $0.flow.id == selectedFlowID } }
     var openProjectPaths: [String] { projects.map(\.root.path) }
 

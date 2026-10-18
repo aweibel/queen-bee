@@ -137,6 +137,34 @@ import Testing
         #expect(try Remote.encode(prompt).count < limit)
     }
 
+    /// Every card of a paste within its own caps can still add up to more than the Mac takes in one message.
+    /// Sent, that would end the connection, so it is refused before it leaves, in words the device shows.
+    @Test func aCommandTooBigForOneMessageIsRefusedBeforeItIsSent() throws {
+        func cards(_ count: Int) -> [Card] {
+            (0..<count).map { i in
+                var card = Card.make(kind: .agent, name: "Agent \(i)", x: Double(i) * 10, y: 0)
+                card.instructions = String(repeating: "a", count: Remote.textLimit)
+                return card
+            }
+        }
+        let big = RemoteCommand.paste(flowID: "f", fragment: FlowFragment(cards: cards(5), links: []), at: nil)
+        #expect(big.problem == RemoteCommand.tooBig)
+        let small = RemoteCommand.paste(flowID: "f", fragment: FlowFragment(cards: cards(3), links: []), at: nil)
+        #expect(small.problem == nil)
+        #expect(try Remote.encode(DeviceMessage.command(id: 1, command: small)).count <= Remote.largestFromDevice)
+        // A card's settings have five long texts, each within its cap.
+        var patch = RemoteCardPatch()
+        patch.instructions = String(repeating: "b", count: Remote.textLimit)
+        patch.command = patch.instructions
+        patch.template = patch.instructions
+        patch.text = patch.instructions
+        patch.value = patch.instructions
+        #expect(RemoteCommand.patchCard(flowID: "f", cardID: "c", patch: patch).problem == RemoteCommand.tooBig)
+        // A message of the longest kind, made of what JSON writes out longest, is still refused rather than sent.
+        let escaped = RemoteCommand.prompt(flowID: "f", key: "k", text: String(repeating: "\u{1}", count: Remote.promptLimit))
+        #expect(escaped.problem == RemoteCommand.tooBig)
+    }
+
     @Test func aDevicesNameGoesInTheLogOnOneLine() {
         #expect(Remote.oneLine("Sam's iPad") == "Sam's iPad")
         #expect(Remote.oneLine("iPad\nRun finished") == "iPad Run finished")
