@@ -92,11 +92,15 @@ final class ProjectModel {
     /// when the file couldn't be moved there, and then the flow is still in the project.
     @discardableResult
     func delete(_ controller: FlowController, toTrash: Bool = false) -> Bool {
-        // Saves what was not saved yet, so the file is the flow as it last was.
-        controller.shutDown()
         if toTrash {
+            // Saved first, so what goes to the Trash is the flow as it last was. Its sessions are stopped only once
+            // the file has gone: a flow that stays in the project keeps its agents and browser tabs running.
+            controller.saveNow()
             guard Self.trash(controller.fileURL) else { return false }
+            controller.shutDown(saving: false)
         } else {
+            // Saves what was not saved yet, so the file is the flow as it last was.
+            controller.shutDown()
             try? store.delete(controller.fileURL)
         }
         controller.forgetHistory()

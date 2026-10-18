@@ -348,6 +348,8 @@ final class ComposerModel {
     @ObservationIgnored fileprivate var pending: [String: [UInt8]] = [:]
     /// What is sending each session's keys, one message at a time.
     @ObservationIgnored fileprivate var pumps: [String: Task<Void, Never>] = [:]
+    /// Bumped by `clear()`, so a pump cancelled while it waits on an answer leaves the one that replaced it alone.
+    @ObservationIgnored fileprivate var generation = 0
     /// How long keys are gathered before they are sent, so that quick typing goes as one message.
     fileprivate static let gather: Duration = .milliseconds(12)
     #if DEBUG
@@ -383,6 +385,7 @@ final class ComposerModel {
 
     /// Another Mac, or none: nothing written for the last one's sessions is this one's.
     func clear() {
+        generation += 1
         pumps.values.forEach { $0.cancel() }
         pumps = [:]
         pending = [:]
@@ -565,17 +568,19 @@ extension RemoteClient {
         guard !bytes.isEmpty, let flowID = mirror.openFlowID, let id = composerID(key) else { return }
         composer.pending[id, default: []] += bytes
         guard composer.pumps[id] == nil else { return }
+        let mine = composer.generation
         composer.pumps[id] = Task {
             try? await Task.sleep(for: ComposerModel.gather)
-            while !Task.isCancelled, let data = composer.next(id) {
+            while !Task.isCancelled, composer.generation == mine, let data = composer.next(id) {
                 let refusal = await send(.keys(flowID: flowID, key: key, data: data))
+                guard composer.generation == mine else { return }
                 if composer.refusals[id] != refusal { composer.refusals[id] = refusal }
                 if refusal != nil {
                     composer.pending[id] = nil
                     break
                 }
             }
-            composer.pumps[id] = nil
+            if composer.generation == mine { composer.pumps[id] = nil }
         }
     }
 

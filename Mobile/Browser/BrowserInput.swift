@@ -10,6 +10,9 @@ import UIKit
 final class BrowserInputQueue {
     fileprivate var waiting: [(card: String, action: RemoteBrowserAction, answered: ((String?) -> Void)?)] = []
     fileprivate var pump: Task<Void, Never>?
+    /// Bumped by `clear()`. A pump that was cancelled can still be waiting on an answer when a new one starts,
+    /// and it must then leave the new one alone.
+    fileprivate var generation = 0
     fileprivate var text: (card: String, text: String)?
     fileprivate var textTimer: Task<Void, Never>?
     fileprivate var move: (card: String, mouse: RemoteMouse)?
@@ -23,6 +26,7 @@ final class BrowserInputQueue {
     var isBusy: Bool { pump != nil || text != nil || move != nil || scroll != nil }
 
     func clear() {
+        generation += 1
         pump?.cancel()
         textTimer?.cancel()
         pointerTimer?.cancel()
@@ -147,8 +151,9 @@ extension RemoteClient {
         let queue = browserInput
         queue.waiting.append((card, action, answered))
         guard queue.pump == nil else { return }
+        let mine = queue.generation
         queue.pump = Task {
-            while !Task.isCancelled, !queue.waiting.isEmpty {
+            while !Task.isCancelled, queue.generation == mine, !queue.waiting.isEmpty {
                 let (card, action, answer) = queue.waiting.removeFirst()
                 guard let flowID = mirror.openFlowID else {
                     answer?(Self.notConnected)
@@ -157,6 +162,8 @@ extension RemoteClient {
                 let command = RemoteCommand.browser(flowID: flowID, cardID: card, action: action)
                 if action.isAnswered {
                     let refusal = await send(command)
+                    // Cleared while waiting: what is queued now belongs to whatever came after.
+                    guard queue.generation == mine else { return }
                     browsers.refusals[card] = refusal
                     answer?(refusal)
                     // Typed late and out of step, keys could act on a page the person no longer sees.
@@ -169,7 +176,7 @@ extension RemoteClient {
                     sendStep(command)
                 }
             }
-            queue.pump = nil
+            if queue.generation == mine { queue.pump = nil }
         }
     }
 

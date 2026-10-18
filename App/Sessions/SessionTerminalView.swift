@@ -120,5 +120,7 @@ private nonisolated final class ProcessLink: LocalProcessDelegate, @unchecked Se
 
     func processFailedToStart(_ source: LocalProcess, error: LocalProcessError) {
         dataReceived(slice: Array("\r\nProcess launch failed: \(error)\r\n".utf8)[...])
+        // It never started, so it has ended: the session must not wait at "starting" for an exit that won't come.
+        Task { @MainActor in exited(nil) }
     }
 }

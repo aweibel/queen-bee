@@ -561,7 +561,8 @@ final class FlowController: ToolHost {
     /// True when the flow is open and has an agent whose session is waiting to be asked for.
     var hasAgentsHeldBack: Bool { isOpen && !heldBack.isEmpty }
 
-    func shutDown() {
+    /// `saving: false` is for a flow whose file has just gone to the Trash: saving would write it back.
+    func shutDown(saving: Bool = true) {
         // The run, if there is one, ends here: nothing is waited on and nothing more is routed.
         holdTasks.values.forEach { $0.cancel() }
         holdTasks.removeAll()
@@ -576,7 +577,7 @@ final class FlowController: ToolHost {
         watchers.removeAll()
         nextFires = [:]
         scheduledFor = [:]
-        saveNow()
+        if saving { saveNow() } else { saveTask?.cancel() }
         if historyTask != nil { saveHistory() }
         sessions.values.forEach { $0.terminate() }
         sessions.removeAll()
@@ -988,7 +989,7 @@ final class FlowController: ToolHost {
         }
     }
 
-    private func saveNow() {
+    func saveNow() {
         saveTask?.cancel()
         do {
             try project.store.save(flow, to: fileURL)
