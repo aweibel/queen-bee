@@ -830,13 +830,16 @@ final class FlowController: ToolHost {
     }
 
     /// Gives a card a role's settings and ties it to the role, or cuts the tie with nil.
-    /// A role a paired device saved or changed is asked about first, once: see `AppServices.agreesToUse`.
+    /// A role a paired device saved or changed is asked about first, once, and applied only if agreed to:
+    /// see `AppServices.whenAgreed`.
     func applyRole(_ role: AgentRole?, toCard id: String) {
         guard let role else { return setRole(nil, onCard: id, name: "Remove Role") }
-        guard services.agreesToUse(role) else { return }
-        perform("Apply \(role.name)") {
-            try $0.updateCard(id, patch: role.patch)
-            if let index = $0.cards.firstIndex(where: { $0.id == id }) { $0.cards[index].role = role.id }
+        services.whenAgreed(toUse: role) { [weak self] in
+            guard let self else { return }
+            perform("Apply \(role.name)") {
+                try $0.updateCard(id, patch: role.patch)
+                if let index = $0.cards.firstIndex(where: { $0.id == id }) { $0.cards[index].role = role.id }
+            }
         }
     }
 
@@ -900,8 +903,13 @@ final class FlowController: ToolHost {
     /// Adds a card. With a point, as when one is dropped from the palette, the card is centred
     /// there. Without, it goes to the middle of what is on screen, stepped clear of other cards.
     func addCard(_ kind: CardKind, at point: CGPoint? = nil, role: AgentRole? = nil) {
-        // A role a paired device saved or changed is asked about first, once.
-        if let role, !services.agreesToUse(role) { return }
+        // A role a paired device saved or changed is asked about first, once, and the card added only if agreed
+        // to. The point is kept for then.
+        guard let role else { return placeCard(kind, at: point, role: nil) }
+        services.whenAgreed(toUse: role) { [weak self] in self?.placeCard(kind, at: point, role: role) }
+    }
+
+    private func placeCard(_ kind: CardKind, at point: CGPoint?, role: AgentRole?) {
         var made: Card?
         let size = Card.make(kind: kind, name: "x", x: 0, y: 0)
         var spot: CGRect

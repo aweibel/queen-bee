@@ -229,6 +229,9 @@ enum TestHarness {
             services.testRoleAsked = []
             defer { services.testRoleAnswer = nil }
             controller.applyRole(role, toCard: cardID)
+            // A marked role is asked about on the next turn: wait for the answer, so what is read below is what it did.
+            for _ in 0..<500 where services.rolesBeingAsked > 0 { try? await Task.sleep(for: .milliseconds(10)) }
+            guard services.rolesBeingAsked == 0 else { return ["error": "the role's question was never answered"] }
             return ["asked": .bool(!services.testRoleAsked.isEmpty), "role": controller.flow.card(cardID)?.role.map(JSONValue.string) ?? .null]
         case "saveRoleOnMac":
             guard let cardID else { return ["error": "saveRoleOnMac needs card"] }

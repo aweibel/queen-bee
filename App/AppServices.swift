@@ -138,28 +138,45 @@ final class AppServices {
         saveRoles()
     }
 
-    /// Whether the person at this Mac agrees to use a role a device saved or changed. Asked once: agreed to, the
-    /// mark goes. A role with no mark is used without asking. A test copy is given its answer by the test.
-    func agreesToUse(_ role: AgentRole) -> Bool {
-        guard let mark = roles.first(where: { $0.id == role.id })?.changedFrom else { return true }
-        let agreed: Bool
+    /// Uses a role once the person at this Mac agrees to it, if a device saved or changed it. Asked once: agreed
+    /// to, the mark goes. A role with no mark is used at once, without asking. A marked one is asked about on the
+    /// next turn of the main thread, never inside the click, toggle or drop that picked it, and `use` runs only
+    /// after "Use It". A test copy is given its answer by the test.
+    func whenAgreed(toUse role: AgentRole, _ use: @escaping @MainActor () -> Void) {
+        guard roles.first(where: { $0.id == role.id })?.changedFrom != nil else { return use() }
         #if DEBUG
-        if let answer = testRoleAnswer {
-            testRoleAsked.append(role.id)
-            agreed = answer
-        } else {
-            agreed = Self.askToUse(role, mark: mark)
-        }
-        #else
-        agreed = Self.askToUse(role, mark: mark)
+        let testAnswer = testRoleAnswer
         #endif
-        guard agreed, let index = roles.firstIndex(where: { $0.id == role.id }) else { return agreed }
-        roles[index].changedFrom = nil
-        saveRoles()
-        return true
+        rolesBeingAsked += 1
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let finish: (Bool) -> Void = { [weak self] agreed in
+                guard let self else { return }
+                defer { self.rolesBeingAsked -= 1 }
+                guard agreed else { return }
+                if let index = self.roles.firstIndex(where: { $0.id == role.id }), self.roles[index].changedFrom != nil {
+                    self.roles[index].changedFrom = nil
+                    self.saveRoles()
+                }
+                use()
+            }
+            // Agreed to while this waited, as when the same role was picked twice: nothing more to ask.
+            guard let mark = self.roles.first(where: { $0.id == role.id })?.changedFrom else { return finish(true) }
+            #if DEBUG
+            if let testAnswer {
+                self.testRoleAsked.append(role.id)
+                return finish(testAnswer)
+            }
+            #endif
+            Self.askToUse(role, mark: mark, then: finish)
+        }
     }
 
-    private static func askToUse(_ role: AgentRole, mark: RoleMark) -> Bool {
+    /// How many "Use it?" questions are waiting or on screen. A test waits for them to be answered.
+    @ObservationIgnored private(set) var rolesBeingAsked = 0
+
+    /// Asks as a sheet on the window in front when there is one free, or else in a window of its own.
+    private static func askToUse(_ role: AgentRole, mark: RoleMark, then answer: @escaping (Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = "This role was changed from \(mark.device). Use it?"
         let settings = [role.model.isEmpty ? "Model: your default" : "Model: \(role.model)",
@@ -171,7 +188,11 @@ final class AppServices {
             + (instructions.count > 1_500 ? "…" : "")
         alert.addButton(withTitle: "Use It")
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow, window.isVisible, window.attachedSheet == nil {
+            alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
+        } else {
+            answer(alert.runModal() == .alertFirstButtonReturn)
+        }
     }
 
     #if DEBUG
