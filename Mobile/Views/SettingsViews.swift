@@ -874,6 +874,7 @@ private struct BrowserSection: View {
     @Environment(RemoteClient.self) private var client
     let status: BrowserStatus
     @State private var asksToClear = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -899,7 +900,8 @@ private struct BrowserSection: View {
                     .foregroundStyle(Theme.failInk.ui)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: Theme.Space.s) {
+            // On a phone the button goes under the words, which would otherwise be a column a few words wide.
+            (sizeClass == .compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s)) : AnyLayout(HStackLayout(spacing: Theme.Space.s))) {
                 Text(BrowserStatus.clearText)
                     .dsSans(Theme.Touch.caption + 1)
                     .foregroundStyle(Theme.inkSecondary.ui)

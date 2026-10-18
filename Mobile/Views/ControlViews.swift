@@ -71,6 +71,7 @@ struct CanvasFoot: View {
 /// When this device may only watch, one line here says how to change that, and there are no buttons.
 struct RunBar: View {
     @Environment(RemoteClient.self) private var client
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let abilities: Abilities
 
     var body: some View {
@@ -85,6 +86,18 @@ struct RunBar: View {
                 .frame(minHeight: Theme.Touch.target)
                 .floatingPanel()
         } else if !abilities.bar.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            // On a phone the bar's note has a line of its own above the buttons: beside them it would be a column a
+            // few words wide, and the buttons cut short.
+            if sizeClass == .compact, let note = abilities.barNote {
+                Text(note)
+                    .dsSans(Theme.Touch.caption + 1)
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .padding(.horizontal, Theme.Space.s)
+                    .padding(.top, Theme.Space.xs)
+            }
             HStack(spacing: Theme.Space.s) {
                 // Editing is a mode, and this is the way in. The way out is Done, on the bar that takes its place.
                 if let edit = client.editBar.first, edit.kind == .edit {
@@ -93,7 +106,7 @@ struct RunBar: View {
                         .accessibilityHint(edit.hint)
                     Rectangle().fill(Theme.hairline.ui).frame(width: 1, height: Theme.Touch.target - Theme.Space.s).accessibilityHidden(true)
                 }
-                if let note = abilities.barNote {
+                if sizeClass != .compact, let note = abilities.barNote {
                     Text(note)
                         .dsSans(Theme.Touch.caption + 1)
                         .foregroundStyle(Theme.inkSecondary.ui)
@@ -119,7 +132,8 @@ struct RunBar: View {
                             switch button.press {
                             case .run: Label(button.title, systemImage: "play.fill")
                             case .stop: Label(button.title, systemImage: "stop.fill")
-                            default: Text(button.title)
+                            // Made a little smaller rather than cut short, on a phone's narrow bar.
+                            default: Text(button.title).lineLimit(1).minimumScaleFactor(0.75)
                             }
                         }
                         .buttonStyle(.panel(button.press == .run ? .run : button.press == .stop ? .stop : .outline))
@@ -127,6 +141,7 @@ struct RunBar: View {
                         .accessibilityHint(button.hint)
                     }
                 }
+            }
             }
             .padding(Theme.Space.xs)
             .floatingPanel()
