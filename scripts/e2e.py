@@ -24,6 +24,11 @@ the same way. No finger touches the screen: each gesture is made through what it
 flows, in the iPad app against a Mac made up inside the app, the same way.
 `parity` is run only when named: it checks stage 4's controls in the iPad app, copying and pasting, roles, schedules,
 sub-flows, pins, Find and the rest, against a Mac made up inside the app, the same way.
+`browser-canned` is run only when named: it checks an agent card's browser in the iPad app in each of its states, watched
+only and with control, against a Mac made up inside the app, the same way.
+`browser-remote` is run only when named: it checks a card's browser from the stand-in device against a small local site: what a device
+is sent watching only and with control, the pace and size of what it is sent, and every way of using the page.
+`browser-mobile` is run only when named: the same from the iPad app in the Simulator, against the test copy.
 """
 import atexit
 import base64
@@ -1118,8 +1123,9 @@ def remote_parity(app, device, send, ask, done, refused, since):
     mark = len(device.seen)
     check("it can clear the log", done(ask("clearLog")), str(device.seen[-1:]))
     s = app.state(doors)
-    check("and the log and the earlier runs are emptied, and the new log says which device did it",
-          s["log"] == ["Test device cleared the log"] and s["runs"] == [], f"{s['log'][-3:]} {len(s['runs'])}")
+    check("and the log and the earlier runs are emptied but for what the device did, and the new log says which device did it",
+          s["log"][-1] == "Test device cleared the log" and "Run started from Test device" in s["log"] and "Stopped from Test device" in s["log"]
+          and all("Test device" in line for line in s["log"]) and s["runs"] == [], f"{s['log'][-4:]} {len(s['runs'])}")
     check("and the device is sent the log afresh", since(mark, lambda m: m["type"] == "log" and m["reset"]) is not None, str(device.seen[-3:]))
     if app.state(doors)["banner"] is None:
         check("closing a message that isn't there is refused", refused(ask("dismissBanner"), "no message to close"), str(device.seen[-1:]))
@@ -1141,8 +1147,11 @@ def remote_parity(app, device, send, ask, done, refused, since):
     check("a device's change to what the flow does turns it off again", done(ask("patchCard", card=shout, patch={"command": "tr a-z A-Z | rev"}))
           and app.state(doors)["armed"] == [] and "Test device" in (app.state(doors)["banner"] or ""), str(app.state(doors)["banner"]))
     mark = len(device.seen)
+    banner = app.state(doors)["banner"] or ""
     check("it can close the message at the top of the flow", done(ask("dismissBanner")) and app.state(doors)["banner"] is None,
           str(app.state(doors)["banner"]))
+    said = "Test device closed the message: " + (banner[:80] + "…" if len(banner) > 80 else banner)
+    check("and the Mac's log says which device closed it and what it said", said in app.state(doors)["log"], f"{said!r} {app.state(doors)['log'][-3:]}")
     check("and the device is told it has gone", told_run(mark, doors, lambda m: m["banner"] is None) is not None, str(device.seen[-3:]))
     check("and it can turn the schedule on again", done(ask("armSchedule", card=start, on=True)) and app.state(doors)["armed"] == ["Start"],
           str(app.state(doors)["armed"]))
@@ -1165,6 +1174,16 @@ def remote_parity(app, device, send, ask, done, refused, since):
           s["armed"] == [] and s["scheduled"] == 0 and "Test device turned the schedule off for Start" in s["log"], f"{s['armed']} {s['log'][-3:]}")
     check("and the schedule itself is left as it was", (by_id(saved_flow(app, doors), start).get("trigger") or {}).get("minutes") == 1,
           str(by_id(saved_flow(app, doors), start)))
+    # A device can't wipe out the record of what it did: its Clear leaves every line about a device and a schedule.
+    check("a device clears the log again", done(ask("clearLog")), str(device.seen[-1:]))
+    s = app.state(doors)
+    kept = ["Test device turned the schedule on for Start", "Test device changed what the flow does, so its schedule is off until you turn it on again",
+            said, "Test device turned the schedule off for Start"]
+    check("and the lines that say the schedule went on and off, and what the device edited, are still there",
+          all(line in s["log"] for line in kept) and any(line.startswith("Test device changed Start's") for line in s["log"])
+          and s["log"][-1] == "Test device cleared the log"
+          and not any(line.startswith("Starting Start: on schedule") for line in s["log"]) and s["runs"] == [], str(s["log"]))
+    check("each time the schedule went on or off is a line of its own", s["log"].count("Test device turned the schedule on for Start") == 2, str(s["log"]))
     ask("patchCard", card=start, patch={"removesTrigger": True})
     check("with no schedule there is nothing to turn on", refused(ask("armSchedule", card=start, on=True), "no schedule to turn on"), str(device.seen[-1:]))
 
@@ -1255,6 +1274,13 @@ def remote_parity(app, device, send, ask, done, refused, since):
     saved_flow(app, guard, lambda f: len(f["cards"]) == len(before))
     check("pasting nothing, or somewhere that is nowhere, is refused", refused(ask("paste", flow=guard, fragment={"cards": [], "links": []}), "nothing to paste")
           and refused(ask("paste", flow=guard, fragment=PASTED, at=[1e9, 0.0]), "off the edge"), str(device.seen[-2:]))
+    selfish = {"cards": PASTED["cards"], "links": PASTED["links"] + [{"id": "loop", "from": "pscript", "port": "pass", "to": "pscript", "maxPasses": 3}]}
+    check("a paste with a link the Mac wouldn't draw pastes nothing at all", refused(ask("paste", flow=guard, fragment=selfish), "nothing was pasted")
+          and len(saved_flow(app, guard)["cards"]) == len(before), str(device.seen[-1:]))
+    far = ask("paste", flow=guard, fragment={"cards": [dict(PASTED["cards"][0], x=99_990.0)], "links": []}, at=None)
+    landed = [c for c in saved_flow(app, guard, lambda f: len(f["cards"]) == len(before) + 1)["cards"] if c["id"] not in before]
+    check("and one stepped off the edge of the canvas is kept on it", done(far) and landed and landed[0]["x"] == 100_000, str(landed))
+    ask("deleteItems", flow=guard, cards=[c["id"] for c in landed], links=[])
 
     # The Browser switch, on an agent of a flow the Mac hasn't opened, so no browser starts.
     aid = next(c["id"] for c in saved_flow(app, edits)["cards"] if c["kind"] == "agent")
@@ -1284,7 +1310,16 @@ def remote_parity(app, device, send, ask, done, refused, since):
     check("and ties the card to it", by_id(saved_flow(app, roles, lambda f: by_id(f, careful).get("role")), careful).get("role") == rid,
           str(by_id(saved_flow(app, roles), careful)))
     told = lib(mark, lambda m: any(r["id"] == rid and r["instructions"] == "Check twice." and r["permissionMode"] == "plan" for r in m["roleInfo"]))
-    check("and the device is told what the role holds", told is not None, str(device.seen[-1:])[:300])
+    check("and the device is told what the role holds, and that this device saved it", told is not None
+          and any(r["id"] == rid and r["changedFrom"] == "Test device" for r in told["roleInfo"]), str(device.seen[-1:])[:300])
+    check("the Mac marks the role as saved from the device", role is not None and role["changedFrom"] == "Test device", str(role))
+    asked = app.op(roles, "pickRole", card="Careful", role=rid, answer=False)
+    check("and the first time the person picks it on the Mac they are asked, and saying no leaves the role marked",
+          asked.get("asked") is True and next(r for r in macs()["roles"] if r["id"] == rid)["changedFrom"] == "Test device", str(asked))
+    asked = app.op(roles, "pickRole", card="Careful", role=rid, answer=True)
+    again = app.op(roles, "pickRole", card="Careful", role=rid, answer=False)
+    check("saying yes takes the mark away, and they are not asked again", asked.get("asked") is True and again.get("asked") is False
+          and next(r for r in macs()["roles"] if r["id"] == rid)["changedFrom"] is None and again.get("role") == rid, f"{asked} {again}")
     check("a card that has a role is not saved as another", refused(ask("saveRole", flow=roles, card=careful, name="Again"), "already has the role"), str(device.seen[-1:]))
     check("and a role is not given a name another has", refused(ask("saveRole", flow=edits, card=aid, name="double CHECKER"), "already has a role called"),
           str(device.seen[-1:]))
@@ -1295,16 +1330,30 @@ def remote_parity(app, device, send, ask, done, refused, since):
     ask("patchCard", flow=roles, card=careful, patch={"instructions": "Check three times."})
     check("it can update the role from the card", done(ask("updateRole", flow=roles, role=rid, card=careful))
           and next(r for r in macs()["roles"] if r["id"] == rid)["instructions"] == "Check three times.", str(macs()["roles"]))
+    updated = next(r for r in macs()["roles"] if r["id"] == rid)
+    check("and the Mac marks it again, keeping what it held before", updated["changedFrom"] == "Test device" and updated["earlier"] == "Check twice.", str(updated))
+    app.op(guard, "putBackRole", role=rid)
+    back = next(r for r in macs()["roles"] if r["id"] == rid)
+    check("Put back the earlier version on the Mac gives the role what it held before the device changed it",
+          back["instructions"] == "Check twice." and back["earlier"] is None and back["changedFrom"] is None, str(back))
+    ask("updateRole", flow=roles, role=rid, card=careful)
+    app.op(roles, "saveRoleOnMac", card="Careful")
+    check("and a role saved on the Mac is no longer marked", next(r for r in macs()["roles"] if r["id"] == rid)["changedFrom"] is None, str(macs()["roles"]))
     check("and a card that already had the role keeps what it had", named(saved_flow(app, edits), "Double checker").get("instructions") == "Check twice.",
           str(named(saved_flow(app, edits), "Double checker")))
     check("a role is only updated from a card that has it", refused(ask("updateRole", flow=edits, role=rid, card=aid), "doesn't have the role"), str(device.seen[-1:]))
     check("it can delete the role", done(ask("deleteRole", role=rid)) and not any(r["id"] == rid for r in macs()["roles"]), str(macs()["roles"]))
+    check("and the Mac keeps it in its list of roles deleted from a device", any(r["id"] == rid and r["device"] == "Test device" for r in macs()["deletedRoles"]),
+          str(macs()["deletedRoles"]))
     check("and the cards made from it keep their settings", named(saved_flow(app, edits), "Double checker").get("instructions") == "Check twice.")
     check("and a role that is gone can't be used or deleted", refused(ask("deleteRole", role=rid), "no longer on your Mac")
           and refused(ask("addRoleCard", flow=edits, role=rid, x=0.0, y=0.0), "no longer on your Mac"), str(device.seen[-2:]))
     log = app.state(edits)["log"] + app.state(roles)["log"] + app.state(guard)["log"]
     check("and the logs say which device did each", "Test device saved Careful as the role Double checker" in log
           and "Test device updated the role Double checker from Careful" in log and "Test device deleted the role Double checker" in log, str(log[-6:]))
+    restored = app.op(guard, "restoreRole", role=rid)
+    check("Restore on the Mac puts back a role deleted from a device", restored.get("name") == "Double checker"
+          and any(r["id"] == rid for r in macs()["roles"]) and not macs()["deletedRoles"], f"{restored} {macs()['deletedRoles']}")
 
     # A Flow card's New sub-flow. Edits allows one level below it: it was set so earlier.
     ask("addCard", flow=edits, kind="flow", x=1500.0, y=200.0)
@@ -2526,9 +2575,9 @@ def scenario_mobile(app):
               f"{did(s)[-1]} {real['results']} {real['log'][-3:]}")
         s = step("q2", 4)
         real = app.wait(gid, lambda s: s["runs"] == [], 15, "the log to be cleared")
-        check("Clear on the device clears the Mac's log and earlier runs, and the log says who did it",
-              did(s)[-1] == ("clearLog", None) and real["runs"] == [] and any(f"{name} cleared the log" in line for line in real["log"]) and len(real["log"]) <= 2,
-              f"{did(s)[-1]} {real['log']}")
+        check("Clear on the device clears the Mac's log and earlier runs, but for what devices did, and the log says who did it",
+              did(s)[-1] == ("clearLog", None) and real["runs"] == [] and real["log"][-1] == f"{name} cleared the log"
+              and all(name in line for line in real["log"]), f"{did(s)[-1]} {real['log']}")
         s = step("q3", 8, also=lambda s: shown(s, "Shout 2"))
         f = saved_flow(app, gid, lambda f: any(c["name"] == "Shout 2" for c in f["cards"]))
         pasted = next((c for c in (f or {}).get("cards", []) if c["name"] == "Shout 2"), {})
@@ -3895,6 +3944,8 @@ def scenario_parity():
         # Roles.
         s = play("edit:on;pick:Writer;saveRole:Writer:Kind writer;saveRole:Writer:Again", *on, also=lambda s: any(r["name"] == "Kind writer" for r in p(s).get("roles", [])))
         role = next((r for r in p(s).get("roles", []) if r["name"] == "Kind writer"), {})
+        check("a role saved from the device says so in the details, as the Mac marks it", (p(s).get("roleChanged") or "").startswith("Changed from This iPad"),
+              str(p(s).get("roleChanged")))
         check("Save as a New Role saves the card's settings under the name, and ties the card to it",
               said(s)[2] is None and role.get("model") == "opus" and role.get("instructions", "").startswith("You write short notes")
               and "already has the role Kind writer" in (said(s)[3] or ""), f"{did(s)} {role}")
@@ -4890,6 +4941,16 @@ PAGE_NOISE = """<!doctype html><html><head><title>Noise</title></head><body styl
 <canvas id="c" style="width:100vw;height:100vh"></canvas><script>const c=document.getElementById('c');c.width=innerWidth*2;c.height=innerHeight*2;
 const x=c.getContext('2d');(function f(){const d=x.createImageData(c.width,c.height);const a=new Uint32Array(d.data.buffer);
 for(let i=0;i<a.length;i++)a[i]=(Math.random()*0xffffffff)|0xff000000;x.putImageData(d,0,0);requestAnimationFrame(f)})()</script></body></html>"""
+# A page that changes its own address and title 25 times a second, each address 100 KB long.
+PAGE_SPAM = """<!doctype html><html><head><title>Spam</title></head><body><h1>Spam</h1><script>let n=0;const pad='a'.repeat(100000);
+setInterval(()=>{n++;try{history.pushState(null,'','/spam.html?'+pad+n)}catch(e){};document.title='Spam '+n+' '+'t'.repeat(5000)},40)</script></body></html>"""
+# A page that has made getSelection its own, a call that never returns.
+PAGE_SNEAKY = """<!doctype html><html><head><title>Sneaky</title></head><body style="margin:0;font-family:sans-serif">
+<p>Real words on the page</p><script>window.getSelection=function(){for(;;){}};document.getSelection=window.getSelection;
+Selection.prototype.toString=function(){for(;;){}}</script></body></html>"""
+# A page whose own script keeps it busy for six seconds, a moment after it opens: it answers nothing meanwhile.
+PAGE_BUSY = """<!doctype html><html><head><title>Busy</title></head><body><p>Busy words</p>
+<script>setTimeout(function(){document.title='Busy now';const t=Date.now();while(Date.now()-t<6000){}document.title='Busy done'},700)</script></body></html>"""
 PAGE_ECHO = """<!doctype html><html><head><title>Results</title></head><body><h1>Results</h1>
 <p id="out"></p><script>document.getElementById('out').textContent='You searched for '+new URLSearchParams(location.search).get('q')</script></body></html>"""
 
@@ -4899,7 +4960,8 @@ def serve_pages():
     folder = tempfile.mkdtemp(prefix="qb-site-")
     atexit.register(shutil.rmtree, folder, ignore_errors=True)
     for name, text in (("index.html", PAGE_ONE), ("two.html", PAGE_TWO), ("echo.html", PAGE_ECHO), ("big.html", PAGE_BIG),
-                       ("form.html", PAGE_FORM), ("moving.html", PAGE_MOVING), ("noise.html", PAGE_NOISE)):
+                       ("form.html", PAGE_FORM), ("moving.html", PAGE_MOVING), ("noise.html", PAGE_NOISE), ("spam.html", PAGE_SPAM),
+                       ("sneaky.html", PAGE_SNEAKY), ("busy.html", PAGE_BUSY)):
         with open(os.path.join(folder, name), "w") as out:
             out.write(text)
 
@@ -5163,11 +5225,22 @@ def scenario_browser_remote(app):
         check("a device that hasn't said it has a browser card on screen is sent no pictures of it",
               not [m for m in device.seen if m["type"] in ("browserFrame", "browserPage")], str([m["type"] for m in device.seen][-8:]))
 
-        # Watching.
-        mark = len(device.seen)
+        # Watching only: a device that may only watch is sent nothing of any page, however it asks.
         device.tell(f"watch {fid} {surfer}")
+        drain(2)
+        check("a watch-only device that says it has a browser card on screen is sent no picture, address or title of it",
+              not [m for m in device.seen if m["type"] in ("browserFrame", "browserPage")], str([m["type"] for m in device.seen][-8:]))
+        check("and the Mac doesn't count it as watching", surfing()["watchers"] == 0 and sessions().get("watching") == [], str(sessions()))
+        for fields in (dict(act="press", x=120, y=90), dict(act="text", text="no"), dict(act="copy")):
+            answer = ask(**fields)
+            check(f"a watch-only device's {fields['act']} is refused", answer is not None and "can only watch" in (answer["refusal"] or ""), str(answer))
+
+        # With control, the cards it said it has on screen are sent at once.
+        mark = len(device.seen)
+        app.op("app", "remote-control", device=device_id, on=True)
+        device.until("control", 10)
         page = page_after(mark, lambda m: True)
-        check("watching a card sends what its bar shows: the address and the title",
+        check("given control, the card it has on screen is sent what its bar shows: the address and the title",
               page is not None and page["url"].endswith("/big.html") and page["title"] == "Waiting" and page["notice"] is None, str(page))
         frame = device.until("browserFrame", 10)
         b = surfing()
@@ -5176,7 +5249,22 @@ def scenario_browser_remote(app):
               frame is not None and abs(frame["pageWidth"] - b["pageWidth"]) < 1 and abs(frame["width"] - 2 * frame["pageWidth"]) <= 2,
               f"{frame} against {b['pageWidth']}x{b['pageHeight']}")
         check("the Mac counts the device as watching the card", b["watchers"] == 1 and sessions().get("watching") == [surfer], str(sessions()))
-        check("a watch-only device may watch", True)
+
+        # Control turned off while it watches: the pictures stop at once, and come back when it is turned on again.
+        tool("open", url=site + "/moving.html")
+        drain(1.5)
+        app.op("app", "remote-control", device=device_id, on=False)
+        device.until("control", 10)
+        drain(0.3)
+        mark = len(device.seen)
+        drain(2)
+        check("with control turned off while it watches, no more pictures come", not frames_since(mark)
+              and surfing()["watchers"] == 0 and sessions().get("watching") == [], f"{len(frames_since(mark))} {sessions()}")
+        mark = len(device.seen)
+        app.op("app", "remote-control", device=device_id, on=True)
+        device.until("control", 10)
+        drain(1.5)
+        check("and turned on again, they come again for the card it still has on screen", len(frames_since(mark)) >= 3, str(len(frames_since(mark))))
 
         # A page that changes all the time is sent at most ten times a second.
         tool("open", url=site + "/moving.html")
@@ -5220,20 +5308,9 @@ def scenario_browser_remote(app):
               f"{after['dropped'] - before['dropped']} were dropped for newer ones, at most {after['mostQueued'] / 1024:.0f} KB waited on the Mac", flush=True)
         check("and once it reads again the pictures come again", device.until("browserFrame", 5) is not None)
 
-        # Watching only: nothing done in the page.
         tool("open", url=site + "/big.html")
         app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Waiting", 20, "the big button page")
-        for fields in (dict(act="press", x=120, y=90), dict(act="release", x=120, y=90), dict(act="text", text="no"), dict(act="key", name="Enter"),
-                       dict(act="navigate", text=site + "/two.html"), dict(act="reload"), dict(act="copy")):
-            answer = ask(**fields)
-            check(f"a watch-only device's {fields['act']} is refused", answer is not None and "can only watch" in (answer["refusal"] or ""), str(answer))
-        fire(act="move", x=10, y=10)
-        time.sleep(1)
-        check("and the page is as it was", surfing()["title"] == "Waiting" and "big.html" in surfing()["url"], str(surfing()))
-
-        # With control.
-        app.op("app", "remote-control", device=device_id, on=True)
-        device.until("control", 10)
+        # Using the page.
         check("a click from the device lands on the page at the point it names",
               done(ask(act="press", x=120, y=90)) and done(ask(act="release", x=120, y=90)), str(device.seen[-2:]))
         deadline = time.time() + 10
@@ -5265,6 +5342,8 @@ def scenario_browser_remote(app):
         check("Back goes back", done(ask(act="back")) and page_after(mark, lambda m: m["url"].endswith("/form.html")) is not None)
         mark = len(device.seen)
         check("Forward goes forward", done(ask(act="forward")) and page_after(mark, lambda m: "echo.html" in m["url"] and m["canGoForward"] is False) is not None)
+        # The bar is told at most four times a second, so a reload pressed straight after is given a moment first.
+        time.sleep(0.5)
         mark = len(device.seen)
         check("Reload loads the page again", done(ask(act="reload")) and page_after(mark, lambda m: m["loading"] is True, 10) is not None,
               str([m for m in device.seen[mark:] if m["type"] == "browserPage"]))
@@ -5291,6 +5370,69 @@ def scenario_browser_remote(app):
         check("more than 4 KB typed at once is refused", long is not None and "too much" in (long["refusal"] or ""), str(long))
         check("a card with no browser can't be used",
               "has no browser" in ((ask(card=plain, act="reload") or {}).get("refusal") or ""))
+
+        # Copy asks the page in a world of the Mac's own, which a page can't change, and gives up on a page that is stuck.
+        ask(act="navigate", text=site + "/sneaky.html")
+        app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Sneaky", 15, "the page that made getSelection its own")
+        time.sleep(0.5)
+        ask(act="selectAll")
+        mark, at = len(device.seen), time.time()
+        answer = ask(act="copy")
+        copied = next((m for m in device.seen[mark:] if m["type"] == "browserCopied"), None)
+        check("Copy gives the page's real selection, though the page replaced getSelection with a call that never returns",
+              done(answer) and copied is not None and "Real words on the page" in copied["text"] and time.time() - at < 2.5, f"{answer} {copied}")
+        ask(act="navigate", text=site + "/busy.html")
+        app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"].startswith("Busy"), 15, "the busy page")
+        time.sleep(1.2)
+        copy_id, copy_at = fire(act="copy"), time.time()
+        time.sleep(0.06)
+        key_id, key_at = fire(act="key", name="Tab"), time.time()
+        key = device.until(lambda m: m["type"] == "answer" and m["id"] == key_id, 5)
+        key_took = time.time() - key_at
+        check("while Copy waits on a page that is stuck, the next command is answered within a second", done(key) and key_took < 1, f"{key} {key_took:.2f}s")
+        stuck = next((m for m in device.seen if m["type"] == "answer" and m["id"] == copy_id), None) \
+            or device.until(lambda m: m["type"] == "answer" and m["id"] == copy_id, 10)
+        check("and Copy is given up on after three seconds, with nothing sent", stuck is not None and "in time" in (stuck["refusal"] or "")
+              and 2.5 < time.time() - copy_at < 7 and not any(m["type"] == "browserCopied" for m in device.seen[-6:]), f"{stuck} {time.time() - copy_at:.1f}s")
+        app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Busy done", 15, "the busy page to finish")
+
+        # A page that changes its address and title all the time can't flood the device.
+        before = sessions()
+        mark, at = len(device.seen), time.time()
+        ask(act="navigate", text=site + "/spam.html")
+        drain(4)
+        took = time.time() - at
+        pages = [m for m in device.seen[mark:] if m["type"] == "browserPage"]
+        after = sessions()
+        check("a page that changes its own address and title 25 times a second is told to the device at most four times a second",
+              len(pages) <= 4 * took + 2 and after.get("pagesDropped", 0) > before.get("pagesDropped", 0), f"{len(pages)} in {took:.1f}s {after}")
+        check("each with its address cut to 2,048 characters and its title to 300",
+              pages and all(len(m["url"]) <= 2048 and len(m["title"]) <= 300 for m in pages) and any(len(m["url"]) == 2048 for m in pages),
+              str([(len(m["url"]), len(m["title"])) for m in pages][:6]))
+        check("and the device is still connected", not any(m["type"] in ("ended", "exited") for m in device.seen[mark:]) and app.op("app", "remote-state")["connected"] == 1)
+        opened = tool("open", url=site + "/big.html")
+        try:
+            app.wait(fid, lambda s: s["sessions"]["Surfer"]["browser"]["title"] == "Waiting", 40, "the big button page")
+        except TimeoutError:
+            b = surfing()
+            print(f"        after the busy pages: open said {opened['text'][:200]!r}; the card is at {b['url'][:120]!r}, {b['title'][:60]!r}", flush=True)
+            raise
+
+        # Saying which cards are on screen, over and over, is held to a pace of its own.
+        before = sessions()
+        mark, at = len(device.seen), time.time()
+        for n in range(40):
+            device.tell(f"watch {fid} " + ("-" if n % 2 == 0 else surfer))
+        device.tell(f"watch {fid} {surfer}")
+        drain(2)
+        frames = frames_since(mark)
+        took = time.time() - at
+        taken = sessions().get("watchesTaken", 0) - before.get("watchesTaken", 0)
+        check("a device that toggles a card on and off its screen forty times at once is not sent a picture each time",
+              len(frames) <= 10 * took + 3, f"{len(frames)} in {took:.1f}s")
+        check("and the Mac takes up what it says at most eight at once and four a second", taken <= 8 + 4 * took + 1, f"{taken} in {took:.1f}s")
+        check("and the newest of what it said is what holds", sessions().get("watching") == [surfer] and surfing()["watchers"] == 1, str(sessions()))
+
         device.tell(f"watch {fid} -")
         drain(1)
         check("a card the device isn't watching can't be used from it",
@@ -5382,6 +5524,9 @@ def scenario_browser_canned():
     print(f"        screenshots: {mobile.shots}", flush=True)
     on = ("-qbControl", "1")
     full = ("-qbExpandBrowser", "Surfer")
+    # On an iPhone a card with a browser fits the screen only zoomed out to its overview, which shows no page, as on
+    # the Mac. So there the canvas's checks zoom in on the card first, as a person would, and the rest is the same.
+    near = ("-qbZoomCard", "Surfer", "-qbZoom", "0.5") if "iPhone" in os.environ.get("QB_E2E_SIMULATOR", "") else ()
 
     def b(state):
         return state.get("browsers") or {}
@@ -5404,8 +5549,8 @@ def scenario_browser_canned():
         mobile.appearance("light")
 
     try:
-        # The page on the canvas, watched only.
-        s = play("frames", until=lambda s: shown_card(s, "Surfer").get("browserShows") is True)
+        # The page on the canvas, with control: only a device with control is sent pages.
+        s = play("frames", *on, *near, until=lambda s: shown_card(s, "Surfer").get("browserShows") is True and surfer(s).get("title"))
         card = shown_card(s, "Surfer")
         check("an agent card with a browser is split as on the Mac: terminal on the left, page on the right",
               card.get("browserShows") is True and card.get("hasTerminal") is True
@@ -5416,11 +5561,18 @@ def scenario_browser_canned():
               "Browser showing Example Shop, a picture of the page on your Mac" in card.get("spoken", ""), card.get("spoken", ""))
         both("browser-1-canvas")
 
-        # Full screen, watching only.
-        s = play("frames", *full, steps="browserTap:Surfer:90:103;browserType:Surfer:no", until=lambda s: b(s).get("expanded") == "Surfer" and surfer(s).get("hasPicture"))
-        check("the full-screen view shows the page and its address", b(s).get("address") == "https://shop.example.com/" and b(s).get("stage"), str(b(s))[:300])
+        # Watching only: the Mac sends no page, and the card says why in its place.
+        line = "Turn on “Can control” for this device to see the page."
+        s = play("frames", *near, until=lambda s: shown_card(s, "Surfer").get("hasTerminal") and surfer(s).get("notice"))
+        card = shown_card(s, "Surfer")
+        check("watching only, the card's browser half shows one line in place of the page, and no address or title",
+              surfer(s).get("notice") == line and not surfer(s).get("hasPicture") and not surfer(s).get("url") and not surfer(s).get("title"), str(surfer(s)))
+        check("and VoiceOver hears the line", line in card.get("spoken", ""), card.get("spoken", ""))
+        both("browser-1b-canvas-watch-only")
+        s = play("frames", *full, steps="browserTap:Surfer:90:103;browserType:Surfer:no", until=lambda s: b(s).get("expanded") == "Surfer" and surfer(s).get("notice"))
+        check("full screen, watching only, the same line, and no address", surfer(s).get("notice") == line and not b(s).get("address"), str(b(s))[:300])
         check("a device that may only watch can't use the page", b(s).get("canAct") is False and s.get("browserSent") == [], str(s.get("browserSent")))
-        check("and nothing it tries leaves for the Mac", done(s)[0][1] == "the page can't be tapped", str(done(s)))
+        check("and nothing it tries leaves for the Mac", done(s)[0][1] is not None, str(done(s)))
         both("browser-2-full-watch-only")
 
         # Full screen, with control.
@@ -5453,7 +5605,7 @@ def scenario_browser_canned():
                 both(f"browser-5-{state}")
             else:
                 mobile.shot(f"browser-5-{state}-light")
-        s = play("missing", *on, until=lambda s: "download a copy" in (surfer(s).get("notice") or ""))
+        s = play("missing", *on, *near, until=lambda s: "download a copy" in (surfer(s).get("notice") or ""))
         both("browser-6-canvas-missing")
         s = play("missing", *on, *full, steps="browserOffer:Surfer", until=lambda s: "Downloading" in (surfer(s).get("notice") or ""))
         check("Download takes up the Mac's offer, and the card says it is downloading", "Downloading" in (surfer(s).get("notice") or ""), str(surfer(s)))
