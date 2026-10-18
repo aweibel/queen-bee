@@ -79,3 +79,50 @@ Read the browser design and `App/Browser/*`, `App/Canvas/AgentCardView.swift`, `
 - [ ] Docs: `SECURITY.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, the spec's "Where it stands", and a "## Result" here.
 - [ ] Full check as stage 3's, plus `./scripts/e2e.py browser nobrowser` once.
 - [ ] Commit.
+
+## Result
+
+Built in four tasks, each committed locally: the Mac side of every new command (Task 1), the iPad and iPhone UI for
+them (Task 2), a card's browser on the device (Task 3), and the finish (Task 4): a review of the browser stream,
+pasting and roles against every stage's safety rules, its fixes, the iPhone pass and the docs.
+
+What the review found and Task 4 changed:
+
+- **Copy could hold up a device's commands for 30 seconds.** It now runs on its own, asks the page in an isolated
+  world of the Mac's own (a page that replaces `getSelection` isn't asked), gives up after three seconds, is cut to
+  100,000 characters, and is sent only if the device still has control and the card on screen.
+- **A page could flood a device with its address and title.** They are cut to 2,048 and 300 characters and told at
+  most four times a second, always the newest; the tab's history is asked at most as often.
+- **Saying which cards are on screen had no pace.** It is held to 8 at once and 4 a second; a card let go of keeps
+  its pace for five seconds; a page goes on being drawn two seconds after the last viewer lets go.
+- **A watch-only device saw signed-in pages.** Pictures, addresses and titles now go only to a device with
+  "Can control", stop at once when it is turned off, and come back when it is turned on. A watch-only card says
+  "Turn on “Can control” for this device to see the page."
+- **A device could clear the record of what it did.** A device's Clear keeps every line marked as a device's or a
+  schedule change, and says who cleared it. Closing the message at the top of a flow is noted with its first 80
+  characters; turning a schedule on or off is a line each time.
+- **Roles changed from a device were invisible on the Mac.** They are marked "Changed from <device>" with the time
+  in the inspector's role menu and line and on the palette; the Mac asks once before using one; the earlier version
+  can be put back; a role a device deleted can be restored for 30 days. Instructions from a device are capped.
+- **The flow list was rebuilt on every card move and usage tick.** It is worked out at most once a second, costs are
+  looked at every five seconds, roles carry the first 2,000 characters of their instructions and a SHA-256 of the
+  whole for the drift line, and the browser and profile checks no longer go to the disk each time.
+- Smaller: a browser command must be for the device's open flow; turning a schedule on waits behind the device's
+  edits; a paste is all or nothing and every pasted card lands on the canvas.
+- On the iPhone, the run bar's "Nothing to run yet" line had squeezed itself into a column beside the buttons, and
+  the flow settings' browser section likewise: both now put the words above or beside as the width allows.
+
+How it was checked: see the final report of Task 4 for the commands and their output (unit tests, Debug and Release
+builds of both apps, the canned scenarios on the iPad and the iPhone, `remote`, `browser-remote`, `browser-mobile`,
+`guard settings remote mirror mobile`, and the check for test hooks in Release).
+
+Left for the owner on a real device:
+
+- Pair a real iPad and iPhone, turn "Can control" on and off while a card's browser is on screen, and see the page
+  go and come back.
+- Sign in to a site in a card's browser from the device, and use Copy and Paste with the device's own clipboard.
+- On the Mac, pick a role a device saved, and answer the "Use it?" question; try Put back the earlier version and
+  Restore a role deleted from a device.
+- Turn a schedule on from a device and let it fire with the Mac unattended; then edit the flow from the device and
+  see it go off.
+- A device's Clear on a busy flow's log, and that the Mac keeps what devices did.

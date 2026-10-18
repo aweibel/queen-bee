@@ -42,6 +42,24 @@ With it on, stage 3 delivered:
 - Making, renaming and deleting flows from the list of flows.
 - A line in the flow's log on the Mac for each kind of edit, naming the device.
 
+Stage 4, "Everything the Mac can do", is built too, by `docs/superpowers/plans/2026-10-17-ios-companion-4-parity.md`,
+which ends with what was built, how it was checked and what is left to try on a real device. With "Can control" on,
+stage 4 delivered the rest of the Mac's controls: Run from This Start, Retry, Stop Its Agents, the orchestrator's
+Start, Restart and Restart to apply, Undo beside "Not in use yet", turning a schedule on and off, Clear for the log,
+closing the message at the top of a flow, Copy, Cut, Paste and Select All, the map, the Browser switch, roles,
+New sub-flow, pins, nested sub-flows, Find, sub-flow costs and a project's browser; and an agent card's browser on
+the device, seen and used as on the Mac. What stays on the Mac is in the plan's "The owner's decisions".
+
+Where stage 4 differs from the design below:
+
+- **A schedule can be turned on from a device.** Stage 3 kept that on the Mac. The owner lifted it: Turn on is an
+  act of its own, noted in the log each time, and a device's edit to what a flow does still turns schedules off.
+- **A card's page goes only to a device with "Can control".** Watching needs no control for flows and terminals, but
+  a page can be one the person is signed in to, so a watch-only device's card says so in its place.
+- **A device's Clear keeps what devices did.** The lines that record a device's actions and schedule changes stay.
+- **Roles from a device are marked.** The Mac marks a role a device saved or changed, asks once before using it,
+  keeps its earlier version and keeps a deleted one for 30 days.
+
 Where stage 3 differs from the design below:
 
 - **Edit is a mode.** The design had the canvas take edits whenever the device could control the Mac. A finger
@@ -50,7 +68,8 @@ Where stage 3 differs from the design below:
   "through the same gate every Mac edit goes through" and stopped there. They also go through the rules the
   orchestrator's edits follow, and then some: a Script card's command changed from a device is allowed on the Mac
   and from no device; any change to what a flow does turns off its schedules and those of the flows that run it;
-  a schedule can't be turned on from a device; agents a device adds to an open flow wait to be started; and sizes,
+  a schedule can't be turned on from a device (stage 4 changed this: see above); agents a device adds to an open
+  flow wait to be started; and sizes,
   rates and the number of agents are capped. `SECURITY.md` has the list.
 - **An agent's folder can't be changed.** It is shown, with a line saying it is changed on the Mac.
 - **Deleting asks, sometimes.** Several things, or a card with links, are asked about. One link or one unlinked

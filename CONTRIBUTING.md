@@ -35,12 +35,16 @@ cd Core && swift test    # under a second; run it before every pull request
 ./scripts/e2e.py terminals panels     # the app alone in the Simulator, fed a made-up flow and run
 ./scripts/e2e.py controls typing      # the same, with a made-up Mac that answers: every button, the message box and the keys
 ./scripts/e2e.py editing settings-edit   # the same, for Edit: each gesture, each setting, and making, renaming and deleting flows
+./scripts/e2e.py parity browser-canned   # the same, for stage 4's controls and a card's browser in each of its states
 ./scripts/e2e.py mobile               # the app paired with the test copy of the Mac app; starts real sessions
+./scripts/e2e.py browser-remote       # a card's browser from the stand-in device, against a small site on this Mac; no Simulator
+./scripts/e2e.py browser-mobile       # a card's browser on the device, against the test copy and the same site
 ```
 
-These seven scenarios only run when named. `terminals`, `panels`, `controls`, `typing`, `editing` and
-`settings-edit` need no Mac app session and no Claude Code, so they are the ones to run after any change under
-`Mobile/`. After a change to what a device may ask of the Mac, under `App/Remote/`, or to how `FlowController`
+These scenarios only run when named. `terminals`, `panels`, `controls`, `typing`, `editing`, `settings-edit`,
+`parity` and `browser-canned` need no Mac app session and no Claude Code, so they are the ones to run after any
+change under `Mobile/`. `browser-remote` and `browser-mobile` start a Chromium-based browser for the test copy, which
+is heavy: run them after a change to how the Mac sends a card's page or takes a device's input in it, one at a time. After a change to what a device may ask of the Mac, under `App/Remote/`, or to how `FlowController`
 takes a device's edit, run `./scripts/e2e.py remote` too: it needs no Simulator, and it is where the rules a
 device's edits are held to are checked against a real Mac app, down to the file it saves. A test copy of the Mac
 app moves what it "deletes to the Trash" into its own support folder, so the tests leave your Trash alone. `QB_E2E_SIMULATOR="iPhone 17"` picks the simulator;

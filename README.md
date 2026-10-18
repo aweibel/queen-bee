@@ -97,8 +97,9 @@ It shows:
 - every project and its flows, with the same "needs you", "running" and "stopped" badges as the Mac's sidebar;
 - the open flow's canvas as the Mac draws it, live: cards, links, groups, run marks and counts;
 - each agent's terminal in its card, and full screen, where you can scroll back through earlier output;
-- the run log, the answers the End cards collected, earlier runs, and what the flow has cost;
-- which cards are waiting on you.
+- the run log, the answers the End cards collected, earlier runs, and what the flow has cost, with its sub-flows;
+- which cards are waiting on you;
+- pinned flows first, sub-flows under the flow that runs them, and **Find** across every flow and card.
 
 A device you have just paired only watches. Turn on **Can control** for it on the Mac, as described below, and from the device you can also:
 
@@ -108,15 +109,24 @@ A device you have just paired only watches. Turn on **Can control** for it on th
 - start a flow's sessions with **Start its agents**, and start or restart one agent from its card;
 - start a run part-way through, with **Run from here…** in a card's details;
 - send a message to the orchestrator or to any agent, and press keys in its terminal;
-- build and change a flow by touch, once you press **Edit**: see [Edit a flow](#edit-a-flow) below.
+- build and change a flow by touch, once you press **Edit**: see [Edit a flow](#edit-a-flow) below;
+- nearly everything else the Mac's buttons do: **Run from This Start**, **Retry**, **Stop Its Agents**, start and
+  restart the orchestrator and **Restart to apply**, **Undo** beside "Not in use yet", turn a schedule on and off,
+  **Clear** the log, close the message at the top of a flow, pin a flow, and save, update and delete roles;
+- see an agent card's browser beside its terminal, and use it full screen: tap, scroll and type in the page, type an
+  address, go back and forward, reload, and copy and paste. Clear its data, restart it, or take up the Mac's offer
+  to download one.
 
 The buttons are on the cards themselves, in the "needs you" list at the top of the canvas, and in a card's details.
+A few things stay on the Mac: allowing a Script command a device wrote, an agent's folder, project folders and
+"trust this folder", Remote settings, the app's own settings and updates. A device that only watches sees no
+page of any card's browser: the card says "Turn on “Can control” for this device to see the page."
 
 ### Let a device control your Mac
 
 On the Mac, open Queen Bee's **Settings** and find **Remote**. Each paired device is listed there with a **Can control** switch. Turn it on for the device. It is off for every device until you do, and off again for a device you pair a second time. Turning it off takes effect at once.
 
-Under the list the Mac says what the switch allows: "A device with “Can control” on can start and stop runs, answer approvals, type into sessions and edit flows on this Mac." Typing into a session includes answering Claude Code when it asks whether it may run a command, so give this only to a device you would hand your Mac's keyboard to. [SECURITY.md](SECURITY.md) has the whole list of what it allows and what it never does. Everything done from a device is written in the flow's log on the Mac with the device's name.
+Under the list the Mac says what the switch allows: "A device with “Can control” on can start and stop runs, answer approvals, type into sessions and edit flows on this Mac." Typing into a session includes answering Claude Code when it asks whether it may run a command, so give this only to a device you would hand your Mac's keyboard to. The same goes for an agent's browser: what a device does there is your own input, on whatever site the card is signed in to. [SECURITY.md](SECURITY.md) has the whole list of what it allows and what it never does. Everything done from a device is written in the flow's log on the Mac with the device's name.
 
 ### Talk to the orchestrator or an agent
 
@@ -131,6 +141,7 @@ Editing is a mode you turn on, so a stray finger never moves a card while you ar
 
 - drag a card by its title bar to move it, with the same snapping and guides as on the Mac, and drag the grip at its corner to resize it;
 - drag from a port dot to another card to link them;
+- copy, cut and paste cards, across flows too, and select all;
 - touch and hold a card, a link or a group for its menu: duplicate, delete, group, ungroup, fold, rename, run from here. Touch and hold empty canvas to add a card there;
 - press **Select**, then drag a box round cards or tap them, to move, group or delete several at once;
 - open a card's details to change its settings: the same fields as the Mac's settings panel, with the same names and choices. A link's limit, a group's name and the flow's own settings are there too;
@@ -141,7 +152,8 @@ Undo and Redo are the Mac's own, shared with whoever is at the Mac: either of yo
 The Mac did not see you make these changes, so it treats them more carefully than its own:
 
 - A Script card's command you change from a device stops the run and waits to be allowed **on the Mac**. No device can allow it. The device says so where its **Allow and run** button would be.
-- Any change to what a flow does turns that flow's schedules off, and those of any flow that runs it as a sub-flow, until you turn them on again on the Mac. Moving and resizing cards, grouping them and writing notes don't count. A schedule can be set from a device, and it arrives switched off.
+- Any change to what a flow does turns that flow's schedules off, and those of any flow that runs it as a sub-flow. Moving and resizing cards, grouping them and writing notes don't count. A schedule set from a device arrives switched off, and **Turn on** in the Start card's details turns it on, which the Mac's log notes each time.
+- A role saved or changed from a device is marked on the Mac, which asks before you first use it there and keeps what the role held before. A role deleted from a device can be restored on the Mac for 30 days.
 - An agent's folder is shown and is changed on the Mac. A permission mode that skips permission checks can't be set.
 - An agent card you add from a device does not start by itself in a flow that is open on the Mac: press **Start agent** on it. A flow can be given twelve agents from a device.
 - What you write in a setting is sent when you leave the field or pause. If the Mac can't be reached or turns it down, what you wrote stays in the field, marked as not saved, with the Mac's reason beside it.
@@ -224,19 +236,23 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 419 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to the keys it sends and the browser's tools
+cd Core && swift test        # 448 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to, the keys it sends, a card's browser on a device and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
 The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`.
 
-The iPad and iPhone app is checked in the iOS Simulator by seven scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
+The iPad and iPhone app is checked in the iOS Simulator by ten scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
 
 ```sh
 ./scripts/e2e.py terminals panels controls typing   # the app alone, with a Mac made up inside it: no Mac app, no Claude Code
 ./scripts/e2e.py editing settings-edit              # the same, for Edit: every gesture, every setting, and making, renaming and deleting flows
+./scripts/e2e.py parity browser-canned              # the same, for the rest of the Mac's controls and a card's browser in each of its states
 ./scripts/e2e.py mobile                              # the app paired with the test copy of the Mac app, with real sessions
+./scripts/e2e.py browser-mobile                      # a card's browser on the device, against the test copy and a small local site
 ```
+
+`browser-remote` checks a card's browser from the stand-in device, with no Simulator: what a device is sent while it watches only and with control, the pace and size of the pictures and the bar, every way of using the page, and what a page can't make the Mac do.
 
 `remote` checks the Mac's side of the link with a stand-in for the device, and needs no Simulator: what a device may ask, that all of it is refused until "Can control" is on, every edit against the flow file the Mac saves, the rules a device's edits are held to, and what the Mac's log says of it. `mirror` checks the copy of a terminal a device is sent.
 
