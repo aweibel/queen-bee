@@ -936,7 +936,7 @@ private struct AsksAboutFlows: ViewModifier {
     let overSheet: Bool
     @State private var name = ""
 
-    private var isMine: Bool { overSheet || !client.panel.isSheetUp }
+    private var isMine: Bool { overSheet ? client.panel.isSheetSettled : !client.isSheetUp }
 
     private var naming: FlowAsk? {
         switch client.settings.asking {
@@ -954,7 +954,8 @@ private struct AsksAboutFlows: ViewModifier {
     }
 
     private func isAsking(_ ask: FlowAsk?) -> Binding<Bool> {
-        Binding { ask != nil } set: { if !$0, ask != nil, client.settings.asking == ask { client.settings.asking = nil } }
+        // Taken down because the question moved over a sheet coming up is not the question answered.
+        Binding { ask != nil } set: { if !$0, isMine, ask != nil, client.settings.asking == ask { client.settings.asking = nil } }
     }
 
     func body(content: Content) -> some View {

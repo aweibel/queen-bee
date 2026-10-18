@@ -1,13 +1,14 @@
 import QueenBeeCore
 import SwiftUI
 
-/// The panel beside the canvas, for what the open flow, its cards and its runs have to say. On an iPhone it
-/// comes up as a sheet. What a run is waiting on can be answered here, and what a flow is set to changed
-/// here once Edit is pressed, when the Mac lets this device control it.
+/// The panel beside the canvas, for what the open flow's orchestrator and its runs have to say. On an iPhone
+/// it comes up as a sheet of its own. The details of what is selected aren't one of its tabs: beside the
+/// canvas they come up over it, as a page pushed on top, and on an iPhone in their own sheet.
 struct InspectorPanel: View {
     @Environment(RemoteClient.self) private var client
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.dismiss) private var dismiss
+    /// Up as a sheet over the canvas, as on an iPhone, and not beside it. Said by whoever puts it up: in the
+    /// column beside the canvas the size class is compact too.
+    var isSheet = false
 
     var body: some View {
         let panel = client.panel, tab = panel.page.tab
@@ -15,27 +16,20 @@ struct InspectorPanel: View {
             HStack(spacing: 0) {
                 TabStrip(selected: tab) { panel.show($0) }
                 // A sheet needs its own way out. Beside the canvas, the bar's button hides the panel.
-                if sizeClass == .compact {
-                    // Not "Done": with Edit on, the foot of the details has a Done of its own, which stops editing.
-                    Button("Close") { dismiss() }.buttonStyle(.panel(.quiet))
+                if isSheet {
+                    Button("Close") { client.closeSheet(.tabs) }.buttonStyle(.panel(.quiet))
                         .padding(.trailing, Theme.Space.xs)
-                        .accessibilityHint("Closes the details.")
+                        .accessibilityHint("Closes the panel.")
                 }
             }
             .frame(minHeight: Theme.Touch.target)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !isSheet { panel.tabsHeight = $0 } }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { if !isSheet { panel.tabsTop = $0 } }
             // Clear of the handle a sheet is dragged by.
-            .padding(.top, sizeClass == .compact ? Theme.Space.m : 0)
+            .padding(.top, isSheet ? Theme.Space.m : 0)
             .background(Theme.bar.ui)
             Hairline()
-            // As a sheet the panel covers the foot of the canvas, where a refusal is said. So it is said here
-            // too: what the Mac wouldn't do is never out of sight of the button that asked for it.
-            if client.panel.isSheetUp, sizeClass == .compact, let refusal = client.controls.refusal {
-                RefusalNotice(text: refusal.text, alignment: .leading) { client.controls.refusal = nil }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Theme.Space.l)
-                    .padding(.vertical, Theme.Space.s)
-                Hairline()
-            }
+            if isSheet { SheetRefusal() }
             if let run = client.canvas.viewedRun {
                 EarlierRunNotice(run: run)
                     .padding(.horizontal, Theme.Space.l)
@@ -69,7 +63,6 @@ struct InspectorPanel: View {
         } else if let snapshot = client.mirror.snapshot {
             let run = RunOnShow(snapshot, viewed: client.canvas.viewedRun)
             switch page {
-            case .details: DetailsPage(snapshot: snapshot, run: run)
             case .log: LogPage(lines: run.log, canClear: client.canClearLog && run.earlier == nil)
             case .output: OutputPage(flow: snapshot.flow, results: run.results)
             case .runs: RunsPage(snapshot: snapshot)
@@ -85,11 +78,61 @@ struct InspectorPanel: View {
 
     private func nothingOpen(_ page: PanelPage) -> String {
         switch page {
-        case .details, .orchestrator: "Open a flow to see its details here."
+        case .orchestrator: "Open a flow to see the session that runs it."
         case .log: "Open a flow to see what its runs did, step by step."
         case .output: "Open a flow to see the answers its runs ended with."
         case .runs: "Open a flow to see its earlier runs."
         case .cost: "Open a flow to see what it has used."
+        }
+    }
+}
+
+/// The panel beside the canvas on an iPad. While something is selected its details are pushed over the
+/// panel, with the system's slide, and a way back that names the tab under them. Going back, by that or by
+/// the system's swipe from the edge, is putting the selection away, and so is a tap on the bare canvas: the
+/// details are there exactly while something is selected. Selecting something else changes what they say
+/// in place, so there is never more than the one page on top.
+struct PanelColumn: View {
+    @Environment(RemoteClient.self) private var client
+
+    private var path: Binding<[DetailsRoute]> {
+        Binding {
+            client.wantsDetails ? [DetailsRoute()] : []
+        } set: { new in
+            if new.isEmpty, client.wantsDetails { client.closeDetails() }
+        }
+    }
+
+    var body: some View {
+        NavigationStack(path: path) {
+            InspectorPanel()
+                // The tab's name is what the way back from the details says. The bar itself is the panel's own.
+                .navigationTitle(client.panel.page.tab.title)
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: DetailsRoute.self) { _ in
+                    DetailsScreen(back: client.panel.page.tab.title)
+                        .toolbar(.hidden, for: .navigationBar)
+                }
+        }
+    }
+}
+
+/// The one page that can be pushed over the panel.
+struct DetailsRoute: Hashable {}
+
+/// What the Mac wouldn't do, said at the top of a sheet. As a sheet the panel covers the foot of the canvas,
+/// where a refusal is said, so it is said here too: what the Mac wouldn't do is never out of sight of the
+/// button that asked for it.
+struct SheetRefusal: View {
+    @Environment(RemoteClient.self) private var client
+
+    var body: some View {
+        if client.isSheetUp, let refusal = client.controls.refusal {
+            RefusalNotice(text: refusal.text, alignment: .leading) { client.controls.refusal = nil }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.vertical, Theme.Space.s)
+            Hairline()
         }
     }
 }

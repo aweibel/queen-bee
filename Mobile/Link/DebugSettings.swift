@@ -127,7 +127,6 @@ enum DebugSettings {
                 } else {
                     client.canvas.select(.of(Set(wanted.compactMap { name in flow.cards.first { $0.name == name }?.id })))
                 }
-                client.panel.show(PanelPage.details)
                 // A moment, for the details to change and send what the last thing selected was left with.
                 try? await Task.sleep(for: .milliseconds(300))
                 return nil

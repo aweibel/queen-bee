@@ -4,19 +4,48 @@ import SwiftUI
 /// What floats over the canvas besides the bars: the map of the whole flow, the way back out of a sub-flow, the
 /// message the Mac puts at the top of a flow when something didn't work, and the note an empty flow shows.
 
-/// The canvas's own menu, beside the run bar: the map, and showing the whole flow. It is the same for a device that
-/// may only watch, since neither changes anything on the Mac.
+/// One choice of the canvas's own menu.
+struct CanvasMenuItem: Identifiable {
+    enum Kind { case map, fit, settings }
+    let kind: Kind
+    let title: String
+    let symbol: String
+    var id: String { title }
+}
+
+extension RemoteClient {
+    /// What the canvas's own menu offers: the map and showing the whole flow, which change nothing on the Mac, and
+    /// the flow's own settings when this device may change them. With nothing selected there are no details to
+    /// reach them from, so they are here, as well as in the flow's menu in the list.
+    var canvasMenu: [CanvasMenuItem] {
+        guard mirror.snapshot != nil else { return [] }
+        var items = [CanvasMenuItem(kind: .map, title: canvas.showsMap ? "Hide the Map" : "Show the Map", symbol: canvas.showsMap ? "map.fill" : "map"),
+                     CanvasMenuItem(kind: .fit, title: "Zoom to Fit", symbol: "arrow.up.left.and.arrow.down.right")]
+        if abilities.canAct { items.append(CanvasMenuItem(kind: .settings, title: "Flow Settings…", symbol: "slider.horizontal.3")) }
+        return items
+    }
+
+    func choose(_ item: CanvasMenuItem.Kind) {
+        switch item {
+        case .map: canvas.setMap(!canvas.showsMap)
+        case .fit: canvas.fit()
+        case .settings: showFlowSettings()
+        }
+    }
+}
+
+/// The canvas's own menu, beside the run bar: the map, showing the whole flow, and the flow's settings.
 struct CanvasMore: View {
     @Environment(RemoteClient.self) private var client
 
     var body: some View {
-        if client.mirror.snapshot != nil {
-            let canvas = client.canvas
+        let items = client.canvasMenu
+        if !items.isEmpty {
             Menu {
-                Button { canvas.setMap(!canvas.showsMap) } label: {
-                    Label(canvas.showsMap ? "Hide the Map" : "Show the Map", systemImage: canvas.showsMap ? "map.fill" : "map")
+                ForEach(items) { item in
+                    if item.kind == .settings { Divider() }
+                    Button { client.choose(item.kind) } label: { Label(item.title, systemImage: item.symbol) }
                 }
-                Button { canvas.fit() } label: { Label("Zoom to Fit", systemImage: "arrow.up.left.and.arrow.down.right") }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 16, weight: .medium))
@@ -27,7 +56,8 @@ struct CanvasMore: View {
             .padding(Theme.Space.xs)
             .floatingPanel()
             .accessibilityLabel("Canvas")
-            .accessibilityHint("Shows or hides a map of the whole flow, or shows all of it on the canvas.")
+            .accessibilityHint(client.abilities.canAct ? "Shows or hides a map of the whole flow, shows all of it on the canvas, or opens the flow's settings."
+                                   : "Shows or hides a map of the whole flow, or shows all of it on the canvas.")
         }
     }
 }

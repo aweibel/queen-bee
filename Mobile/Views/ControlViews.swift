@@ -442,7 +442,7 @@ private struct AsksBeforeActing: ViewModifier {
     /// on the whole app asks the rest of the time. Only one of them ever has the question.
     let overSheet: Bool
 
-    private var isMine: Bool { overSheet || !client.panel.isSheetUp }
+    private var isMine: Bool { overSheet ? client.panel.isSheetSettled : !client.isSheetUp }
 
     /// What is being asked, if it is asked the way this binding is for: in a sheet, or in an alert.
     private func asking(sheet: Bool) -> Binding<Ask?> {

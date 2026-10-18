@@ -10,9 +10,12 @@ extension RemoteClient {
 
     /// The details of what is selected, as settings that can be changed. Nil when editing is off, or nothing
     /// that has settings is selected.
-    var editForm: EditForm? {
+    var editForm: EditForm? { editForm(for: canvas.selection) }
+
+    /// The same, for something that was selected: the details keep what they show while they go away.
+    func editForm(for selection: CanvasModel.Selection) -> EditForm? {
         guard isEditing, let snapshot = mirror.snapshot else { return nil }
-        return EditForm(selection: canvas.selection, snapshot: snapshot, run: RunOnShow(snapshot, viewed: canvas.viewedRun),
+        return EditForm(selection: selection, snapshot: snapshot, run: RunOnShow(snapshot, viewed: canvas.viewedRun),
                         siblings: openFlow?.project.flows ?? [], roles: mirror.library?.roles ?? [])
     }
 

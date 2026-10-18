@@ -236,7 +236,6 @@ extension RemoteClient {
             return nil
         case .runFrom(let cardID):
             canvas.select(.card(cardID))
-            panel.show(PanelPage.details)
             controls.runFrom = cardID
             return nil
         case .renameGroup(let id, nil):

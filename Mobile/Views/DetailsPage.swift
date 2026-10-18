@@ -1,11 +1,109 @@
 import QueenBeeCore
 import SwiftUI
 
-/// The details page: the selected card, link or group, or the flow when nothing is selected. With editing
-/// on, what is selected has its settings open to change. Editing is the canvas's own mode, so one switch
-/// governs all of it, and the foot of the page says which way it is set.
+/// The details of what is selected, as a page of their own: pushed over the panel beside the canvas, with the
+/// way back to the tab under them, or in a sheet over the canvas on an iPhone, with Close.
+struct DetailsScreen: View {
+    @Environment(RemoteClient.self) private var client
+    /// The tab the way back goes to, beside the canvas. Nil in a sheet, which has Close in its place.
+    var back: String?
+    /// What was selected last. Kept while the page slides or drops away, so it doesn't go blank as it goes.
+    @State private var last = CanvasModel.Selection.none
+    /// Where on the screen this page starts, beside the canvas.
+    @State private var top: CGFloat = 0
+
+    private var selection: CanvasModel.Selection {
+        client.canvas.selection == .none ? last : client.canvas.selection
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            bar
+            Hairline()
+            if back == nil { SheetRefusal() }
+            if let run = client.canvas.viewedRun {
+                EarlierRunNotice(run: run)
+                    .padding(.horizontal, Theme.Space.l)
+                    .background(Theme.barHover.ui)
+                Hairline()
+            }
+            Group {
+                if let snapshot = client.mirror.snapshot {
+                    DetailsPage(selection: selection, snapshot: snapshot, run: RunOnShow(snapshot, viewed: client.canvas.viewedRun))
+                } else {
+                    NothingOpen(text: "Open a flow to see its details here.")
+                        .padding(Theme.Space.l)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .dimmedWhileAway(client.state == .connected)
+        }
+        .background(Theme.surface.ui)
+        // Beside the canvas the bar goes where the row of tabs is, whatever room the page was given at the top,
+        // and above it is the colour above the tabs.
+        .padding(.top, back == nil ? 0 : max(0, client.panel.tabsTop - top))
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top = $0 }
+        .background(Theme.bar.ui)
+        .navigationTitle(client.detailsTitle)
+        .animation(Theme.Motion.standard, value: client.canvas.viewedRun?.id)
+        .onChange(of: client.canvas.selection, initial: true) { _, new in
+            if new != .none { last = new }
+        }
+        .onChange(of: back, initial: true) { client.panel.detailsBack = back }
+        .onAppear { client.panel.isDetailsShown = true }
+        .onDisappear {
+            client.panel.isDetailsShown = false
+            client.panel.detailsBack = nil
+        }
+    }
+
+    /// The way back to the tab under the details, or in a sheet the way out. The name of what is selected is
+    /// the header of the page, just under it.
+    private var bar: some View {
+        HStack(spacing: 0) {
+            if let back {
+                Button { client.closeDetails() } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+                        Text(back).dsMono(Theme.Touch.body).lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.ink.ui)
+                    .padding(.horizontal, Theme.Space.m)
+                    .frame(minHeight: Theme.Touch.target)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to \(back)")
+                .accessibilityHint("Puts away what is selected, and shows the \(back) tab again.")
+                Spacer(minLength: 0)
+            } else {
+                // Named as the sheet of the panel's tabs names its tab, so the two sheets read alike.
+                Text("Details")
+                    .dsMono(Theme.Touch.body, .medium)
+                    .foregroundStyle(Theme.ink.ui)
+                    .padding(.horizontal, Theme.Space.xs + 7)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                // Not "Done": with Edit on, the foot of the details has a Done of its own, which stops editing.
+                Button("Close") { client.closeSheet(.details) }.buttonStyle(.panel(.quiet))
+                    .padding(.trailing, Theme.Space.xs)
+                    .accessibilityHint("Closes the details, and puts away what is selected.")
+            }
+        }
+        .frame(minHeight: back == nil ? Theme.Touch.target : max(Theme.Touch.target, client.panel.tabsHeight))
+        // Clear of the handle a sheet is dragged by.
+        .padding(.top, back == nil ? Theme.Space.m : 0)
+        .background(Theme.bar.ui)
+    }
+}
+
+/// The details page: the selected card, link or group. With editing on, what is selected has its settings open
+/// to change. Editing is the canvas's own mode, so one switch governs all of it, and the foot of the page says
+/// which way it is set.
 struct DetailsPage: View {
     @Environment(RemoteClient.self) private var client
+    let selection: CanvasModel.Selection
     let snapshot: RemoteFlowSnapshot
     let run: RunOnShow
     /// The setting the keyboard is in.
@@ -15,19 +113,26 @@ struct DetailsPage: View {
         ScrollViewReader { scroll in
             ScrollView {
                 let siblings = client.openFlow?.project.flows ?? []
-                let card = client.canvas.selection.cardID.flatMap(snapshot.flow.card)
-                if let form = client.editForm {
+                let card = selection.cardID.flatMap(snapshot.flow.card)
+                if let form = client.editForm(for: selection) {
                     EditDetails(form: form, card: card, flow: snapshot.flow, run: run, abilities: client.abilities, focus: $focus)
-                        .id(client.canvas.selection)
-                } else if let details = Details(selection: client.canvas.selection, snapshot: snapshot, run: run, siblings: siblings,
+                        .id(selection)
+                } else if let details = Details(selection: selection, snapshot: snapshot, run: run, siblings: siblings,
                                                 roles: client.mirror.library?.roles ?? []) {
                     DetailsView(details: details, card: card, flow: snapshot.flow, run: run, abilities: client.abilities)
                         // A fresh view for each thing selected, so one card's opened-up text isn't left open on the next.
-                        .id(client.canvas.selection)
-                } else {
-                    overview
-                        .padding(Theme.Space.l)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(selection)
+                } else if case .cards(let ids) = selection {
+                    VStack(alignment: .leading, spacing: 0) {
+                        DetailsHeader(icon: "square.on.square", title: "\(ids.count) cards", kind: "Cards", state: nil)
+                        Hairline()
+                        Text("Several cards are selected. Tap one card to see what it is set to.")
+                            .dsSans(Theme.Touch.caption + 1)
+                            .foregroundStyle(Theme.inkSecondary.ui)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Theme.Space.l)
+                            .padding(.vertical, Theme.Space.m)
+                    }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -40,7 +145,7 @@ struct DetailsPage: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { EditFoot(focus: $focus) }
         .onChange(of: focus) { old, new in client.focusMoved(from: old?.key, to: new?.key) }
         // What was written for the thing that was selected is sent before the next thing's settings come up.
-        .onChange(of: client.canvas.selection) {
+        .onChange(of: selection) {
             focus = nil
             client.flushFields()
         }
@@ -50,10 +155,10 @@ struct DetailsPage: View {
         .onDisappear { client.flushFields() }
         #if DEBUG
         // A test can't tap a box. With `-qbFocus <setting>` the keyboard is put in that setting's box once it is on show.
-        .task(id: client.canvas.selection) {
+        .task(id: selection) {
             guard let wanted = DebugLaunch.focus else { return }
             for _ in 0..<40 {
-                if let key = client.editForm?.fields.first(where: { $0.key.name.rawValue == wanted })?.key {
+                if let key = client.editForm(for: selection)?.fields.first(where: { $0.key.name.rawValue == wanted })?.key {
                     try? await Task.sleep(for: .milliseconds(600))
                     focus = FieldFocus(key: key)
                     return
@@ -62,29 +167,6 @@ struct DetailsPage: View {
             }
         }
         #endif
-    }
-
-    /// Nothing selected: the flow itself.
-    private var overview: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.l) {
-            PanelSection(title: "Flow") {
-                PanelRow(label: "Name", value: snapshot.flow.name)
-                if let project = client.openFlow?.project.name {
-                    Hairline()
-                    PanelRow(label: "Project", value: project)
-                }
-                Hairline()
-                PanelRow(label: "Cards", value: "\(snapshot.flow.cards.count)")
-            }
-            Text("Tap a card or a link on the canvas to see what it is set to.")
-                .dsSans(Theme.Touch.caption + 1)
-                .foregroundStyle(Theme.inkSecondary.ui)
-            if client.abilities.canAct {
-                Button { client.showFlowSettings() } label: { Label("Flow Settings…", systemImage: "slider.horizontal.3") }
-                    .buttonStyle(.panel())
-                    .accessibilityHint("Renames the flow, and sets how deep its sub-flows go and whether the orchestrator is told when a run ends.")
-            }
-        }
     }
 }
 
@@ -194,6 +276,8 @@ struct ItemView: View {
                 Spacer(minLength: Theme.Space.s)
                 Text(item.value).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                     .multilineTextAlignment(.trailing)
+                    // Wrapped, never cut short: a sheet pulled to full height offers a row one line.
+                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
             .padding(.horizontal, Theme.Space.l)

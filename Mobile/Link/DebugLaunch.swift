@@ -25,8 +25,12 @@ import UIKit
 ///   -qbZoom <n>                         and set the canvas's zoom, where 1 is the Mac's own size
 ///   -qbZoomCard <card name>             or zoom so that card fills the canvas; with -qbZoom too, the zoom
 ///                                       is then set from there
-///   -qbShow details|log|output|runs|cost|orchestrator
-///                                       turn the panel beside the canvas to that page
+///   -qbShow orchestrator|log|output|runs|cost
+///                                       turn the panel to that page. On an iPhone, with nothing selected,
+///                                       bring up the panel's sheet too
+///   -qbDetent large                     on an iPhone, bring each sheet up at full height
+///   -qbShow details                     with -qbSelect: the details of what that selects, which come up as it
+///                                       is selected. Without it the state says so, as `panel.showProblem`
 ///   -qbViewRun <n>                      once that flow has runs and none is going, put the nth on show, where
 ///                                       0 is the oldest the Mac has kept
 ///   -qbExpand <card name>|orchestrator  once that session has a terminal, open it full screen
@@ -67,6 +71,14 @@ import UIKit
 ///                                       In <text>, \n is a new line and @<n> is n letters.
 ///                                         wait:<name>                wait until the test makes the file
 ///                                                                    Library/Caches/qb-wait-<name>
+///                                       The panel and the details:
+///                                         tab:<page>                 turn the panel to orchestrator | log |
+///                                                                    output | runs | cost, as its tab does
+///                                         detailsBack                press the way back at the top of the details
+///                                         tabs                       on an iPhone, press the bar's button for the
+///                                                                    panel's sheet
+///                                         closeSheet                 pull the sheet that is up down, or press its Close
+///                                       Selecting is pick:, in `DebugSettings`. pick:none is a tap on bare canvas.
 ///   -qbSilent 1                         with a made-up run: the made-up Mac answers no command
 ///   -qbAnswerWait <n>                   give the Mac n seconds to answer a command, in place of 30
 ///   -qbFromDevice 1                     with a made-up run: the command its Script card is waiting on was written
@@ -110,6 +122,8 @@ enum DebugLaunch {
     }
 
     static var show: String? { defaults.string(forKey: "qbShow") }
+    /// How far up a sheet comes on an iPhone, when a test wants it at full height: "large".
+    static var detent: String? { defaults.string(forKey: "qbDetent") }
     /// The setting whose box takes the keyboard once the details show it, by its name in `FieldKey.Name`.
     static var focus: String? { defaults.string(forKey: "qbFocus") }
     /// Whether the box for a rejection's note takes the keyboard as soon as it is on screen.
@@ -149,9 +163,55 @@ enum DebugLaunch {
         }
     }
 
-    /// Turns the panel beside the canvas to the page a test named.
+    /// Turns the panel beside the canvas to the page a test named. The details aren't a page: they come up as
+    /// -qbSelect selects something, and with nothing to select there is nothing to show.
     static func showNamedPage(_ client: RemoteClient) {
         if let page = show.flatMap(PanelPage.init(rawValue:)) { client.panel.show(page) }
+    }
+
+    /// What is wrong with what the test asked to see, when it can't be shown.
+    static var showProblem: String? {
+        show == "details" && defaults.string(forKey: "qbSelect") == nil
+            ? "-qbShow details needs -qbSelect: the details are of what is selected, and nothing would be." : nil
+    }
+
+    /// The steps for the panel and the details, or nil for a step that isn't one of these.
+    static func panelStep(_ step: String, in client: RemoteClient) -> (() async -> String?)? {
+        let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+        let work: () -> String?
+        switch parts[0] {
+        case "tab":
+            guard parts.count == 2 else { return nil }
+            work = {
+                guard let page = PanelPage(rawValue: parts[1]) else { return "The panel has no page by that name." }
+                client.panel.show(page)
+                return nil
+            }
+        case "detailsBack":
+            work = {
+                guard client.wantsDetails else { return "The details aren't up." }
+                client.closeDetails()
+                return nil
+            }
+        case "tabs":
+            work = {
+                client.showTabs()
+                return nil
+            }
+        case "closeSheet":
+            work = {
+                guard let sheet = client.sheet else { return "No sheet is up." }
+                client.closeSheet(sheet)
+                return nil
+            }
+        default: return nil
+        }
+        return {
+            let said = work()
+            // A moment, for the page to slide and the sheets to change.
+            try? await Task.sleep(for: .milliseconds(700))
+            return said
+        }
     }
 
     private static var hasViewedRun = false
@@ -195,7 +255,17 @@ enum DebugLaunch {
 
     /// What each page of the panel shows and what floats over the canvas, worked out the way the views work it out.
     static func panelState(_ client: RemoteClient) -> [String: Any] {
-        var state: [String: Any] = ["page": client.panel.page.rawValue, "tab": client.panel.page.tab.rawValue]
+        let panel = client.panel
+        var state: [String: Any] = [
+            "page": panel.page.rawValue, "tab": panel.page.tab.rawValue,
+            // Whether the details are on the screen, as they themselves say, and what their way back is called.
+            "detailsUp": panel.isDetailsShown, "wantsDetails": client.wantsDetails,
+            "backTitle": panel.isDetailsShown ? panel.detailsBack ?? NSNull() : NSNull(),
+            "detailsTitle": client.wantsDetails ? client.detailsTitle : NSNull(),
+            "sheet": client.sheet?.rawValue ?? NSNull(), "sheetSettled": panel.isSheetSettled,
+            "showProblem": showProblem ?? NSNull(),
+            "canvasMenu": client.canvasMenu.map(\.title),
+        ]
         guard let snapshot = client.mirror.snapshot else { return state }
         let viewed = client.canvas.viewedRun
         let run = RunOnShow(snapshot, viewed: viewed)
@@ -277,6 +347,9 @@ enum DebugLaunch {
                 case "control:on", "control:off": client.debugTake(.control(canControl: step == "control:on"))
                 case "away": client.debugLoseMac()
                 case "pause": try? await Task.sleep(for: .seconds(3))
+                case _ where panelStep(step, in: client) != nil:
+                    guard let work = panelStep(step, in: client) else { continue }
+                    client.controls.debugNote(step, await work())
                 case _ where typing(step, in: client) != nil:
                     guard let work = typing(step, in: client) else { continue }
                     client.controls.debugNote(step, await work())

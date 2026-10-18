@@ -191,7 +191,7 @@ private struct AsksBeforeEditing: ViewModifier {
     let overSheet: Bool
     @State private var name = ""
 
-    private var isMine: Bool { overSheet || !client.panel.isSheetUp }
+    private var isMine: Bool { overSheet ? client.panel.isSheetSettled : !client.isSheetUp }
 
     private var delete: EditAsk? {
         if case .delete = client.edit.asking, isMine { client.edit.asking } else { nil }
@@ -214,7 +214,8 @@ private struct AsksBeforeEditing: ViewModifier {
     }
 
     private func isAsking(_ ask: EditAsk?) -> Binding<Bool> {
-        Binding { ask != nil } set: { if !$0, ask != nil, client.edit.asking == ask { client.edit.asking = nil } }
+        // Taken down because the question moved over a sheet coming up is not the question answered.
+        Binding { ask != nil } set: { if !$0, isMine, ask != nil, client.edit.asking == ask { client.edit.asking = nil } }
     }
 
     func body(content: Content) -> some View {

@@ -447,10 +447,12 @@ final class RemoteClient {
         #if DEBUG
         let leaving = mirror.snapshot
         #endif
-        // A question about the flow that was open is not one about the next, and nor is editing it.
+        // A question about the flow that was open is not one about the next, and nor is editing it, or what
+        // was selected in it, whose details would otherwise stay up over the next.
         if flowID != mirror.openFlowID {
             controls.asking = nil
             stopEditing()
+            canvas.select(.none)
         }
         if flowID != mirror.openFlowID {
             browsers.reset()

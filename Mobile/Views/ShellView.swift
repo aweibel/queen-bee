@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The app once it has a Mac: the flows, the open flow's canvas, and the details panel. Three columns where
-/// there is room, as on an iPad; one screen after another where there isn't, as on an iPhone.
+/// The app once it has a Mac: the flows, the open flow's canvas, and the panel with the details of what is
+/// selected. Three columns where there is room, as on an iPad; one screen after another where there isn't,
+/// as on an iPhone, with the panel and the details in sheets.
 struct ShellView: View {
     @Environment(RemoteClient.self) private var client
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -90,7 +91,8 @@ struct ConnectionBar: View {
     }
 }
 
-/// iPad: the flows on the left, the canvas in the middle, the details on the right.
+/// iPad: the flows on the left, the canvas in the middle, the panel on the right, with the details of what is
+/// selected over it.
 private struct SplitShell: View {
     @Environment(RemoteClient.self) private var client
     let showSettings: () -> Void
@@ -112,7 +114,8 @@ private struct SplitShell: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
-                            Button { showsDetails.toggle() } label: { Label("Details", systemImage: "sidebar.trailing") }
+                            Button { showsDetails.toggle() } label: { Label("Panel", systemImage: "sidebar.trailing") }
+                                .accessibilityHint(showsDetails ? "Hides the panel beside the canvas." : "Shows the panel beside the canvas.")
                         }
                     }
             }
@@ -120,11 +123,12 @@ private struct SplitShell: View {
         // Outside the columns, so the panel keeps its place and its full height when the list of flows slides
         // over the canvas on an iPad held upright.
         .inspector(isPresented: $showsDetails) {
-            InspectorPanel().edgeRule(.leading).inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+            PanelColumn().edgeRule(.leading).inspectorColumnWidth(min: 280, ideal: 340, max: 440)
         }
-        // A card's menu on the canvas asks for the message a run starts with, which is asked in its details.
-        .onChange(of: client.controls.runFrom) { _, cardID in
-            if cardID != nil { showsDetails = true }
+        // What is selected has its details in the panel, so a panel put away comes back for them, as the Mac's
+        // inspector does. Hidden again, it stays hidden until something else is selected.
+        .onChange(of: client.canvas.selection) { _, selection in
+            if selection != .none { showsDetails = true }
         }
         #if DEBUG
         // Upright, an iPad starts with the list of flows tucked away, and a test can't tap to bring it out.
@@ -133,18 +137,33 @@ private struct SplitShell: View {
     }
 }
 
-/// iPhone: the list of flows, then the open flow's canvas, with the details in a sheet.
+/// iPhone: the list of flows, then the open flow's canvas. What is selected has its details in a sheet, which
+/// comes up as it is selected and takes the selection with it when it is put away. The panel's tabs are a
+/// sheet of their own, from the bar's button. One of the two at a time: either puts the other away.
 private struct StackShell: View {
     @Environment(RemoteClient.self) private var client
     let showSettings: () -> Void
-    @State private var showsDetails = false
-    /// Where on the screen the top of the details' sheet is, and where the foot of this view is.
+    /// The sheet that is up, as the sheet itself last said. Pulling it down puts away that one and no other.
+    @State private var presented: PanelSheet?
+    /// Where on the screen the top of the sheet is, and where the foot of this view is.
     @State private var sheetTop: CGFloat = 0
     @State private var foot: CGFloat = 0
+    /// How far up the sheet is pulled.
+    @State private var detent = PresentationDetent.medium
 
-    /// How much of the canvas's foot the details cover. No more than two thirds: pulled up to full height
-    /// they cover the canvas whole, and there is nothing left to fit the flow into.
-    private var cover: CGFloat { showsDetails && sheetTop > 0 ? min(max(0, foot - sheetTop), foot * 2 / 3) : 0 }
+    private var sheet: Binding<PanelSheet?> {
+        Binding {
+            client.sheet
+        } set: { new in
+            // Only the sheet that was put away is closed. One changing for the other, or stepping aside for a
+            // terminal full screen, is not putting either away.
+            if new == nil, let presented, presented == client.sheet { client.closeSheet(presented) }
+        }
+    }
+
+    /// How much of the canvas's foot the sheet covers. No more than two thirds: pulled up to full height it
+    /// covers the canvas whole, and there is nothing left to fit the flow into.
+    private var cover: CGFloat { presented != nil && sheetTop > 0 ? min(max(0, foot - sheetTop), foot * 2 / 3) : 0 }
 
     /// The canvas is on screen exactly when a flow is open, so going back closes the flow.
     private var path: Binding<[String]> {
@@ -170,51 +189,74 @@ private struct StackShell: View {
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .primaryAction) {
-                                Button { showsDetails = true } label: { Label("Details", systemImage: "info.circle") }
+                                Button { client.showTabs() } label: { Label("Orchestrator, Run and History", systemImage: "rectangle.bottomhalf.inset.filled") }
+                                    .accessibilityLabel("Orchestrator, run and history")
+                                    .accessibilityHint("Shows the panel with the orchestrator, the run on show and the runs so far.")
                             }
                         }
                 }
         }
         // A sheet of its own, and not the system's inspector, which in a screen this narrow never came up.
-        // At half height the canvas above it still takes taps, so a card can be picked with its details open.
-        .sheet(isPresented: $showsDetails) {
-            InspectorPanel()
-                // What a button here or on the canvas asks first comes up over this sheet, not under it.
-                .asksBeforeActing(overSheet: true)
-                .asksBeforeEditing(overSheet: true)
-                .asksAboutFlows(overSheet: true)
-                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
-                .presentationDetents([.medium, .large])
-                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                .presentationContentInteraction(.scrolls)
+        // At half height the canvas above it still takes taps, so another card can be picked with the details up.
+        .sheet(item: sheet) { sheet in
+            Group {
+                switch sheet {
+                case .details: DetailsScreen()
+                case .tabs: InspectorPanel(isSheet: true)
+                }
+            }
+            // What a button here or on the canvas asks first comes up over this sheet, not under it.
+            .asksBeforeActing(overSheet: true)
+            .asksBeforeEditing(overSheet: true)
+            .asksAboutFlows(overSheet: true)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { sheetTop = $0 }
+            .onAppear { presented = sheet }
+            .onDisappear {
+                if presented == sheet { presented = nil }
+                client.panel.isSheetSettled = false
+            }
+            // A moment for it to finish sliding up, which nothing says when it has.
+            .task(id: sheet) {
+                client.panel.isSheetSettled = false
+                try? await Task.sleep(for: .milliseconds(500))
+                client.panel.isSheetSettled = !Task.isCancelled
+            }
+            .presentationDetents([.medium, .large], selection: $detent)
+            .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+            .presentationContentInteraction(.scrolls)
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { foot = $0 }
-        // With the details up, the canvas fits the flow into what shows above them. It is told through the
-        // panel's model: a screen that has been pushed isn't drawn again when this one's own state changes.
+        // With a sheet up, the canvas fits the flow into what shows above it. It is told through the panel's
+        // model: a screen that has been pushed isn't drawn again when this one's own state changes.
         .onChange(of: cover, initial: true) { client.panel.cover = cover }
-        .onChange(of: showsDetails, initial: true) { client.panel.isSheetUp = showsDetails }
+        .onAppear { client.panel.usesSheets = true }
+        // Each sheet comes up at half height, however far the last one was pulled.
+        .onChange(of: presented) {
+            client.panel.isSheetPresented = presented != nil
+            if presented == nil { detent = .medium }
+        }
         .onDisappear {
             client.panel.cover = 0
-            client.panel.isSheetUp = false
+            client.panel.usesSheets = false
+            client.panel.isSheetPresented = false
         }
-        .onChange(of: client.controls.runFrom) { _, cardID in
-            if cardID != nil { showsDetails = true }
+        // Selecting something brings up its details, in place of the tabs.
+        .onChange(of: client.canvas.selection) { _, selection in
+            if selection != .none { client.panel.showsTabs = false }
         }
-        // The details belong to the open flow, and go when it does.
+        // The sheets belong to the open flow, and go when it does.
         .onChange(of: client.mirror.openFlowID) { _, open in
-            if open == nil { showsDetails = false }
-        }
-        // A terminal opens over everything. The sheet steps aside first: two things can't be put up at once.
-        .onChange(of: client.terminals.expandedKey) { _, key in
-            if key != nil { showsDetails = false }
+            if open == nil { client.panel.showsTabs = false }
         }
         #if DEBUG
-        // A test that names a page of the panel wants to see it, and here the panel is a sheet nothing has brought up.
+        // A test that names a tab's page wants to see it, and here the tabs are a sheet nothing has brought up.
         .task {
             guard DebugLaunch.show.flatMap(PanelPage.init(rawValue:)) != nil else { return }
             while client.mirror.snapshot == nil { try? await Task.sleep(for: .milliseconds(200)) }
-            showsDetails = true
+            if !client.wantsDetails { client.showTabs() }
         }
+        // A test can't pull a sheet up. With `-qbDetent large` each sheet comes up at full height.
+        .onChange(of: presented) { if DebugLaunch.detent == "large", presented != nil { detent = .large } }
         #endif
     }
 }

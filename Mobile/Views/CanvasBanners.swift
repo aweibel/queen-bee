@@ -119,11 +119,10 @@ struct OpenTerminalButton: View {
 }
 
 extension RemoteClient {
-    /// Goes to a card that is waiting: puts it in the middle of the canvas, selects it, and turns the panel
-    /// to its details, where what it is waiting with can be read.
+    /// Goes to a card that is waiting: puts it in the middle of the canvas and selects it, which brings up its
+    /// details, where what it is waiting with can be read.
     func go(to card: WaitingCard) {
         canvas.select(.card(card.id))
         canvas.centre(onCard: card.id)
-        panel.show(PanelPage.details)
     }
 }

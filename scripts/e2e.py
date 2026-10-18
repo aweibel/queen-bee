@@ -2633,6 +2633,11 @@ def scenario_mobile(app):
         bob = next(c["id"] for c in GUARD["cards"] if c["name"] == "Bob")
         check("a card can be selected on the canvas, and only it is", (s.get("canvas") or {}).get("selected") == {"card": bob}
               and [c["name"] for c in s["canvas"]["cards"] if c["selected"]] == ["Bob"], str((s.get("canvas") or {}).get("selected")))
+        s = mobile.wait(lambda s: (s.get("panel") or {}).get("detailsUp"), 10, "the card's details to come up")
+        p = s.get("panel") or {}
+        check("and its details come up over the panel, the way back named for the Orchestrator tab under them",
+              p.get("detailsUp") is True and p.get("detailsTitle") == "Bob" and p.get("backTitle") == "Orchestrator" and (p.get("details") or {}).get("title") == "Bob",
+              str({k: p.get(k) for k in ("detailsUp", "detailsTitle", "backTitle", "page")}))
         mobile.shot("mobile-4b-card-selected")
         check("launched again with nothing said about the Mac, the app connects by itself", s.get("state") == "connected" and s.get("device") == device, str(s))
         check("with the key it kept", s.get("hasKey") is True and remote(lambda r: r["connected"] == 1, 10, "the Mac to see it")["connected"] == 1, str(s))
@@ -2839,13 +2844,70 @@ def scenario_panels():
         mobile.shot(name + "-dark")
         mobile.appearance("light")
 
+    phone = "iPhone" in os.environ.get("QB_E2E_SIMULATOR", "")
+
+    def up(state, title, back):
+        """The details of `title` are on the screen: pushed over the panel with a way back to `back` beside the
+        canvas, or in their own sheet on an iPhone, which has Close in place of a way back."""
+        p = panel(state)
+        return (p.get("detailsUp") is True and p.get("detailsTitle") == title and details(state).get("title", title) == title
+                and (p.get("sheet") == "details" and p.get("backTitle") is None if phone else p.get("sheet") is None and p.get("backTitle") == back))
+
+    def down(state, page):
+        """No details, and the panel on that page. On an iPhone no sheet is up, unless it is the panel's own."""
+        p = panel(state)
+        return p.get("detailsUp") is False and p.get("wantsDetails") is False and p.get("page") == page and p.get("sheet") in (None, "tabs")
+
+    # A sheet takes a moment to go down and another to come up, so each of these waits for the screen to settle as
+    # well as for its steps: what it then checks is what the screen shows, which it may never come to.
     try:
-        s = play(1, "-qbSelect", "Writer", also=lambda s: details(s).get("title") == "Writer")
+        # The panel, and the details that come up over it.
+        s = play(3)
+        p = panel(s)
+        check("with nothing selected the panel is on its Orchestrator tab, the first, and there are no details",
+              (p.get("page"), p.get("tab")) == ("orchestrator", "orchestrator") and p.get("detailsUp") is False and p.get("sheet") is None
+              and p.get("showProblem") is None, str(p))
+        both("panels-00-nothing-selected")
+        s = play(3, "-qbDo", "pick:Writer", also=lambda s: panel(s).get("detailsUp"))
+        check("selecting a card brings up its details, with the way back named for the tab under them"
+              if not phone else "selecting a card brings up its details in a sheet over the canvas", up(s, "Writer", "Orchestrator"), str(panel(s)))
+        s = play(3, "-qbDo", "tab:log;pick:Writer;detailsBack", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 3 and down(s, "log"))
+        check("from the Run tab the way back is named Run, and goes back to Run" if not phone else "going back from the details puts away the selection, and the panel is on Run",
+              down(s, "log") and (s.get("canvas") or {}).get("selected") is None and [d["refusal"] for d in s["controls"]["done"]] == [None] * 3, f"{panel(s)} {s['controls']['done']}")
+        s = play(3, "-qbDo", "tab:log;pick:Writer", also=lambda s: panel(s).get("detailsUp"))
+        check("over the Run tab, the details' way back says so" if not phone else "with the panel left on Run, a card's details still come up in their sheet",
+              up(s, "Writer", "Run") and (panel(s).get("page"), panel(s).get("tab")) == ("log", "run"), str(panel(s)))
+        both("panels-00b-details-from-run")
+        s = play(3, "-qbDo", "tab:runs;pick:Writer;pick:none", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 3 and down(s, "runs"))
+        check("a tap on bare canvas puts away the selection and the details with it, back to the tab that was on show",
+              down(s, "runs") and (s.get("canvas") or {}).get("selected") is None, str(panel(s)))
+        s = play(3, "-qbDo", "tab:runs;pick:Writer;pick:Start", also=lambda s: panel(s).get("detailsTitle") == "Start")
+        check("selecting something else with the details up changes them in place: one page, now about the other card",
+              up(s, "Start", "History") and details(s).get("kind") == "Start" and (s.get("canvas") or {}).get("selected") == {"card": "start001"}, str(panel(s))[:300])
+        s = play(3, "-qbShow", "details")
+        check("asking to see the details with nothing to select says so, and shows none",
+              "-qbSelect" in (panel(s).get("showProblem") or "") and panel(s).get("detailsUp") is False, str(panel(s).get("showProblem")))
+        if phone:
+            s = play(3, "-qbDo", "pick:Writer;closeSheet", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 2 and down(s, "orchestrator"))
+            check("on an iPhone, putting the details' sheet away puts away the selection", down(s, "orchestrator") and panel(s).get("sheet") is None
+                  and (s.get("canvas") or {}).get("selected") is None, str(panel(s)))
+            s = play(3, "-qbDo", "pick:Writer;tabs", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 2 and panel(s).get("detailsUp") is False)
+            check("the bar's button brings up the panel's own sheet, on Orchestrator, and the details' sheet goes, with the selection",
+                  panel(s).get("sheet") == "tabs" and panel(s).get("detailsUp") is False and panel(s).get("page") == "orchestrator"
+                  and (s.get("canvas") or {}).get("selected") is None, str(panel(s)))
+            both("panels-00c-tabs-sheet")
+            s = play(3, "-qbDo", "tabs;pick:Writer", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 2 and up(s, "Writer", None))
+            check("and selecting a card with the panel's sheet up puts it away for the details' sheet", up(s, "Writer", None), str(panel(s)))
+            s = play(3, "-qbDo", "tabs;closeSheet", also=lambda s: len((s.get("controls") or {}).get("done", [])) == 2)
+            check("Close on the panel's sheet puts it away", panel(s).get("sheet") is None and panel(s).get("detailsUp") is False, str(panel(s)))
+
+        # Measured with nothing over the canvas but the banner: on an iPhone selecting a card brings up its sheet.
+        with_banner = room(play(1))
+        s = play(1, "-qbSelect", "Writer", also=lambda s: details(s).get("title") == "Writer" and panel(s).get("detailsUp"))
         p = panel(s)
         check("the banner lists the cards waiting on the person, in canvas order, with what each waits for",
               p.get("needsYou") == [{"name": "Writer", "reason": "Waiting for you in its terminal"},
                                     {"name": "Style guide", "reason": "Waiting for you to let its command run"}], str(p.get("needsYou")))
-        with_banner = room(s)
         check("an agent's details list its settings in the Mac's words",
               items(s).get("Instructions", "").startswith("You write short notes") and items(s).get("Model") == "Opus" and items(s).get("Effort") == "high"
               and items(s).get("Permissions") == "Accept edits" and items(s).get("Folder") == "notes" and items(s).get("Cost") == "$0.50 in all"
@@ -2881,8 +2943,8 @@ def scenario_panels():
             time.sleep(0.3)
         check("going to a waiting card selects it and puts it in the middle of the clear part of the canvas",
               canvas.get("selected") == {"card": "style001"} and max(off) < 2, f"{canvas.get('selected')} off by {off}")
-        check("and turns the panel to its details: the command, and that it is waiting to be allowed",
-              panel(s).get("page") == "details" and items(s).get("Command") == "cat docs/style.md"
+        check("and brings up its details: the command, and that it is waiting to be allowed",
+              up(s, "Style guide", "Orchestrator") and items(s).get("Command") == "cat docs/style.md"
               and [value for _, value in styled(s, "waiting")] == ["cat docs/style.md"] and details(s).get("answerLine") is True, str(details(s)))
         both("panels-02-script-waiting")
 
@@ -3390,8 +3452,9 @@ def scenario_editing():
               f"{at(s, 'Style guide 2')} {edit(s).get('selected')}")
         s = play("edit:on;hold:Both ready;choose:Run from here…", *on, also=lambda s: answered(s, "asked:runFrom:Both ready") is None)
         check("“Run from here…” on a card's menu is the one in its details, which asks for the message, and sends nothing by itself",
-              answered(s, "asked:runFrom:Both ready") is None and (s.get("panel") or {}).get("page") == "details" and edit(s).get("selected") == ["Both ready"] and sent(s) == [] and (s.get("composer") or {}).get("commands") == 0,
-              str(s.get("panel", {}).get("page")))
+              answered(s, "asked:runFrom:Both ready") is None and (s.get("panel") or {}).get("detailsUp") is True
+              and (s.get("panel") or {}).get("detailsTitle") == "Both ready" and edit(s).get("selected") == ["Both ready"] and sent(s) == [] and (s.get("composer") or {}).get("commands") == 0,
+              str(s.get("panel")))
 
         # Selecting.
         s = play("edit:on;down:at/300,0;select:on;down:at/300,0;to:850,560,3", *on, "-qbZoom", "0.45", also=lambda s: edit(s).get("box"))
@@ -3547,6 +3610,12 @@ def scenario_settings_edit():
               rows(s) is None and settings(s).get("foot") == press_edit and settings(s).get("footButton") == "Edit" and settings(s).get("editing") is False
               and (s.get("panel") or {}).get("details", {}).get("title") == "Writer", f"{rows(s)} {settings(s).get('foot')}")
         check("and nothing is written or sent until it is", said(s) == [None, not_editing, not_editing] and sent(s) == [] and kept(s) == [], f"{did(s)} {sent(s)}")
+        menu = (s.get("panel") or {}).get("canvasMenu")
+        s = play("pick:none")
+        check("the flow's own settings are in the canvas's menu when the device may change them, and not when it may only watch, since"
+              " with nothing selected there are no details to reach them from",
+              menu == ["Show the Map", "Zoom to Fit", "Flow Settings…"] and (s.get("panel") or {}).get("canvasMenu") == ["Show the Map", "Zoom to Fit"]
+              and (s.get("panel") or {}).get("detailsUp") is False, f"{menu} {(s.get('panel') or {}).get('canvasMenu')}")
 
         # An agent.
         s = play("edit:on;pick:Writer", *on)
@@ -3615,12 +3684,11 @@ def scenario_settings_edit():
               len(r.get("value", "")) == 200 and r.get("count") == "200 of 200 characters" and row(s, "instructions").get("count") is None, str(r.get("count")))
 
         # Leaving: another thing selected, Done, and the Mac out of reach.
-        # It is the details that send it, when what they show changes. Beside the canvas on an iPad they are always
-        # there. On an iPhone they are a sheet, and a setting can only be written in with the sheet up, so there the
-        # sheet is brought up for this, as it would be.
-        sheet = ("-qbShow", "details") if "iPhone" in os.environ.get("QB_E2E_SIMULATOR", "") else ()
-        s = play("edit:on;pick:Writer;write:Writer:name:Moved on;pick:Start", *on, *sheet, also=lambda s: "Moved on" in names(s))
-        check("selecting something else sends what was written first", sent(s) == ["patchCard:name"] and "Moved on" in names(s) and settings(s).get("title") == "Start" and kept(s) == [],
+        # It is the details that send it, when what they show changes. They come up as the card is selected: over
+        # the panel beside the canvas on an iPad, in a sheet on an iPhone.
+        s = play("edit:on;pick:Writer;write:Writer:name:Moved on;pick:Start", *on, also=lambda s: "Moved on" in names(s))
+        check("selecting something else sends what was written first", sent(s) == ["patchCard:name"] and "Moved on" in names(s) and settings(s).get("title") == "Start" and kept(s) == []
+              and (s.get("panel") or {}).get("detailsUp") is True,
               f"{sent(s)} {names(s)} {kept(s)}")
         s = play("edit:on;pick:Writer;write:Writer:name:All done;edit:off", *on, also=lambda s: "All done" in names(s))
         check("and so does Done", sent(s) == ["patchCard:name"] and "All done" in names(s) and settings(s).get("editing") is False and kept(s) == [], f"{sent(s)} {kept(s)}")
@@ -4001,7 +4069,8 @@ def scenario_parity():
         check("an empty flow says to describe it, with Start the orchestrator and Build it by hand",
               c.get("start") == "Start the orchestrator" and c.get("build") == "Build it by hand", str(c))
         both("parity-16-callout")
-        s = play("openFlow:Thank the speakers;callout:start", *on, also=lambda s: (s.get("panel") or {}).get("page") == "orchestrator")
+        # The panel opens on its Orchestrator tab, so it is put on Log first, for the button to be seen turning it back.
+        s = play("openFlow:Thank the speakers;tab:log;callout:start", *on, also=lambda s: (s.get("panel") or {}).get("page") == "orchestrator")
         check("Start the orchestrator starts it and shows it", said(s)[-1] is None and (p(s).get("orchestrator") or {}).get("title") == "Restart", str(did(s)))
         s = play("openFlow:Thank the speakers;callout:hand", *on, also=lambda s: edit(s).get("on"))
         check("Build it by hand puts the note away and starts editing, with the cards to add",

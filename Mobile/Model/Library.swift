@@ -64,14 +64,13 @@ extension RemoteClient {
         }
     }
 
-    /// Called once a flow is on the canvas. A card that Find went to in it is selected, centred, and its details shown.
+    /// Called once a flow is on the canvas. A card that Find went to in it is selected, which brings up its details, and centred.
     func showWantedCard() {
         guard let wanted = canvas.wantedCard, let flow = mirror.snapshot?.flow, flow.id == wanted.flowID else { return }
         canvas.wantedCard = nil
         guard let card = flow.cards.first(where: { $0.name == wanted.name }) else { return }
         canvas.select(.card(card.id))
         canvas.centre(onCard: card.id)
-        panel.show(PanelPage.details)
     }
 
     // MARK: A project's browser
