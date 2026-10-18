@@ -17,7 +17,10 @@ What stage 1 delivered:
 - The Mac's projects and flows with their states, and the open flow's canvas drawn as the Mac draws it, live.
 - Each agent's terminal in its card and full screen with scroll-back, and the orchestrator's beside the canvas.
 - The card and link details, the run log, End cards' answers, earlier runs, cost, and what is waiting on you.
-- An iPad layout in three columns and an iPhone layout as a stack with the details in a sheet.
+- An iPad layout in three columns and an iPhone layout as a stack with the details in a sheet. Since then the
+  panel's tabs are Orchestrator, Run and History, in that order, and it opens on Orchestrator. The details are no
+  longer a tab: on an iPad they slide in over the panel while something is selected, with a way back named for the
+  tab under them, and on an iPhone they are a sheet of their own, beside a second sheet for the three tabs.
 
 Stage 2, "Respond", is built too, by `docs/superpowers/plans/2026-10-11-ios-companion-2-respond.md`. A device is
 still watch-only until "Can control" is turned on for it in the Mac's Settings. With it on, stage 2 delivered:
@@ -38,7 +41,8 @@ With it on, stage 3 delivered:
 - Moving a card by its title bar with the Mac's snapping and guides, resizing by its corner, linking by dragging
   from a port dot, and a menu on a held finger for a card, a link, a group or empty canvas.
 - Every setting the Mac's panel has, in the details, sent when a field is left or after a pause; a link's limit, a
-  group's name and the flow's own settings.
+  group's name and the flow's own settings, which are reached from the canvas's "…" menu and the flow's menu in
+  the list.
 - Making, renaming and deleting flows from the list of flows.
 - A line in the flow's log on the Mac for each kind of edit, naming the device.
 

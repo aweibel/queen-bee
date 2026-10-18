@@ -101,6 +101,11 @@ It shows:
 - which cards are waiting on you;
 - pinned flows first, sub-flows under the flow that runs them, and **Find** across every flow and card.
 
+On an iPad the panel beside the canvas has three tabs: **Orchestrator**, **Run** (the log and the answers) and
+**History** (earlier runs and cost). Tap a card, a link or a group and its details slide in over the panel, with a
+way back to the tab you were on; tap empty canvas and they go. On an iPhone a card's details come up in a sheet over
+the canvas, and the button in the bar at the top brings up the panel's three tabs in a sheet of their own.
+
 A device you have just paired only watches. Turn on **Can control** for it on the Mac, as described below, and from the device you can also:
 
 - run a flow from its Start card and stop a run, with **Run** and **Stop** at the foot of the canvas;
@@ -130,9 +135,9 @@ Under the list the Mac says what the switch allows: "A device with “Can contro
 
 ### Talk to the orchestrator or an agent
 
-Open the session's terminal full screen: tap the arrows on an agent's card, or open **Orchestrator** in the details and tap the arrows there. Under the terminal there are two ways to type.
+Open the session's terminal full screen: tap the arrows on an agent's card, or tap the arrows on the **Orchestrator** tab of the panel beside the canvas. On an iPhone the panel comes up from its button in the bar at the top. Under the terminal there are two ways to type.
 
-- **Message** is a box and a **Send** button. Write what you want to say and send it. The Mac delivers it when the session is ready for a message, so you can send one while it is busy. This is the way to chat with the orchestrator. The orchestrator's page in the details has a message box of its own, so you can write to it without opening its terminal.
+- **Message** is a box and a **Send** button. Write what you want to say and send it. The Mac delivers it when the session is ready for a message, so you can send one while it is busy. This is the way to chat with the orchestrator. The panel's **Orchestrator** tab has a message box of its own, so you can write to it without opening its terminal.
 - **Keys** brings up the keyboard with a row of extra keys above it: Esc, Tab, Ctrl, the arrows, Enter and the digits and letters Claude Code's prompts ask for. Each key goes to the session as you press it. Use it to answer a prompt in the terminal, such as "Allow this command? 1. Yes 2. No", or to interrupt with Esc. When an agent is waiting for an answer like that, its line in the "needs you" list has **Open its terminal**, which opens it with the keys out.
 
 ### Edit a flow
@@ -144,7 +149,7 @@ Editing is a mode you turn on, so a stray finger never moves a card while you ar
 - copy, cut and paste cards, across flows too, and select all;
 - touch and hold a card, a link or a group for its menu: duplicate, delete, group, ungroup, fold, rename, run from here. Touch and hold empty canvas to add a card there;
 - press **Select**, then drag a box round cards or tap them, to move, group or delete several at once;
-- open a card's details to change its settings: the same fields as the Mac's settings panel, with the same names and choices. A link's limit, a group's name and the flow's own settings are there too;
+- open a card's details to change its settings: the same fields as the Mac's settings panel, with the same names and choices. A link's limit and a group's name are there too. The flow's own settings are in the **…** menu beside the run bar, and in the flow's menu in the list;
 - in the list of flows, **+** beside a project makes a flow in it, and touching and holding a flow renames or deletes it.
 
 Undo and Redo are the Mac's own, shared with whoever is at the Mac: either of you can undo what the other did. Deleting several cards, or a card with links, asks first. Deleting one link or one unlinked card does not, because Undo brings it back. Deleting a flow always asks, by the flow's name, and the flow goes to the Trash on your Mac.
