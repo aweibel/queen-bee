@@ -320,7 +320,7 @@ final class CanvasView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegat
     /// The card's browser has a new picture, or its bar or notice changed.
     func browserChanged(_ id: String) {
         guard let view = cardViews[id] as? AgentCardView else { return }
-        view.showBrowser(page: client.browsers.pages[id], picture: client.browsers.pictures[id])
+        view.showBrowser(page: client.browsers.page(id), picture: client.browsers.picture(id))
     }
 
     /// Tells the Mac which browser cards are on screen and large enough to read, which are the only ones it

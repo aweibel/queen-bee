@@ -9,7 +9,8 @@ import UIKit
 /// With "Can control", the page is used as the person at the Mac uses it: a tap clicks, a finger dragged
 /// scrolls, a press held and then dragged drags, and the keys under the page and the keyboard type into it.
 /// Copy brings the page's selected text to this device's clipboard, and Paste types this device's. All of
-/// it goes to the Mac as the Mac's own browser half sends it. A device that may only watch sees the page.
+/// it goes to the Mac as the Mac's own browser half sends it. A device that may only watch is sent nothing of
+/// the page, and says so in its place.
 struct BrowserViewer: View {
     @Environment(RemoteClient.self) private var client
     let cardID: String
@@ -24,7 +25,7 @@ struct BrowserViewer: View {
         let feeds = client.browsers
         // Read so that each new picture and each change to the bar draws this again.
         let _ = feeds.revision
-        let page = feeds.pages[cardID] ?? RemoteBrowserPage()
+        let page = feeds.page(cardID) ?? RemoteBrowserPage()
         let canAct = client.abilities.canAct
         let name = client.mirror.snapshot?.flow.card(cardID)?.name ?? "Browser"
         VStack(spacing: 0) {
@@ -66,7 +67,7 @@ struct BrowserViewer: View {
             }
             Hairline()
             ZStack {
-                BrowserStage(client: client, cardID: cardID, picture: page.notice == nil ? feeds.pictures[cardID] : nil, canAct: canAct,
+                BrowserStage(client: client, cardID: cardID, picture: page.notice == nil ? feeds.picture(cardID) : nil, canAct: canAct,
                              spoken: spoken(page, name: name)) {
                     // A real keyboard types into the page once the page has been tapped, as a click gives a page on the Mac the keyboard.
                     if GCKeyboard.coalesced != nil { wantsKeyboard = true }

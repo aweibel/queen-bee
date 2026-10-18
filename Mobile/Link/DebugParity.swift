@@ -247,6 +247,7 @@ enum DebugParity {
                                      siblings: client.openFlow?.project.flows ?? [], roles: client.mirror.library?.roles ?? []) {
                 state["pending"] = details.items.first { $0.style == .pending }?.label ?? NSNull()
                 state["drift"] = details.items.contains { $0.label == EditForm.roleDrift }
+                state["roleChanged"] = details.items.first { $0.style == .note && $0.label.hasPrefix("Changed from") }?.label ?? NSNull()
                 state["detailRows"] = details.items.filter { $0.style == .row }.map { [$0.label, $0.value] }
                 state["scheduleNote"] = details.items.last { $0.style == .note && $0.label.contains("schedule") }?.label ?? NSNull()
             }

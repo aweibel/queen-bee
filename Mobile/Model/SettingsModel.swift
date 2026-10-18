@@ -341,9 +341,11 @@ nonisolated struct EditForm: Equatable {
         case .agent:
             add(.instructions, "Instructions", .text(placeholder: "A standing brief for this agent", isMono: false))
             // Always there, as on the Mac: it is also where a card is saved as a new role.
-            add(.role, "Role", choices([("", "None")] + roles.map { ($0.id, $0.name) }))
-            if let id = card.role, let role = roles.first(where: { $0.id == id }), !role.matches(card) {
-                rows.append(.roleDrift(cardID: card.id))
+            // A role a device saved or changed is marked as the Mac marks it.
+            add(.role, "Role", choices([("", "None")] + roles.map { role in (role.id, role.changedFrom.map { "\(role.name) · changed from \($0)" } ?? role.name) }))
+            if let id = card.role, let role = roles.first(where: { $0.id == id }) {
+                if let changed = role.changedLine { note(changed + ". Your Mac asks before it uses this role.") }
+                if !role.matches(card) { rows.append(.roleDrift(cardID: card.id)) }
             }
             let known = ["fable", "opus", "sonnet", "haiku"], model = card.model ?? ""
             add(.model, "Model", choices([("", "Your default")] + known.map { ($0, $0.capitalized) } + (model.isEmpty || known.contains(model) ? [] : [(model, model)])))

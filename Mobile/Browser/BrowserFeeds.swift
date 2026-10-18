@@ -64,10 +64,31 @@ final class BrowserFeeds {
     /// The cards the Mac is to send pictures of: those on the canvas's screen, and the one open full screen.
     var watched: Set<String> { onCanvas.union(expandedCard.map { [$0] } ?? []) }
 
+    /// False while this device may only watch. The Mac sends such a device no picture, address or title of any
+    /// page, and each card's browser says so in one line in their place.
+    private(set) var canSee = true
+
+    /// What a card's browser half shows: the Mac's bar and notice, or on a device that may only watch, the one line.
+    func page(_ card: String) -> RemoteBrowserPage? { canSee ? pages[card] : .watchOnly }
+    func picture(_ card: String) -> BrowserPicture? { canSee ? pictures[card] : nil }
+
+    /// "Can control" was turned on or off, or a connection began. Without it, what was shown of pages goes at
+    /// once; with it, the Mac starts sending them for the cards it was last told of. Every browser card in the open
+    /// flow is drawn again.
+    func setCanSee(_ on: Bool, cards: [String]) {
+        guard on != canSee else { return }
+        canSee = on
+        pages = [:]
+        pictures = [:]
+        arrived = [:]
+        pageRevision += 1
+        Set(cards).union(watched).forEach(changed)
+    }
+
     func receive(_ message: HostMessage) {
         switch message {
         case .browserPage(_, let card, let page):
-            guard watched.contains(card) else { return }
+            guard canSee, watched.contains(card) else { return }
             #if DEBUG
             if pages[card] == nil { debugTimes.append("page at \(Self.clock())") }
             #endif
@@ -76,7 +97,7 @@ final class BrowserFeeds {
             pageRevision += 1
             changed(card)
         case .browserFrame(_, let card, let frame):
-            guard watched.contains(card) else { return }
+            guard canSee, watched.contains(card) else { return }
             let number = (arrived[card] ?? 0) + 1
             arrived[card] = number
             // Decoded away from the main thread: a picture is up to 200 KB of JPEG, ten times a second.
@@ -93,7 +114,7 @@ final class BrowserFeeds {
 
     private func show(_ image: UIImage, _ frame: RemoteBrowserFrame, card: String, number: Int) {
         // A newer one may have arrived and been drawn already, or the card may have left the screen.
-        guard arrived[card] == number, watched.contains(card) else { return }
+        guard canSee, arrived[card] == number, watched.contains(card) else { return }
         if pictures[card] == nil { pageRevision += 1 }
         pictures[card] = BrowserPicture(image: image, page: frame.pageSize, pixels: CGSize(width: frame.width, height: frame.height))
         #if DEBUG
@@ -178,7 +199,7 @@ final class BrowserFeeds {
     func debugState(names: [String: String], canAct: Bool) -> [String: Any] {
         var cards: [String: Any] = [:]
         for card in Set(pages.keys).union(pictures.keys).union(watched) {
-            let page = pages[card], picture = pictures[card]
+            let page = self.page(card), picture = pictures[card]
             cards[names[card] ?? card] = [
                 "url": page?.url ?? NSNull(), "title": page?.title ?? NSNull(), "loading": page?.isLoading ?? false,
                 "canGoBack": page?.canGoBack ?? false, "canGoForward": page?.canGoForward ?? false,

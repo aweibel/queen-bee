@@ -116,8 +116,10 @@ struct MadeUpEdits {
             guard card.kind == .agent, card.role == roleID else {
                 return "\(card.name) doesn't have the role \(library.roles[index].name), so it can't update it."
             }
+            // Marked as changed from this device, as the real Mac marks it.
             library.roles[index] = RemoteRole(id: roleID, name: library.roles[index].name, instructions: card.instructions ?? "", model: card.model ?? "",
-                                              effort: card.effort ?? "", permissionMode: card.permissionMode ?? "")
+                                              effort: card.effort ?? "", permissionMode: card.permissionMode ?? "",
+                                              changedFrom: Self.deviceName, changedAt: Date())
             return nil
         case .deleteRole(let roleID):
             guard library.roles.contains(where: { $0.id == roleID }) else { return Self.roleGone }
@@ -159,6 +161,8 @@ struct MadeUpEdits {
     mutating func setActivity(_ id: String, _ activity: FlowActivity) { changeSummary(id) { $0.activity = activity } }
 
     private static let roleGone = "That role is no longer on your Mac."
+    /// What the made-up Mac calls this device when it marks a role the device saved or changed.
+    static let deviceName = "This iPad"
 
     var state: RemoteEditState {
         var fires: [String: Date] = [:]
@@ -459,7 +463,8 @@ struct MadeUpEdits {
                 return "Your Mac already has a role called \(name). Give this one another name."
             }
             let role = RemoteRole(id: "role\(String(format: "%04d", library.roles.count + 100))", name: name, instructions: card.instructions ?? "",
-                                  model: card.model ?? "", effort: card.effort ?? "", permissionMode: card.permissionMode ?? "")
+                                  model: card.model ?? "", effort: card.effort ?? "", permissionMode: card.permissionMode ?? "",
+                                  changedFrom: Self.deviceName, changedAt: Date())
             library.roles.append(role)
             return edit("Save Role") { flow in
                 guard let index = flow.cards.firstIndex(where: { $0.id == cardID }) else { return }

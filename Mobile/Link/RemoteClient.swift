@@ -329,6 +329,10 @@ final class RemoteClient {
         if case .welcome = message { failWaiting() }
         mirror.apply(message).forEach(terminals.receive)
         switch message {
+        // A device that may only watch is sent no page of any card's browser, and shows a line in its place.
+        case .welcome, .control:
+            browsers.setCanSee(mirror.canControl, cards: (mirror.snapshot?.flow.cards ?? []).filter { $0.browser == true }.map(\.id))
+            if case .control = message { browsers.tellAgain() }
         case .answer(let id, let refusal):
             giveUps.removeValue(forKey: id)?.cancel()
             answers.removeValue(forKey: id)?.resume(returning: refusal)

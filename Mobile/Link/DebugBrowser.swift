@@ -84,7 +84,8 @@ enum DebugBrowser {
     }
 
     private static func tell(_ client: RemoteClient) {
-        guard watched else { return }
+        // As a real Mac, it sends no page of any card to a device that may only watch.
+        guard watched, client.mirror.canControl else { return }
         let live = status == .running
         let problem = status == .failed ? "The browser didn't answer in time." : nil
         let progress = status == .downloading ? 0.45 : nil
@@ -211,7 +212,10 @@ enum DebugBrowser {
                 let numbers = rest.split(separator: ":").compactMap { Double($0) }
                 guard numbers.count == 2 else { return "browserTap needs x and y" }
                 // The page has to be drawn before a finger can land on it.
-                while client.browsers.debugStage?.picture == nil { try? await Task.sleep(for: .milliseconds(200)) }
+                // A device that may only watch is sent no page, so it is not waited for long.
+                for _ in 0..<(client.mirror.canControl ? 300 : 10) where client.browsers.debugStage?.picture == nil {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
                 guard client.browsers.debugStage?.debugClick(page: CGPoint(x: numbers[0], y: numbers[1])) != nil else { return "the page can't be tapped" }
                 return await sent(id)
             }

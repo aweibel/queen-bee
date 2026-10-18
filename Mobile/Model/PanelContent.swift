@@ -174,6 +174,7 @@ nonisolated struct Details: Equatable {
             add(.text, "Instructions", said(card.instructions))
             if let id = card.role, !id.isEmpty, let role = roles.first(where: { $0.id == id }) {
                 add(.row, "Role", role.name)
+                if let changed = role.changedLine { add(.note, changed + ".") }
                 if !role.matches(card) { add(.note, EditForm.roleDrift) }
             }
             let model = card.model ?? ""
