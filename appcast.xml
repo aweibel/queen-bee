@@ -3,6 +3,53 @@
     <channel>
         <title>QueenBee</title>
         <item>
+            <title>0.5.0</title>
+            <pubDate>Mon, 19 Oct 2026 10:20:58 +0400</pubDate>
+            <link>https://github.com/bamboozledkitty/queen-bee</link>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[
+### Added
+
+- Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi, with no server and no account.
+- A companion app for iPad and iPhone, built from source and installed on your own device. It shows every flow with its state, the open flow's canvas live, each agent's terminal with scroll-back, the run log, End cards' answers, earlier runs, cost, and which cards are waiting on you. The README has the steps to install it with a free Apple ID.
+- "Can control", a switch for each paired device in Settings → Remote. It is off until you turn it on. With it on, the device can run and stop flows, approve and reject, allow a Script card's command, start and restart agents, and send messages and keys to the orchestrator and to any agent. The Mac checks the switch for every one of these, and writes what a device did in the flow's log with the device's name.
+- Edit, in the companion app, for a device with "Can control" on. Press Edit to move, resize, link, add, copy, group and delete cards by touch, change a card's settings, a link's limit and a group's name in the details, and make, rename and delete flows. Undo and Redo are shared with the Mac. A flow deleted from a device goes to the Trash on the Mac.
+- The rest of the Mac's controls, in the companion app, for a device with "Can control" on: Run from This Start, Retry, Stop Its Agents, the orchestrator's Start, Restart and Restart to apply, Undo beside "Not in use yet", turning a schedule on and off, Clear for the log, closing the message at the top of a flow, Copy, Cut, Paste and Select All for cards, across flows too, the map, the Browser switch, adding an agent from a role, saving, updating and deleting roles with the line that says a card has changed since its role was saved, New sub-flow, pins, sub-flows under the flow that runs them, Find across flows and cards, sub-flow costs, and Clear browser data, Restart and the Mac's Download offer for a project's browser.
+- An agent card's browser on the iPad and iPhone: the page beside the card's terminal, as on the Mac, and full screen with the address bar, Back, Forward, Reload, the Mac's notices, and the page to tap, scroll, type into, copy from and paste into. Only a device with "Can control" is sent the page.
+- `./scripts/e2e.py parity browser-canned browser-remote browser-mobile` check all of this, with a made-up Mac, the stand-in device and the iPad against a small local site.
+
+### Changed
+
+- In the companion app the panel's tabs are Orchestrator, Run and History, and it opens on Orchestrator. On an iPad a selected card's details slide over the panel, with a way back to the tab under them; on an iPhone they come up in a sheet from the bottom. A flow's settings are in the "…" menu beside Run.
+- Every Claude Code session starts with Claude Code's classic renderer, whatever your own "tui" setting says, so a card's terminal keeps output to scroll back through on the Mac and on a device. It is passed to the session when it starts; nothing is written to your settings.
+
+### Security
+
+- A change made from a paired device is held to more than one made on the Mac. A Script card's command changed from a device stops the run and must be allowed on the Mac itself: no device can allow it, even in a scheduled run. Any change from a device to what a flow does turns off that flow's schedules, and those of flows that run it as a sub-flow, until they are turned on again on the Mac or with Turn on from a device, which is noted in the log each time. A device cannot change an agent's folder or set a permission mode that skips permission checks.
+- A role saved or changed from a device is marked on the Mac with the device's name. The Mac asks before you first use it, keeps what it held before so it can be put back, and keeps a role deleted from a device for 30 days to be restored.
+- Clear on a device keeps every line of the log that says what a device did or that a schedule went on or off. Closing the message at the top of a flow from a device is noted with what it said.
+- A card's page goes only to a device with "Can control", and stops at once when it is turned off. A page can't flood a device: its address and title are cut short and sent at most four times a second, and what a device says it has on screen is held to a pace of its own. Copy asks the page in a world its scripts can't reach and gives up after three seconds.
+- A `javascript:` address, or any other that isn't a web address, typed into the bar of an agent card's browser on the Mac is refused. One with no dot in it used to be sent to the search engine as words to search for.
+- Agent cards added from a device do not start a session by themselves in a flow that is open on the Mac, and a flow can be given twelve agents at most from a device.
+- What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
+- Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
+- A flow deleted from a device keeps its runs and its log, so one put back from the Trash has them again. Its agents are stopped only once its file is in the Trash.
+- A flow's own settings changed from a device turn its schedules off, as other changes from a device do.
+- A message too big to send from a device is refused on the device, with a reason, instead of cutting the connection.
+- A flow that two projects open on the Mac share by id can't be opened or changed from a device.
+- A paired device stays paired when its key can't be read from the Keychain at launch, for instance when an access prompt is turned down; the Mac tries again.
+- The Mac asks about a role changed from a device on the window in front, and asks again if a device changes it while the question is up.
+
+### Fixed
+
+- An agent whose program can't be started no longer stays at "Starting" for ever. It ends, and can be started again.
+
+]]></description>
+            <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.5.0/QueenBee-0.5.0.dmg" length="14294031" type="application/octet-stream" sparkle:edSignature="EikoigRvBYrQFXCWoTvsHOWB5maCMH+RKEw3Gi+Hspw30yEKkKeKeDNhNhOOUE9Nbp9bcXcTJuT7FxW4SgE3Bg=="/>
+        </item>
+        <item>
             <title>0.4.0</title>
             <pubDate>Tue, 13 Oct 2026 18:49:29 +0400</pubDate>
             <link>https://github.com/bamboozledkitty/queen-bee</link>
@@ -62,29 +109,6 @@ These come from an outside security review of 0.3.3.
 
 ]]></description>
             <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.3.4/QueenBee-0.3.4.dmg" length="11167774" type="application/octet-stream" sparkle:edSignature="jJZvg1iu5NSyIIYf/n9iID1Y63nDEMMu3KxpfOZ5Py38+llBXg8n1dJqZVdtUnFm1Vt9Z8uag611n84Jw9ynAQ=="/>
-        </item>
-        <item>
-            <title>0.3.3</title>
-            <pubDate>Sun, 11 Oct 2026 02:09:32 +0400</pubDate>
-            <link>https://github.com/bamboozledkitty/queen-bee</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.3.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[
-### Added
-
-- Rejecting at an Approval card can carry a note saying why. The note goes out by Rejected ahead of the message, so an agent it loops back to knows what to change.
-
-### Fixed
-
-- An agent that stops to ask the orchestrator or a linked agent a question no longer has its parting words passed on as its reply. The card stays owed until the turn after the answer, and shows "awaiting answer". If nothing else is under way the log says the run is waiting on it, and after 90 seconds you are told, and the orchestrator too unless it is busy.
-- Agents are told to find files with `ls`, `find` and `grep` in the shell, which Claude Code runs without asking, and the orchestrator is told to name files in a card's instructions and not to forbid the shell.
-- Zoom to fit shows a wide flow whole. It may go below 20%; pinch, the wheel and the zoom buttons still stop there.
-- Two runs of `scripts/e2e.py` at once no longer delete each other's support folder.
-- The log says when acting on your answer at an Approval or Script card took more than two seconds.
-
-]]></description>
-            <enclosure url="https://github.com/bamboozledkitty/queen-bee/releases/download/v0.3.3/QueenBee-0.3.3.dmg" length="11146406" type="application/octet-stream" sparkle:edSignature="ZiqyTTkae4m0DB0urvx5rbcj55CX52yQRxtf0x/F9ErLUVqkaJg4PwrSMM3xMc42iuDja9G9l2J2BMemQMp0Cg=="/>
         </item>
     </channel>
 </rss>

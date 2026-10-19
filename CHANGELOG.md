@@ -6,6 +6,8 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-19
+
 ### Added
 
 - Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi, with no server and no account.
@@ -18,6 +20,7 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ### Changed
 
+- In the companion app the panel's tabs are Orchestrator, Run and History, and it opens on Orchestrator. On an iPad a selected card's details slide over the panel, with a way back to the tab under them; on an iPhone they come up in a sheet from the bottom. A flow's settings are in the "…" menu beside Run.
 - Every Claude Code session starts with Claude Code's classic renderer, whatever your own "tui" setting says, so a card's terminal keeps output to scroll back through on the Mac and on a device. It is passed to the session when it starts; nothing is written to your settings.
 
 ### Security
@@ -30,6 +33,16 @@ All notable changes to Queen Bee are listed here. The format follows
 - Agent cards added from a device do not start a session by themselves in a flow that is open on the Mac, and a flow can be given twelve agents at most from a device.
 - What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
 - Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
+- A flow deleted from a device keeps its runs and its log, so one put back from the Trash has them again. Its agents are stopped only once its file is in the Trash.
+- A flow's own settings changed from a device turn its schedules off, as other changes from a device do.
+- A message too big to send from a device is refused on the device, with a reason, instead of cutting the connection.
+- A flow that two projects open on the Mac share by id can't be opened or changed from a device.
+- A paired device stays paired when its key can't be read from the Keychain at launch, for instance when an access prompt is turned down; the Mac tries again.
+- The Mac asks about a role changed from a device on the window in front, and asks again if a device changes it while the question is up.
+
+### Fixed
+
+- An agent whose program can't be started no longer stays at "Starting" for ever. It ends, and can be started again.
 
 ## [0.4.0] - 2026-10-13
 
@@ -200,7 +213,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.2...v0.3.3

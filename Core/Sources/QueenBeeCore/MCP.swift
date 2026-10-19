@@ -30,7 +30,7 @@ public enum MCPServer {
             return result(id, [
                 "protocolVersion": .string(params?["protocolVersion"]?.stringValue ?? defaultProtocolVersion),
                 "capabilities": ["tools": [:]],
-                "serverInfo": ["name": .string(server), "version": "0.4.0"],
+                "serverInfo": ["name": .string(server), "version": "0.5.0"],
             ])
 
         case "tools/list":
