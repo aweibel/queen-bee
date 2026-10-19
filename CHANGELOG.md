@@ -6,6 +6,31 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Remote, in Settings: pair an iPad or iPhone with this Mac over local Wi-Fi, with no server and no account.
+- A companion app for iPad and iPhone, built from source and installed on your own device. It shows every flow with its state, the open flow's canvas live, each agent's terminal with scroll-back, the run log, End cards' answers, earlier runs, cost, and which cards are waiting on you. The README has the steps to install it with a free Apple ID.
+- "Can control", a switch for each paired device in Settings → Remote. It is off until you turn it on. With it on, the device can run and stop flows, approve and reject, allow a Script card's command, start and restart agents, and send messages and keys to the orchestrator and to any agent. The Mac checks the switch for every one of these, and writes what a device did in the flow's log with the device's name.
+- Edit, in the companion app, for a device with "Can control" on. Press Edit to move, resize, link, add, copy, group and delete cards by touch, change a card's settings, a link's limit and a group's name in the details, and make, rename and delete flows. Undo and Redo are shared with the Mac. A flow deleted from a device goes to the Trash on the Mac.
+- The rest of the Mac's controls, in the companion app, for a device with "Can control" on: Run from This Start, Retry, Stop Its Agents, the orchestrator's Start, Restart and Restart to apply, Undo beside "Not in use yet", turning a schedule on and off, Clear for the log, closing the message at the top of a flow, Copy, Cut, Paste and Select All for cards, across flows too, the map, the Browser switch, adding an agent from a role, saving, updating and deleting roles with the line that says a card has changed since its role was saved, New sub-flow, pins, sub-flows under the flow that runs them, Find across flows and cards, sub-flow costs, and Clear browser data, Restart and the Mac's Download offer for a project's browser.
+- An agent card's browser on the iPad and iPhone: the page beside the card's terminal, as on the Mac, and full screen with the address bar, Back, Forward, Reload, the Mac's notices, and the page to tap, scroll, type into, copy from and paste into. Only a device with "Can control" is sent the page.
+- `./scripts/e2e.py parity browser-canned browser-remote browser-mobile` check all of this, with a made-up Mac, the stand-in device and the iPad against a small local site.
+
+### Changed
+
+- Every Claude Code session starts with Claude Code's classic renderer, whatever your own "tui" setting says, so a card's terminal keeps output to scroll back through on the Mac and on a device. It is passed to the session when it starts; nothing is written to your settings.
+
+### Security
+
+- A change made from a paired device is held to more than one made on the Mac. A Script card's command changed from a device stops the run and must be allowed on the Mac itself: no device can allow it, even in a scheduled run. Any change from a device to what a flow does turns off that flow's schedules, and those of flows that run it as a sub-flow, until they are turned on again on the Mac or with Turn on from a device, which is noted in the log each time. A device cannot change an agent's folder or set a permission mode that skips permission checks.
+- A role saved or changed from a device is marked on the Mac with the device's name. The Mac asks before you first use it, keeps what it held before so it can be put back, and keeps a role deleted from a device for 30 days to be restored.
+- Clear on a device keeps every line of the log that says what a device did or that a schedule went on or off. Closing the message at the top of a flow from a device is noted with what it said.
+- A card's page goes only to a device with "Can control", and stops at once when it is turned off. A page can't flood a device: its address and title are cut short and sent at most four times a second, and what a device says it has on screen is held to a pace of its own. Copy asks the page in a world its scripts can't reach and gives up after three seconds.
+- A `javascript:` address, or any other that isn't a web address, typed into the bar of an agent card's browser on the Mac is refused. One with no dot in it used to be sent to the search engine as words to search for.
+- Agent cards added from a device do not start a session by themselves in a flow that is open on the Mac, and a flow can be given twelve agents at most from a device.
+- What a device sends is capped in characters and in bytes, a flow added to from a device at 200 cards, 400 links and 2 MB, and a device at 60 commands in a burst and 20 a second after that.
+- Each kind of edit from a device is written in the flow's log once, with the device's name, and half a minute later one more line says how many more there were.
+
 ## [0.4.0] - 2026-10-13
 
 ### Added

@@ -18,6 +18,9 @@ struct PaletteView: View {
                     ForEach(services.roles) { role in
                         PaletteRow(kind: .agent, role: role) { controller.addCard(.agent, role: role) }
                             .contextMenu {
+                                if role.earlier != nil {
+                                    Button("Put Back the Earlier Version") { services.putBackEarlierVersion(of: role.id) }
+                                }
                                 Button("Delete Role", role: .destructive) { services.deleteRole(role.id) }
                             }
                     }
@@ -49,6 +52,14 @@ private struct PaletteRow: View {
                 .font(.dsMono(Theme.Size.caption, role == nil ? .medium : .regular))
                 .lineLimit(1)
             Spacer(minLength: 0)
+            // A role a paired device saved or changed, which the Mac asks about before it is first used.
+            if let changed = role?.changedLine {
+                Image(systemName: "ipad.and.iphone")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .help(changed)
+                    .accessibilityLabel(changed)
+            }
         }
         .foregroundStyle(Theme.ink.ui)
         .padding(.horizontal, Theme.Space.s)
@@ -102,6 +113,12 @@ struct CardHelpView: View {
             Text(help.what)
                 .font(.dsSans(Theme.Size.body))
                 .fixedSize(horizontal: false, vertical: true)
+            if let changed = role?.changedLine {
+                Text("\(changed). You're asked before it is first used.")
+                    .font(.dsSans(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(role == nil ? "For example" : "Its instructions").font(.dsMono(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
                 Text(help.example)

@@ -1,5 +1,6 @@
 import AppKit
 import QueenBeeCore
+import SwiftTerm
 
 /// A back door for automated checks, open only when the app is launched with `--testing`.
 /// A script asks what the app is showing and does what a person would do with the mouse
@@ -28,6 +29,93 @@ enum TestHarness {
         ]
     }
 
+    /// Turns Remote on, pairs and unpairs, for a test copy only. Nil for anything else.
+    #if DEBUG
+    /// What one connected device has been sent of cards' pages, and how much is waiting for it.
+    private static func browsersSeen(_ session: RemoteSession) -> JSONValue {
+        ["frames": .number(Double(session.framesSent)), "dropped": .number(Double(session.picturesDropped)),
+         "bytes": .number(Double(session.pictureBytes)), "queued": .number(Double(session.queuedNow)),
+         "mostQueued": .number(Double(session.mostQueued)), "watching": .array(session.watchedBrowsers.map(JSONValue.string)),
+         "pagesTold": .number(Double(session.pagesTold)), "pagesDropped": .number(Double(session.pagesDropped)),
+         "watchesTaken": .number(Double(session.watchesTaken))]
+    }
+    #endif
+
+    static func handleRemote(_ payload: JSONValue) async -> JSONValue? {
+        guard isEnabled else { return nil }
+        let host = RemoteHost.shared
+        /// A listener's port is known a moment after it starts.
+        func soon(_ read: () -> UInt16?) async -> UInt16? {
+            for _ in 0..<50 {
+                if let port = read() { return port }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return nil
+        }
+        switch payload["op"]?.stringValue {
+        case "remote-on":
+            // Off and on again is what a device sees when the Mac goes away and comes back.
+            host.setOn(payload["on"]?.boolValue ?? true)
+            return ["on": .bool(host.isOn)]
+        case "remote-pair":
+            #if DEBUG
+            // A test that drives the iPad app has to tell it the ports before either listener exists.
+            host.testPorts = (payload["pairPort"]?.doubleValue.flatMap(UInt16.init(exactly:)), payload["devicePort"]?.doubleValue.flatMap(UInt16.init(exactly:)))
+            #endif
+            host.beginPairing()
+            guard host.pairing != nil else { return ["error": "pairing didn't start"] }
+            guard let port = await soon({ host.pairingPort }), let code = host.pairing?.code.text else { return ["error": "pairing didn't start"] }
+            return ["code": .string(code), "port": .number(Double(port))]
+        case "remote-port":
+            let id = payload["device"]?.stringValue ?? ""
+            guard let port = await soon({ host.ports[id] }) else { return ["error": "not listening for that device"] }
+            return ["port": .number(Double(port))]
+        case "remote-state":
+            #if DEBUG
+            let browsers = JSONValue.array(host.sessions.map(Self.browsersSeen))
+            #else
+            let browsers = JSONValue.null
+            #endif
+            return ["on": .bool(host.isOn), "devices": .number(Double(host.devices.devices.count)), "connected": .number(Double(host.sessions.count)),
+                    "listening": .number(Double(host.ports.count)), "pairing": .bool(host.pairing != nil),
+                    "open": .array(host.sessions.compactMap(\.openFlowName).map(JSONValue.string)),
+                    "received": .number(Double(host.sessions.reduce(0) { $0 + $1.received })),
+                    "controlling": .number(Double(host.devices.devices.filter(\.canControl).count)),
+                    "selected": AppServices.shared.selectedFlowID.map(JSONValue.string) ?? .null,
+                    "problem": host.problem.map(JSONValue.string) ?? .null,
+                    "browsers": browsers]
+        case "remote-reset-queued":
+            // Starts counting the most ever queued afresh, from what is queued now.
+            #if DEBUG
+            host.sessions.forEach { $0.resetMostQueued() }
+            #endif
+            return [:]
+        case "remote-vault":
+            // Makes keeping a key fail, the way a locked or broken Keychain would.
+            KeyVault.failsWrites = payload["fails"]?.boolValue ?? false
+            return [:]
+        case "remote-control":
+            // The "Can control" switch in Settings.
+            host.setCanControl(payload["on"]?.boolValue ?? true, for: payload["device"]?.stringValue ?? "")
+            return [:]
+        case "remote-remove":
+            host.remove(payload["device"]?.stringValue ?? "")
+            return [:]
+        case "remote-project":
+            // A second project in the sidebar, as a copied project or another worktree is, or taken out again.
+            let services = AppServices.shared
+            let root = URL(fileURLWithPath: payload["path"]?.stringValue ?? "", isDirectory: true).standardizedFileURL
+            if payload["add"]?.boolValue ?? true {
+                services.addProject(root, select: false)
+            } else if let project = services.projects.first(where: { $0.root == root }) {
+                services.removeProject(project)
+            }
+            return ["projects": .number(Double(services.projects.count))]
+        default:
+            return nil
+        }
+    }
+
     #if !DEBUG
     /// A release build has no back door: there is nothing here to drive.
     static func handle(_ payload: JSONValue, controller: FlowController) async -> JSONValue { ["error": "not a test build"] }
@@ -41,6 +129,8 @@ enum TestHarness {
             return state(of: controller)
         case "select":
             AppServices.shared.selectedFlowID = controller.flow.id
+            // Choosing the flow already chosen changes nothing, so one that was closed while on screen is opened here.
+            controller.open()
             return [:]
         case "close":
             controller.shutDown()
@@ -56,7 +146,7 @@ enum TestHarness {
             return [:]
         case "kill":
             // What a crash looks like from outside: the process is gone without a goodbye.
-            guard let cardID, let pid = controller.sessions[cardID]?.view.process?.shellPid, pid > 0 else { return ["error": "no process"] }
+            guard let cardID, let pid = controller.sessions[cardID]?.view.process.shellPid, pid > 0 else { return ["error": "no process"] }
             kill(pid, SIGKILL)
             return ["pid": .number(Double(pid))]
         case "restart":
@@ -70,6 +160,9 @@ enum TestHarness {
             patch.instructions = payload["instructions"]?.stringValue
             patch.model = payload["model"]?.stringValue
             patch.effort = payload["effort"]?.stringValue
+            // A command put in this way is the person's and not typed: what pasting a card or reverting one does. It still has to be allowed.
+            patch.command = payload["command"]?.stringValue
+            patch.template = payload["template"]?.stringValue
             patch.browser = payload["browser"]?.boolValue
             controller.update(cardID, patch)
             return [:]
@@ -118,6 +211,58 @@ enum TestHarness {
         case "browserClear":
             await controller.project.browser.clearData()
             return ["hasData": .bool(controller.project.browser.hasData)]
+        case "browserMakeData":
+            // What a browser that has run once leaves behind, without one being started.
+            controller.project.browser.testMakeData()
+            return ["hasData": .bool(controller.project.browser.hasData)]
+        case "macState":
+            // What a paired device can change that lives outside any flow: the saved roles, the pinned flows,
+            // and the project's browser.
+            let services = AppServices.shared
+            return [
+                "roles": .array(services.roles.map {
+                    ["id": .string($0.id), "name": .string($0.name), "instructions": .string($0.instructions), "model": .string($0.model),
+                     "effort": .string($0.effort), "permissionMode": .string($0.permissionMode),
+                     "changedFrom": $0.changedFrom.map { .string($0.device) } ?? .null,
+                     "earlier": $0.earlier.map { .string($0.instructions) } ?? .null]
+                }),
+                "deletedRoles": .array(services.deletedRoles.map { ["id": .string($0.role.id), "name": .string($0.role.name), "device": .string($0.device)] }),
+                "pinned": .array(services.pinnedFlowIDs.sorted().map(JSONValue.string)),
+                "browser": .string("\(controller.project.browser.state)"),
+                "browserData": .bool(controller.project.browser.hasData),
+            ]
+        case "pickRole":
+            // The inspector's role menu, with the person's answer to "Use it?" given here, and whether it was asked.
+            let services = AppServices.shared
+            guard let cardID, let role = services.roles.first(where: { $0.id == payload["role"]?.stringValue }) else { return ["error": "pickRole needs card and role"] }
+            services.testRoleAnswer = payload["answer"]?.boolValue ?? true
+            services.testRoleAsked = []
+            // A device changing the role's instructions while the question is up. Taken when it is asked, a turn later.
+            services.testRoleChange = nil
+            if let changed = payload["changeWhileAsked"]?.stringValue {
+                services.testRoleChange = {
+                    guard var now = services.roles.first(where: { $0.id == role.id }) else { return }
+                    now.instructions = changed
+                    services.save(now, fromDevice: "Other device")
+                }
+            }
+            defer { services.testRoleAnswer = nil }
+            controller.applyRole(role, toCard: cardID)
+            // A marked role is asked about on the next turn: wait for the answer, so what is read below is what it did.
+            for _ in 0..<500 where services.rolesBeingAsked > 0 { try? await Task.sleep(for: .milliseconds(10)) }
+            guard services.rolesBeingAsked == 0 else { return ["error": "the role's question was never answered"] }
+            return ["asked": .bool(!services.testRoleAsked.isEmpty), "askedTimes": .number(Double(services.testRoleAsked.count)),
+                    "role": controller.flow.card(cardID)?.role.map(JSONValue.string) ?? .null]
+        case "saveRoleOnMac":
+            guard let cardID else { return ["error": "saveRoleOnMac needs card"] }
+            controller.saveRole(fromCard: cardID)
+            return [:]
+        case "putBackRole":
+            AppServices.shared.putBackEarlierVersion(of: payload["role"]?.stringValue ?? "")
+            return [:]
+        case "restoreRole":
+            let restored = AppServices.shared.restoreRole(payload["role"]?.stringValue ?? "")
+            return ["name": restored.map { .string($0.name) } ?? .null]
         case "launchArguments":
             // The command line a card's session would be started with.
             guard let cardID, let card = controller.flow.card(cardID), let environment = AppServices.shared.environment,
@@ -237,6 +382,31 @@ enum TestHarness {
         case "undo":
             controller.undo()
             return [:]
+        case "resize":
+            // What a drag of a card's corner ends up doing.
+            guard let cardID, let width = payload["width"]?.doubleValue, let height = payload["height"]?.doubleValue else { return ["error": "resize needs card, width and height"] }
+            controller.resizeCard(cardID, width: width, height: height)
+            return [:]
+        case "terminal":
+            // What a session's own terminal shows, to set against what a device shows for it.
+            guard let cardID else { return ["error": "terminal needs card"] }
+            return MirrorWindow.describe(controller.session(forCard: cardID).view)
+        case "mirror":
+            // A second terminal that sees only what a paired device would be sent.
+            guard let cardID else { return ["error": "mirror needs card"] }
+            MirrorWindow.show(controller.session(forCard: cardID), shown: payload["shown"]?.boolValue ?? true)
+            return [:]
+        case "mirror-limit":
+            // Makes the kept output small, so a check can see what a long session's mirror starts from.
+            guard let cardID, let bytes = payload["bytes"]?.doubleValue else { return ["error": "mirror-limit needs card and bytes"] }
+            controller.session(forCard: cardID).view.output.setLimit(Int(bytes))
+            return [:]
+        case "mirror-close":
+            MirrorWindow.close()
+            return [:]
+        case "mirror-compare":
+            guard let cardID else { return ["error": "mirror-compare needs card"] }
+            return MirrorWindow.compare(with: controller.session(forCard: cardID))
         default:
             return ["error": "unknown op"]
         }
@@ -255,7 +425,9 @@ enum TestHarness {
                 described["browser"] = [
                     "url": .string(tab.url), "title": .string(tab.title), "attached": .bool(tab.isAttached),
                     "hasPicture": .bool(tab.lastFrame != nil), "pictureWidth": .number(Double(tab.lastFrame?.width ?? 0)),
-                    "host": .string("\(tab.hostState)"),
+                    "host": .string("\(tab.hostState)"), "watchers": .number(Double(tab.watcherCount)),
+                    "canGoBack": .bool(tab.canGoBack), "canGoForward": .bool(tab.canGoForward),
+                    "pageWidth": .number(tab.pageSize.width), "pageHeight": .number(tab.pageSize.height),
                 ]
             } else {
                 described["browser"] = .null
@@ -291,7 +463,7 @@ enum TestHarness {
             "runs": .array(controller.runs.map { ["id": .string($0.id), "outcome": .string($0.outcome.rawValue), "command": .string($0.command)] }),
             "viewedRun": controller.viewedRunID.map(JSONValue.string) ?? .null,
             "messages": .number(Double(controller.messages.values.reduce(0) { $0 + $1.count })),
-            "holds": .array(controller.holds.map { ["card": .string(controller.flow.card($0.cardID)?.name ?? ""), "text": .string($0.text), "needsAllow": .bool($0.needsAllow)] }),
+            "holds": .array(controller.holds.map { ["card": .string(controller.flow.card($0.cardID)?.name ?? ""), "text": .string($0.text), "needsAllow": .bool($0.needsAllow), "allowOnMac": .bool($0.allowOnMac == true)] }),
             "selected": .array(controller.flow.cards.filter { controller.selection.cardIDs.contains($0.id) }.map { .string($0.name) }),
             "undo": .string(controller.undoManager.canUndo ? controller.undoManager.undoActionName : ""),
             "isRunning": .bool(controller.isRunning),
@@ -324,3 +496,96 @@ enum TestHarness {
     }
     #endif
 }
+
+#if DEBUG
+/// A second terminal fed only by a session's feed, to check a paired device would see what
+/// the real one shows.
+enum MirrorWindow {
+    private static var window: NSWindow?
+    private static var view: TerminalView?
+    private static var held: (feed: TerminalFeed, token: UUID)?
+    private static var counts = (chunks: 0, bytes: 0, resets: 0, largest: 0)
+
+    /// Opens the mirror part-way through a session. With `shown` off nothing is drawn and the
+    /// chunks are only counted, which is what the feed costs by itself.
+    static func show(_ session: TerminalSession, shown: Bool) {
+        close()
+        counts = (0, 0, 0, 0)
+        if shown {
+            let made = TerminalView(frame: NSRect(x: 0, y: 0, width: 760, height: 480))
+            made.font = Theme.mono(12)
+            let holder = NSView(frame: made.frame)
+            holder.addSubview(made)
+            let frame = NSWindow(contentRect: made.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            frame.title = "Mirror of \(session.key)"
+            frame.contentView = holder
+            frame.isReleasedWhenClosed = false
+            frame.orderFront(nil)
+            view = made
+            window = frame
+        }
+        // The snapshot and the listener are taken in one go, so nothing printed between them is missed.
+        take(session.feed.snapshot(), counted: false)
+        held = (session.feed, session.feed.addListener { take($0, counted: true) })
+    }
+
+    static func close() {
+        if let held { held.feed.removeListener(held.token) }
+        held = nil
+        window?.close()
+        window = nil
+        view = nil
+    }
+
+    /// Does with a chunk what a device does with it.
+    private static func take(_ chunk: TerminalChunk, counted: Bool) {
+        if counted {
+            counts.chunks += 1
+            counts.bytes += chunk.data.count
+            counts.largest = max(counts.largest, chunk.data.count)
+            if chunk.reset { counts.resets += 1 }
+        }
+        guard let view else { return }
+        if chunk.reset {
+            // A reset starts from nothing: no screen, no history, no modes left over, and the size the chunk names.
+            view.resize(cols: chunk.cols, rows: chunk.rows)
+            view.resetToInitialState()
+            view.clearScrollback()
+            // A point to spare, so rounding can't cost the view a row or a column.
+            let fit = view.getOptimalFrameSize().size
+            view.setFrameSize(NSSize(width: fit.width + 1, height: fit.height + 1))
+            window?.setContentSize(view.frame.size)
+        }
+        view.feed(byteArray: [UInt8](chunk.data)[...])
+    }
+
+    static func compare(with session: TerminalSession) -> JSONValue {
+        var result: [String: JSONValue] = [
+            "chunks": .number(Double(counts.chunks)), "bytes": .number(Double(counts.bytes)),
+            "resets": .number(Double(counts.resets)), "largest": .number(Double(counts.largest)),
+            "snapshotBytes": .number(Double(session.view.output.count)),
+        ]
+        guard let view else { return .object(result) }
+        let real = describe(session.view), mirror = describe(view)
+        result["real"] = real
+        result["mirror"] = mirror
+        result["equal"] = .bool(real["screen"] == mirror["screen"] && real["cols"] == mirror["cols"] && real["rows"] == mirror["rows"]
+            && real["cursor"] == mirror["cursor"])
+        result["historyEqual"] = .bool(real["history"] == mirror["history"])
+        return .object(result)
+    }
+
+    static func describe(_ view: TerminalView) -> JSONValue {
+        let state = view.terminalStateSnapshot()
+        let all = String(decoding: view.getBufferAsData(), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+        return [
+            "cols": .number(Double(state.dimensions.cols)), "rows": .number(Double(state.dimensions.rows)),
+            "cursor": .array([.number(Double(state.cursor.col)), .number(Double(state.cursor.row))]),
+            "screen": .array(state.visibleRows.map { .string($0.text) }),
+            "scrollback": .number(Double(max(0, all.count - state.dimensions.rows))),
+            "history": .string(all.dropLast(state.dimensions.rows).joined(separator: "\n")),
+        ]
+    }
+}
+#endif
+

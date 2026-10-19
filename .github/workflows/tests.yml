@@ -14,3 +14,31 @@ jobs:
       - name: swift test
         working-directory: Core
         run: swift test
+      - name: Build for iOS
+        working-directory: Core
+        run: xcodebuild -scheme QueenBeeCore-Package -destination 'generic/platform=iOS Simulator' build
+
+  mobile:
+    name: iPad and iPhone app builds
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      # For the Simulator, so no Apple account or signing details are needed.
+      - name: Build for the Simulator
+        run: ./scripts/build-mobile.sh
+
+  clean:
+    name: Nothing private in the repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Signing details, keys and home paths
+        run: ./scripts/check-clean.sh
+      - name: Secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

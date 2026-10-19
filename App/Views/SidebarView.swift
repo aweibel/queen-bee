@@ -26,6 +26,23 @@ struct SidebarView: View {
             .padding(.vertical, 6)
             .background(Theme.bar.ui)
             Rectangle().fill(Theme.hairline.ui).frame(height: 1)
+            if !RemoteHost.shared.sessions.isEmpty {
+                // "Can control" is read from the list of devices, which is watched, so turning it on or off shows here at once.
+                let devices = RemoteHost.shared.devices
+                let controls = RemoteHost.shared.sessions.contains { devices.canControl($0.device.id) }
+                let names = RemoteHost.shared.sessions.map { devices.canControl($0.device.id) ? "\($0.device.name) · can control" : $0.device.name }
+                    .joined(separator: ", ")
+                Label(names, systemImage: "ipad.and.iphone")
+                    .font(.dsMono(Theme.Size.caption))
+                    .foregroundStyle(Theme.inkSecondary.ui)
+                    .lineLimit(1)
+                    .padding(.horizontal, Theme.Space.s)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help(controls ? "Connected to this Mac now. A device that can control can start and stop runs, answer approvals, type into sessions and edit flows. You can turn that off, or remove a device, in Settings."
+                          : "Connected to this Mac now. You can remove a device in Settings.")
+                Rectangle().fill(Theme.hairline.ui).frame(height: 1)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {

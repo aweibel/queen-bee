@@ -20,12 +20,25 @@ final class BrowserTab: BrowserToolHost {
     private(set) var isLoading = false
     /// The latest picture of the page, kept so a view made later has something to show at once.
     private(set) var lastFrame: CGImage?
+    /// The same picture as the browser sent it, kept so a device that starts watching has something to show at once.
+    private(set) var lastStream: StreamFrame?
+    /// Whether the tab's history has a page before this one, and one after it.
+    private(set) var canGoBack = false
+    private(set) var canGoForward = false
+    /// Why the last address a device typed into the bar didn't open, until the page changes. The Mac's own bar
+    /// shows its errors in itself.
+    private(set) var addressProblem: String?
     private var mainFrame: String?
     /// The page's size in points: the size of the card's browser half.
     private var size = CGSize(width: 560, height: 340)
     private var sizeTask: Task<Void, Never>?
+    private var titleCheck: Task<Void, Never>?
     private var wantsStream = false
+    /// The card's browser half on the Mac is in view. The page is also streamed while a paired device watches it.
+    private var paneWantsStream = false
     private var isStreaming = false
+    /// The paired devices watching this card's page, each told of every picture and every change.
+    private var watchers: [UUID: (frame: (StreamFrame) -> Void, change: () -> Void)] = [:]
     /// The numbers the last `read` gave out, and the page node each stands for.
     private var refs: [Int: Int] = [:]
     /// Where to go back to when the browser has been started again.
@@ -36,11 +49,25 @@ final class BrowserTab: BrowserToolHost {
     private var isClosed = false
     /// How many of the agent's own clicks, keys and page opens are under way.
     private var agentActions = 0
+    /// A world of the app's own in the page's main frame, where Copy asks what is selected: the page's own
+    /// scripts can't reach it, so nothing the page did to itself can answer for it. Made again for each new page.
+    private var copyWorld: (frame: String, context: Int)?
+    /// The history is asked for at most four times a second, however fast a page changes its own address.
+    private var historyCheck: Task<Void, Never>?
+    private var lastHistoryRead = Date.distantPast
+    /// Waits a moment before the page stops being drawn, so a device that takes a card off its screen and puts it
+    /// straight back doesn't stop and start it.
+    private var stopping: Task<Void, Never>?
 
     /// A new picture of the page.
     var onFrame: ((CGImage) -> Void)?
     /// The address, title, loading state or the browser's own state changed.
     var onChange: (() -> Void)?
+
+    private func changed() {
+        onChange?()
+        watchers.values.forEach { $0.change() }
+    }
 
     init(key: String, host: BrowserHost) {
         self.key = key
@@ -87,12 +114,13 @@ final class BrowserTab: BrowserToolHost {
             connection.post("Page.navigate", ["url": .string(lastAddress)], session: session)
         }
         if wantsStream { startStream() }
-        onChange?()
+        changed()
         return (connection, session)
     }
 
     /// The tab is gone from the browser, because the browser stopped or the tab was closed.
     func detached(forgettingPage: Bool = false) {
+        copyWorld = nil
         attaching?.cancel()
         attaching = nil
         connection = nil
@@ -102,13 +130,17 @@ final class BrowserTab: BrowserToolHost {
         isStreaming = false
         isLoading = false
         refs = [:]
+        canGoBack = false
+        canGoForward = false
         if forgettingPage {
             lastAddress = nil
             url = ""
             title = ""
             lastFrame = nil
+            lastStream = nil
+            addressProblem = nil
         }
-        onChange?()
+        changed()
     }
 
     /// Opens the tab again after the browser restarted, if a card is showing it.
@@ -124,9 +156,11 @@ final class BrowserTab: BrowserToolHost {
         onFrame = nil
         onChange = nil
         detached(forgettingPage: true)
+        // A device watching the card is told once more, and then nothing: the card has no browser now.
+        watchers = [:]
     }
 
-    func hostChanged() { onChange?() }
+    func hostChanged() { changed() }
 
     // MARK: What the browser reports
 
@@ -135,6 +169,7 @@ final class BrowserTab: BrowserToolHost {
         case "Page.frameNavigated":
             guard let frame = params["frame"], frame["parentId"] == nil else { return }
             mainFrame = frame["id"]?.stringValue
+            copyWorld = nil
             setAddress(frame["url"]?.stringValue ?? "")
             // A new page has new parts: the old numbers point at nothing.
             refs = [:]
@@ -144,16 +179,16 @@ final class BrowserTab: BrowserToolHost {
         case "Page.frameStartedLoading":
             guard mainFrame == nil || params["frameId"]?.stringValue == mainFrame else { return }
             isLoading = true
-            onChange?()
+            changed()
         case "Page.frameStoppedLoading":
             guard mainFrame == nil || params["frameId"]?.stringValue == mainFrame else { return }
             isLoading = false
-            onChange?()
+            changed()
             // The browser doesn't always say when a page's title has settled, so it is asked once the page has loaded.
             Task {
                 guard let name = try? await evaluate("document.title").stringValue, name != title else { return }
                 title = name
-                onChange?()
+                changed()
             }
         case "Page.javascriptDialogOpening":
             // Nobody can see a dialog in a hidden browser, and the page waits behind it until it is answered.
@@ -170,7 +205,7 @@ final class BrowserTab: BrowserToolHost {
         case "Inspector.targetCrashed":
             title = "This page crashed"
             isLoading = false
-            onChange?()
+            changed()
         default:
             break
         }
@@ -179,13 +214,40 @@ final class BrowserTab: BrowserToolHost {
     private func setAddress(_ address: String) {
         url = address == "about:blank" ? "" : address
         if address.hasPrefix("http://") || address.hasPrefix("https://") { lastAddress = address }
-        onChange?()
+        addressProblem = nil
+        changed()
+        readHistorySoon()
+    }
+
+    /// Asks for the history now, or as soon as a quarter of a second has passed since it was last asked for. A page
+    /// can change its own address many times a second, and each time would be one more question for the browser.
+    private func readHistorySoon() {
+        guard historyCheck == nil else { return }
+        let wait = max(0, 0.25 - Date().timeIntervalSince(lastHistoryRead))
+        historyCheck = Task {
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            historyCheck = nil
+            lastHistoryRead = Date()
+            await readHistory()
+        }
+    }
+
+    /// Whether Back and Forward have anywhere to go, asked of the browser after each change of page.
+    private func readHistory() async {
+        guard let connection, let sessionID,
+              let history = try? await connection.send("Page.getNavigationHistory", session: sessionID),
+              let index = history["currentIndex"]?.intValue, let count = history["entries"]?.arrayValue?.count else { return }
+        let back = index > 0, forward = index + 1 < count
+        guard back != canGoBack || forward != canGoForward else { return }
+        canGoBack = back
+        canGoForward = forward
+        changed()
     }
 
     func targetChanged(title new: String?, url address: String?) {
         guard let new, new != title, new != "about:blank" else { return }
         title = new
-        onChange?()
+        changed()
     }
 
     // MARK: The picture
@@ -196,12 +258,44 @@ final class BrowserTab: BrowserToolHost {
 
     /// A card's browser half came into view or went out of it. The page is only streamed while someone can see it.
     func setStreaming(_ on: Bool) {
+        paneWantsStream = on
+        streamingChanged()
+    }
+
+    /// A paired device has the card on its screen. It is told of every picture and every change until it lets go.
+    func addWatcher(frame: @escaping (StreamFrame) -> Void, change: @escaping () -> Void) -> UUID {
+        let id = UUID()
+        watchers[id] = (frame, change)
+        streamingChanged()
+        return id
+    }
+
+    func removeWatcher(_ id: UUID) {
+        guard watchers.removeValue(forKey: id) != nil else { return }
+        streamingChanged()
+    }
+
+    var watcherCount: Int { watchers.count }
+
+    /// Streams the page while the Mac's card or any device is showing it, and stops when none is.
+    private func streamingChanged() {
+        let on = !isClosed && (paneWantsStream || !watchers.isEmpty)
+        if on { stopping?.cancel(); stopping = nil }
         guard on != wantsStream else { return }
         wantsStream = on
         if on {
             if isAttached { startStream() } else if hostState != .missing, !isClosed { Task { _ = try? await session() } }
-        } else {
+        } else if isClosed {
             stopStream()
+        } else {
+            // Nobody is looking now. The page goes on being drawn for a moment, in case a device that let go of the
+            // card, or the Mac's own card scrolled out of view, comes straight back.
+            stopping = Task {
+                try? await Task.sleep(for: .seconds(Remote.streamLinger))
+                guard !Task.isCancelled, !wantsStream else { return }
+                stopping = nil
+                stopStream()
+            }
         }
     }
 
@@ -224,8 +318,13 @@ final class BrowserTab: BrowserToolHost {
         if let sessionID { connection?.post("Page.screencastFrameAck", ["sessionId": .number(Double(ack))], session: sessionID) }
         guard isStreaming else { return }
         lastFrame = frame.image
+        lastStream = frame
         onFrame?(frame.image)
+        watchers.values.forEach { $0.frame(frame) }
     }
+
+    /// The page's size in its own points, which the person's clicks are given in.
+    var pageSize: CGSize { size }
 
     /// The card's browser half changed size, so the page does too.
     func setSize(_ new: CGSize) {
@@ -249,6 +348,7 @@ final class BrowserTab: BrowserToolHost {
 
     func mouse(_ type: String, at point: CGPoint, button: String = "none", buttons: Int = 0, clicks: Int = 0, modifiers: Int = 0) {
         guard let sessionID else { return }
+        if type == "mouseReleased" { checkTitleSoon() }
         connection?.post("Input.dispatchMouseEvent", [
             "type": .string(type), "x": .number(point.x), "y": .number(point.y), "button": .string(button),
             "buttons": .number(Double(buttons)), "clickCount": .number(Double(clicks)), "modifiers": .number(Double(modifiers)),
@@ -282,17 +382,85 @@ final class BrowserTab: BrowserToolHost {
     /// One key going down or coming up. `commands` are editing commands the key stands for, such as "selectAll".
     func key(down: Bool, _ key: BrowserKey, modifiers: Int = 0, commands: [String] = []) {
         guard let sessionID else { return }
+        if !down { checkTitleSoon() }
         connection?.post("Input.dispatchKeyEvent", Self.keyEvent(down: down, key, modifiers: modifiers, commands: commands), session: sessionID)
     }
 
     func insert(text: String) {
         guard let sessionID, !text.isEmpty else { return }
+        checkTitleSoon()
         connection?.post("Input.insertText", ["text": .string(text)], session: sessionID)
     }
 
-    /// What is selected on the page, for Copy.
-    func selectedText() async -> String {
-        (try? await evaluate("window.getSelection().toString()"))?.stringValue ?? ""
+    /// ⌘A, ⌘Z and ⌘⇧Z, sent as the letter with Command held and the editing command it stands for.
+    func shortcut(_ shortcut: BrowserShortcut) {
+        let (letter, command, shift) = shortcut.key
+        press(BrowserKey.typing(letter), modifiers: 4 | (shift ? 8 : 0), commands: [command])
+    }
+
+    /// Deletes what is selected, as the second half of Cut.
+    func deleteSelection() {
+        press(BrowserKey.typing("x"), modifiers: 4, commands: ["delete"])
+    }
+
+    /// One key pressed and let go.
+    func press(_ key: BrowserKey, modifiers: Int = 0, commands: [String] = []) {
+        self.key(down: true, key, modifiers: modifiers, commands: commands)
+        self.key(down: false, key, modifiers: modifiers)
+    }
+
+    /// Pages often rename themselves when they are clicked or typed into, and the browser doesn't always say
+    /// so. The title is asked for a moment after, once for a burst of input.
+    private func checkTitleSoon() {
+        titleCheck?.cancel()
+        titleCheck = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, isAttached, let name = try? await evaluate("document.title").stringValue, name != title else { return }
+            title = name
+            changed()
+        }
+    }
+
+    /// What is selected on the page, for a device's Copy, or nil when the page didn't say within `seconds`.
+    ///
+    /// Asked in a world of the app's own in the page's main frame. That world shares the page but none of its
+    /// scripts, so a page that has replaced `getSelection` with something of its own isn't asked. A page busy with
+    /// a script of its own can't answer at all, and is given up on.
+    func selectedText(within seconds: TimeInterval) async -> String? {
+        let deadline = Date().addingTimeInterval(seconds)
+        func left() -> TimeInterval { max(0.05, deadline.timeIntervalSinceNow) }
+        guard let (connection, session) = try? await session() else { return nil }
+        for attempt in 0..<2 {
+            do {
+                let context = try await copyContext(connection, session, timeout: left())
+                let reply = try await connection.send("Runtime.evaluate", [
+                    "expression": "getSelection().toString()", "contextId": .number(Double(context)), "returnByValue": true,
+                    "timeout": .number((left() * 1000).rounded(.down)),
+                ], session: session, timeout: left())
+                guard reply["exceptionDetails"] == nil else { throw BrowserError("The page couldn't be read just now") }
+                return reply["result"]?["value"]?.stringValue ?? ""
+            } catch {
+                // The world goes with the page it was made in. Made once more, if there is time.
+                copyWorld = nil
+                if attempt == 1 || Date() >= deadline { return nil }
+            }
+        }
+        return nil
+    }
+
+    private func copyContext(_ connection: CDPConnection, _ session: String, timeout: TimeInterval) async throws -> Int {
+        var frame = mainFrame
+        if frame == nil {
+            let tree = try await connection.send("Page.getFrameTree", session: session, timeout: timeout)
+            frame = tree["frameTree"]?["frame"]?["id"]?.stringValue
+        }
+        guard let frame else { throw BrowserError("The page has no frame") }
+        if let copyWorld, copyWorld.frame == frame { return copyWorld.context }
+        let made = try await connection.send("Page.createIsolatedWorld", ["frameId": .string(frame), "worldName": "Queen Bee copy"],
+                                             session: session, timeout: timeout)
+        guard let context = made["executionContextId"]?.intValue else { throw BrowserError("The page didn't make a world") }
+        copyWorld = (frame, context)
+        return context
     }
 
     func reload() {
@@ -304,18 +472,37 @@ final class BrowserTab: BrowserToolHost {
         _ = try? await step(1)
     }
 
-    /// Opens what the person typed in the address bar: an address, or words to search for.
+    /// Opens what the person typed in the address bar: an address, or words to search for, by the rules a
+    /// device's bar goes by too.
     func openTyped(_ raw: String) async throws {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        let looksLikeAnAddress = !text.contains(" ") && (text.contains(".") || text.contains("://") || text.hasPrefix("localhost"))
-        if looksLikeAnAddress {
-            _ = try await open(try BrowserTools.checkedURL(text))
-        } else {
-            var search = URLComponents(string: "https://www.google.com/search")!
-            search.queryItems = [URLQueryItem(name: "q", value: text)]
-            _ = try await open(search.url!)
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        _ = try await open(try BrowserTools.typedAddress(raw))
+    }
+
+    /// The same, from a paired device's bar. It doesn't wait for the page: why one didn't open is kept in
+    /// `addressProblem` for the device's bar to show, as the Mac's shows it.
+    func openTypedFromDevice(_ raw: String) {
+        Task {
+            do {
+                try await openTyped(raw)
+            } catch {
+                addressProblem = (error as? BrowserError)?.description ?? "That page didn't open"
+                changed()
+            }
         }
+    }
+
+    /// Back, from a paired device. False when there is no page to go back to.
+    func goBack() async -> Bool { (try? await step(-1)) ?? false }
+
+    /// What the card's browser half shows besides the picture, for a paired device.
+    var remotePage: RemoteBrowserPage {
+        let (status, fraction, problem) = hostState.remote
+        // In hundredths, which is all the notice says, so a download isn't sent for every piece that arrives.
+        let progress = fraction.map { ($0 * 100).rounded(.down) / 100 }
+        return RemoteBrowserPage(status: status, progress: progress, problem: problem, isAttached: isAttached, hasPicture: lastFrame != nil,
+                                 url: url, title: title, isLoading: isLoading, canGoBack: canGoBack, canGoForward: canGoForward,
+                                 addressProblem: addressProblem)
     }
 
     // MARK: Helpers for the tools
@@ -337,7 +524,7 @@ final class BrowserTab: BrowserToolHost {
             // A page can rename itself at any time, and this is a moment the app hears about it.
             if name != title {
                 title = name
-                onChange?()
+                changed()
             }
         }
         if address.isEmpty || address == "about:blank" { return "a blank page" }

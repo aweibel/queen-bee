@@ -1,0 +1,55 @@
+import Foundation
+
+public enum RemoteSnapshot {
+    /// The messages that take a device holding `old` to `new`, in a fixed order. Nothing when they are equal.
+    public static func updates(from old: RemoteFlowSnapshot, to new: RemoteFlowSnapshot, revision: Int) -> [HostMessage] {
+        let id = new.flow.id
+        var out: [HostMessage] = []
+        if new.flow != old.flow { out.append(.flow(id: id, revision: revision, flow: new.flow)) }
+        if new.run != old.run { out.append(.run(id: id, state: new.run)) }
+        if new.edit != old.edit { out.append(.edit(id: id, state: new.edit)) }
+        if new.log != old.log {
+            // Lines are only ever added to the end, until the log is cleared or an earlier run is put on show.
+            if let added = linesAdded(from: old.log, to: new.log) {
+                out.append(.log(id: id, lines: added, reset: false))
+            } else {
+                out.append(.log(id: id, lines: new.log, reset: true))
+            }
+        }
+        if new.messages != old.messages {
+            for link in Set(old.messages.keys).union(new.messages.keys).sorted() where new.messages[link] != old.messages[link] {
+                out.append(.messages(id: id, link: link, all: new.messages[link] ?? []))
+            }
+        }
+        if new.runs != old.runs { out.append(.history(id: id, runs: new.runs)) }
+        return out
+    }
+
+    /// The lines added to the end of a log, or nil when it changed some other way and is to be sent whole. A log
+    /// at its cap drops its oldest lines as new ones come, so what it held still counts as there when the end
+    /// of it is the start of the new log, matched line by line with their ids: the device drops the same old
+    /// lines when it adds these, which is only so when the new log is exactly at the cap.
+    static func linesAdded(from old: [LogLine], to new: [LogLine]) -> [LogLine]? {
+        if new.count >= old.count, new.starts(with: old) { return Array(new.dropFirst(old.count)) }
+        guard new.count == LogLine.mostKept, let first = new.first, let dropped = old.firstIndex(where: { $0.id == first.id }) else { return nil }
+        let kept = old[dropped...]
+        guard kept.count <= new.count, new.starts(with: kept) else { return nil }
+        return Array(new.dropFirst(kept.count))
+    }
+
+    /// A log as a device holds it once `lines` have been added to the end: no longer than the Mac's.
+    public static func appending(_ lines: [LogLine], to log: [LogLine]) -> [LogLine] {
+        let all = log + lines
+        // Only ever trimmed when lines were added: a log the Mac sent whole is kept as it came.
+        return lines.isEmpty || all.count <= LogLine.mostKept ? all : Array(all.suffix(LogLine.mostKept))
+    }
+}
+
+extension RemoteFlowSnapshot {
+    /// Whether the Mac offers Retry on a card: the last run stopped there, no run is going, and a message
+    /// reached the card in that run, which is what it is given again.
+    public func canRetry(_ cardID: String) -> Bool {
+        guard run.marks[cardID]?.failed == true, !run.isRunning else { return false }
+        return flow.links(into: cardID).contains { !(messages[$0.id] ?? []).isEmpty }
+    }
+}

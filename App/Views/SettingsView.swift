@@ -32,6 +32,8 @@ struct SettingsView: View {
                     Text("Not found. Install Claude Code, then reopen Queen Bee.").foregroundStyle(Theme.failInk.ui)
                 }
             }
+
+            RemoteSettingsSection()
         }
         .formStyle(.grouped)
         .frame(width: 460)

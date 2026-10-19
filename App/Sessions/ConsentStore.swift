@@ -17,6 +17,10 @@ struct ConsentStore {
 
     static let scripts = ConsentStore(key: "allowedScripts")
     static let schedules = ConsentStore(key: "armedSchedules")
+    /// Not something agreed to, but the opposite: the Script cards whose command, as it is now, was last
+    /// written or brought back from a paired device. Such a command is allowed at this Mac and nowhere else.
+    /// Kept the same way, so it outlives the app being quit and no flow file can say otherwise.
+    static let scriptsFromDevices = ConsentStore(key: "scriptsFromDevices")
 
     private func entry(_ scope: String, _ cardID: String) -> String {
         Data((scope + "\u{0}" + cardID).utf8).sha256Hex

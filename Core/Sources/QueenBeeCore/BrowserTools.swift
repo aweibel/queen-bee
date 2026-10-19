@@ -84,6 +84,24 @@ public enum BrowserTools {
         return url
     }
 
+    /// What a card's address bar opens for what the person typed into it, on the Mac or on a device: an
+    /// address, checked as `checkedURL` checks one, or a search for words. Anything with no spaces that has a
+    /// dot, starts with "localhost" or starts with a scheme, such as "javascript:" or "file:", is taken as an
+    /// address, so one that isn't a web address is refused and never searched for.
+    public static func typedAddress(_ raw: String) throws -> URL {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw BrowserError("Type an address, or what to search for") }
+        // "localhost:3000" and "example.com:8080/" are a name and a port, not a scheme.
+        let beforeSlash = text.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
+        let schemed = text.range(of: "^[A-Za-z][A-Za-z0-9+.-]*:", options: .regularExpression) != nil
+            && !(beforeSlash.split(separator: ":", maxSplits: 1).last.map { !$0.isEmpty && $0.allSatisfy(\.isNumber) } ?? false)
+        let isAddress = !text.contains(where: \.isWhitespace) && (schemed || text.contains(".") || text.contains("://") || text.lowercased().hasPrefix("localhost"))
+        if isAddress { return try checkedURL(text) }
+        var search = URLComponents(string: "https://www.google.com/search")!
+        search.queryItems = [URLQueryItem(name: "q", value: text)]
+        return search.url!
+    }
+
     public static func call(name: String, arguments: JSONValue, host: any BrowserToolHost) async -> ToolResult {
         let arguments = Arguments(values: arguments.objectValue ?? [:])
         do {

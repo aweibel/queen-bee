@@ -69,30 +69,61 @@ final class ProjectModel {
         return controller
     }
 
+    /// A new flow with its Start card. With no name it is called "Flow" and the next number. `select` puts it
+    /// on the canvas, which is what the person at this Mac wants and what a paired device must not do.
     @discardableResult
-    func newFlow() -> FlowController? {
+    func newFlow(named wanted: String? = nil, select: Bool = true) -> FlowController? {
         var n = controllers.count + 1
         var name = "Flow \(n)"
         while controllers.contains(where: { $0.flow.name == name }) { n += 1; name = "Flow \(n)" }
+        if let wanted = wanted?.trimmingCharacters(in: .whitespacesAndNewlines), !wanted.isEmpty { name = wanted }
         var flow = Flow(name: name)
         _ = try? flow.addCard(kind: .start, x: 240, y: 120)
         guard let url = try? store.save(flow, to: nil) else { return nil }
         let controller = FlowController(flow: flow, fileURL: url, project: self)
         controllers.append(controller)
         AppServices.shared.register(controller)
-        AppServices.shared.selectedFlowID = flow.id
+        if select { AppServices.shared.selectedFlowID = flow.id }
         return controller
     }
 
-    func delete(_ controller: FlowController) {
-        controller.shutDown()
-        controller.forgetHistory()
-        try? store.delete(controller.fileURL)
+    /// Deletes a flow and its file. With `toTrash` the file goes to the Trash instead, which is how a paired
+    /// device's delete is done: a mistake there, or a device in the wrong hands, destroys nothing. Its history
+    /// is kept too, under the same name, so a flow put back from the Trash has its runs and its log again, with
+    /// the lines saying what devices did. False when the file couldn't be moved there, and then the flow is
+    /// still in the project.
+    @discardableResult
+    func delete(_ controller: FlowController, toTrash: Bool = false) -> Bool {
+        if toTrash {
+            // Saved first, so what goes to the Trash is the flow as it last was. Its sessions are stopped only once
+            // the file has gone: a flow that stays in the project keeps its agents and browser tabs running.
+            controller.saveNow()
+            guard Self.trash(controller.fileURL) else { return false }
+            controller.shutDown(saving: false)
+        } else {
+            // Saves what was not saved yet, so the file is the flow as it last was.
+            controller.shutDown()
+            try? store.delete(controller.fileURL)
+            controller.forgetHistory()
+        }
         AppServices.shared.unregister(flowID: controller.flow.id)
         controllers.removeAll { $0 === controller }
         if AppServices.shared.selectedFlowID == controller.flow.id {
             AppServices.shared.selectedFlowID = (controllers.first ?? AppServices.shared.allFlows.first)?.flow.id
         }
+        return true
+    }
+
+    private static func trash(_ url: URL) -> Bool {
+        #if DEBUG
+        // A test copy of the app puts what it throws away in a folder of the test's, not in the Trash of whoever runs the tests.
+        if TestHarness.isEnabled, let folder = ProcessInfo.processInfo.environment["QB_TRASH_DIR"], !folder.isEmpty {
+            let into = URL(fileURLWithPath: folder, isDirectory: true)
+            try? FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+            return (try? FileManager.default.moveItem(at: url, to: into.appendingPathComponent(url.lastPathComponent))) != nil
+        }
+        #endif
+        return (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil
     }
 
     /// Stops every session this project started.

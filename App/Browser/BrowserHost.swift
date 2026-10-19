@@ -1,10 +1,15 @@
 import AppKit
 import CryptoKit
+import Observation
 import QueenBeeCore
 
 /// One project's browser: a hidden Chromium that every agent card with a browser in that project shares.
 /// Each card has its own tab, and they all have the same sign-ins, kept in a profile that belongs to
 /// Queen Bee and to this project.
+///
+/// Its state, and whether it has kept anything, are watched, for the flow list a paired device is sent.
+/// Nothing else of it is.
+@Observable
 final class BrowserHost {
     enum State: Equatable {
         /// Nothing has asked for a browser yet.
@@ -21,16 +26,18 @@ final class BrowserHost {
     }
 
     private(set) var state: State = .idle { didSet { if state != oldValue { tabs.values.forEach { $0.hostChanged() } } } }
+    /// Goes up when the profile is made or deleted, so that whatever shows `hasData` knows to look again.
+    private(set) var dataRevision = 0
     private let support: URL
     let profile: URL
-    private var connection: CDPConnection?
+    @ObservationIgnored private var connection: CDPConnection?
     /// A browser that has been asked to quit and hasn't finished. It still holds the profile.
-    private var closing: CDPConnection?
-    private var starting: Task<CDPConnection, any Error>?
-    private var isClearing = false
-    private var tabs: [String: BrowserTab] = [:]
+    @ObservationIgnored private var closing: CDPConnection?
+    @ObservationIgnored private var starting: Task<CDPConnection, any Error>?
+    @ObservationIgnored private var isClearing = false
+    @ObservationIgnored private var tabs: [String: BrowserTab] = [:]
     /// What the browser calls itself, without the word that tells sites nobody is looking at it.
-    private(set) var userAgent: JSONValue?
+    @ObservationIgnored private(set) var userAgent: JSONValue?
 
     init(projectRoot: URL, support: URL) {
         self.support = support
@@ -91,7 +98,9 @@ final class BrowserHost {
                 for _ in 0..<60 where closing.isOpen { try? await Task.sleep(for: .milliseconds(100)) }
                 self.closing = nil
             }
+            let hadData = hasData
             try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+            if !hadData { dataRevision += 1 }
             // Sign-ins live here, so only this account may look inside.
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: profile.deletingLastPathComponent().path)
             var arguments = [
@@ -260,6 +269,7 @@ final class BrowserHost {
             old.terminate()
         }
         try? FileManager.default.removeItem(at: profile)
+        dataRevision += 1
         state = .idle
         isClearing = false
         if wasRunning, !tabs.isEmpty { restart() }
@@ -267,8 +277,37 @@ final class BrowserHost {
 
     #if DEBUG
     var testProcessID: pid_t? { connection?.pid }
+
+    /// Makes the profile, as a browser that has run once leaves it, without starting one.
+    func testMakeData() {
+        try? FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        dataRevision += 1
+    }
     #endif
 
-    /// Whether this project's browser has kept anything.
-    var hasData: Bool { FileManager.default.fileExists(atPath: profile.path) }
+    /// Whether this project's browser has kept anything. Asked of the disk once for each `dataRevision`: the flow
+    /// list a paired device is sent asks it of every project each time it is made.
+    var hasData: Bool {
+        let revision = dataRevision
+        if let known = hasDataSeen, known.revision == revision { return known.value }
+        let value = FileManager.default.fileExists(atPath: profile.path)
+        hasDataSeen = (revision, value)
+        return value
+    }
+    @ObservationIgnored private var hasDataSeen: (revision: Int, value: Bool)?
+}
+
+extension BrowserHost.State {
+    /// The state as a paired device is told it, with how far a download has got and why the browser failed.
+    var remote: (status: RemoteBrowserState.Status, progress: Double?, problem: String?) {
+        switch self {
+        case .idle: (.idle, nil, nil)
+        case .starting: (.starting, nil, nil)
+        case .running: (.running, nil, nil)
+        case .missing: (.missing, nil, nil)
+        case .downloading(let fraction): (.downloading, fraction, nil)
+        case .stopped: (.stopped, nil, nil)
+        case .failed(let reason): (.failed, nil, reason)
+        }
+    }
 }
