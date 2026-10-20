@@ -680,7 +680,7 @@ final class FlowController: ToolHost {
         if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canUndo == true {
             text.undoManager?.undo()
         } else if undoManager.canUndo {
-            undoManager.undo()
+            asking { undoManager.undo() } putBack: { undoManager.redo() }
         }
     }
 
@@ -688,8 +688,69 @@ final class FlowController: ToolHost {
         if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canRedo == true {
             text.undoManager?.redo()
         } else if undoManager.canRedo {
-            undoManager.redo()
+            asking { undoManager.redo() } putBack: { undoManager.undo() }
         }
+    }
+
+    /// Whether the keyboard is in an agent's terminal or a card's browser. Command-Z typed there is meant for
+    /// what is being typed into, never for the canvas, which may be out of sight behind it.
+    static var keyboardIsInTerminalOrBrowser: Bool {
+        var view = NSApp.keyWindow?.firstResponder as? NSView
+        while let v = view {
+            if v is SessionTerminalView || v is BrowserPageView { return true }
+            view = v.superview
+        }
+        return false
+    }
+
+    /// Set while the person's own Undo or Redo is being done, so a step that would stop a busy agent asks first.
+    @ObservationIgnored private var asksBeforeStopping = false
+    /// The step just tried was turned down. It has been put on the other stack, and has to go back.
+    @ObservationIgnored private var stepTurnedDown = false
+
+    /// Does an undo or redo step, asking first if it would remove an agent that is at work. If the person
+    /// says no, `putBack` returns the step to the stack it came from, and the flow is left as it was.
+    private func asking(_ step: () -> Void, putBack: () -> Void) {
+        asksBeforeStopping = true
+        stepTurnedDown = false
+        step()
+        asksBeforeStopping = false
+        if stepTurnedDown {
+            stepTurnedDown = false
+            putBack()
+        }
+    }
+
+    /// Puts a step that was turned down back on the stack it was taken from. Run by `putBack`, which files what
+    /// it registers on the stack opposite to the one it is undoing or redoing from, which is that one.
+    private func refile(_ old: Flow, _ name: String) {
+        undoManager.registerUndo(withTarget: self) { $0.restore(old, name) }
+        undoManager.setActionName(name)
+    }
+
+    /// The agents going from `current` to `next` would delete whose sessions are working or waiting on the person.
+    private func busyAgents(removedGoingFrom current: Flow, to next: Flow) -> [Card] {
+        current.cards.filter { next.card($0.id) == nil && isBusy($0) }
+    }
+
+    /// An agent card whose session is in the middle of a turn or waiting on the person.
+    private func isBusy(_ card: Card) -> Bool {
+        card.kind == .agent && [.working, .needsYou].contains(sessions[card.id]?.state ?? .notStarted)
+    }
+
+    /// Asks before something stops agents in the middle of their work. True to go ahead.
+    private func mayStop(_ agents: [Card], doing action: String) -> Bool {
+        guard !agents.isEmpty, !TestHarness.isEnabled else { return true }
+        let names = agents.map(\.name)
+        let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names.last!
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "\(action) and stop \(list)?"
+        alert.informativeText = (agents.count == 1 ? "\(list) is" : "They are")
+            + " in the middle of a task or waiting for your answer. Removing the card stops its Claude Code session, and the work it was doing is cut short."
+        alert.addButton(withTitle: action)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     var undoTitle: String { _ = undoRevision; return undoManager.canUndo ? undoManager.undoMenuItemTitle : "Undo" }
@@ -699,6 +760,13 @@ final class FlowController: ToolHost {
     /// of the graph: a card that is still there keeps the session it has now.
     private func restore(_ old: Flow, _ name: String) {
         let current = flow
+        if asksBeforeStopping, !mayStop(busyAgents(removedGoingFrom: current, to: old), doing: undoManager.isRedoing ? "Redo \(name)" : "Undo \(name)") {
+            // Nothing changes. The step is filed on the other stack for now, from where `asking` puts it back.
+            undoManager.registerUndo(withTarget: self) { $0.refile(old, name) }
+            undoManager.setActionName(name)
+            stepTurnedDown = true
+            return
+        }
         var back = old
         back.orchestratorSessionID = current.orchestratorSessionID
         for i in back.cards.indices {
@@ -1000,6 +1068,8 @@ final class FlowController: ToolHost {
     }
 
     func deleteSelection() {
+        let doomed = flow.cards.filter { selection.cardIDs.contains($0.id) }
+        guard mayStop(doomed.filter(isBusy), doing: doomed.count > 1 ? "Delete Cards" : "Delete Card") else { return }
         switch selection {
         case .card(let id): perform("Delete Card") { try $0.removeCard(id) }
         case .link(let id): perform("Delete Link") { try $0.removeLink(id) }
@@ -1108,9 +1178,16 @@ final class FlowController: ToolHost {
         heldBack.remove(id)
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
+        let folder = ClaudeLauncher.folder(for: flow.cards[index], projectRoot: project.root)
+        let start = ClaudeLauncher.transcriptStart(for: flow.cards[index].sessionID!, in: folder)
+        if start == .freshWithNewID {
+            // Its conversation was had in another folder, and Claude Code only carries one on in the folder it began in.
+            flow.cards[index].sessionID = UUID().uuidString.lowercased()
+            append("\(flow.cards[index].name) now works in a different folder, so it starts a new conversation there")
+        }
         let card = flow.cards[index]
         // A session with no transcript yet starts with today's instructions, and keeps them for good.
-        if !ClaudeLauncher.transcriptExists(for: card.sessionID!) {
+        if start != .resume {
             services.noteBorn(session: card.sessionID!, instructions: ClaudeLauncher.agentPrompt(flow: flow, card: card))
         }
         guard let spec = ClaudeLauncher.agent(flow: flow, card: card, sessionID: card.sessionID!, projectRoot: project.root,
@@ -1124,7 +1201,13 @@ final class FlowController: ToolHost {
     func startOrchestrator() {
         guard let environment = services.environment else { return }
         if flow.orchestratorSessionID.flatMap(UUID.init(uuidString:)) == nil { flow.orchestratorSessionID = UUID().uuidString.lowercased() }
-        if !ClaudeLauncher.transcriptExists(for: flow.orchestratorSessionID!) {
+        let start = ClaudeLauncher.transcriptStart(for: flow.orchestratorSessionID!, in: project.root.path)
+        if start == .freshWithNewID {
+            // The project folder moved since the orchestrator's conversation began, so it begins a new one here.
+            flow.orchestratorSessionID = UUID().uuidString.lowercased()
+            append("The orchestrator's earlier conversation was in another folder, so it starts a new one")
+        }
+        if start != .resume {
             services.noteBorn(session: flow.orchestratorSessionID!, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
         }
         guard let spec = ClaudeLauncher.orchestrator(flow: flow, sessionID: flow.orchestratorSessionID!, projectRoot: project.root,
@@ -1222,7 +1305,7 @@ final class FlowController: ToolHost {
         let type = payload["notification_type"]?.stringValue
             ?? ((payload["message"]?.stringValue ?? "").localizedCaseInsensitiveContains("permission") ? "permission_prompt" : nil)
         let wasWaiting = session.state == .needsYou
-        session.apply(hook: event, notificationType: type)
+        session.apply(hook: event, notificationType: type, source: payload["source"]?.stringValue, trigger: payload["trigger"]?.stringValue)
         if session.state == .needsYou, !wasWaiting {
             let name = who == Self.orchestratorKey ? "The orchestrator" : flow.card(who)?.name ?? "An agent"
             Notifier.post(title: "\(name) needs you", body: "In \(flow.name). It is waiting for your answer or your go-ahead.",
@@ -1239,7 +1322,8 @@ final class FlowController: ToolHost {
         guard who != Self.orchestratorKey else { return }
         switch event {
         case "SessionStart":
-            pluginSpoke.remove(who)
+            // A summary made mid-conversation keeps the same process, and the plugin it had loaded.
+            if payload["source"]?.stringValue != "compact" { pluginSpoke.remove(who) }
         case "UserPromptSubmit":
             // A turn begun by a hand-off works for the run the hand-off came from, which may have ended by the
             // time the turn does.

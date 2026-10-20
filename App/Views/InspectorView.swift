@@ -38,6 +38,7 @@ private struct CardSettings: View {
     let controller: FlowController
     let card: Card
     @State private var name = ""
+    @FocusState private var isNaming: Bool
 
     var body: some View {
         let pending = card.kind == .agent ? controller.settingsAwaitingRestart(forCard: card.id) : []
@@ -195,9 +196,13 @@ private struct CardSettings: View {
             TextField(card.kind.label, text: $name)
                 .textFieldStyle(.plain)
                 .font(.dsMono(Theme.Size.title, .medium))
+                .focused($isNaming)
                 .onSubmit(commitName)
                 .onAppear { name = card.name }
                 .onChange(of: card.name) { name = card.name }
+                // A new name is kept when the box is left, by Tab or a click elsewhere, not only by Return.
+                .onChange(of: isNaming) { if !isNaming { commitName() } }
+                .onDisappear(perform: commitName)
                 .help("Rename this card")
             if card.kind == .agent {
                 let session = controller.session(forCard: card.id)
@@ -387,7 +392,8 @@ private struct CardSettings: View {
     }
 
     private func commitName() {
-        guard name != card.name else { return }
+        // The card may have gone while its name was being edited, as when it was deleted.
+        guard let current = controller.flow.card(card.id), name != current.name else { return }
         patch { $0.name = name }
         // A refused name (empty, or already taken) snaps back.
         if controller.flow.card(card.id)?.name != name { name = card.name }

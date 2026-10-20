@@ -89,14 +89,16 @@ struct SidebarView: View {
             .foregroundStyle(Theme.ink.ui)
             .padding(Theme.Space.s)
         }
-        .confirmationDialog("Delete \"\(deleting?.flow.name ?? "")\"?",
+        .confirmationDialog("Move \"\(deleting?.flow.name ?? "")\" to the Trash?",
                             isPresented: .init(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button("Delete Flow", role: .destructive) {
-                if let deleting { deleting.project.delete(deleting) }
+            Button("Move to Trash", role: .destructive) {
+                if let deleting, !deleting.project.delete(deleting, toTrash: true) {
+                    deleting.banner = "Couldn't move \"\(deleting.flow.name)\" to the Trash, so it is still here."
+                }
                 deleting = nil
             }
         } message: {
-            Text("Its agents are stopped and the flow is removed. What the agents said stays in Claude Code's history.")
+            Text("Its agents are stopped and the flow's file goes to the Trash, so you can put it back from there with its run history. What the agents said stays in Claude Code's history.")
         }
     }
 
@@ -180,7 +182,7 @@ struct SidebarView: View {
             Button(services.pinnedFlowIDs.contains(id) ? "Unpin" : "Pin") { services.togglePin(id) }
             Button("Stop Its Agents") { controller.shutDown() }
             Divider()
-            Button("Delete…", role: .destructive) { deleting = controller }
+            Button("Move to Trash…", role: .destructive) { deleting = controller }
         }
     }
 

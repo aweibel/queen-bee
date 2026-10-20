@@ -65,3 +65,22 @@ import Testing
         #expect(bent.boundingBox.width > 9 && bent.boundingBox.height > 9)
     }
 }
+
+@Suite struct LinkGeometryTests {
+    @Test func onlyWhatMovesALinkChangesTheGeometry() throws {
+        var flow = Flow(name: "F")
+        let a = try flow.addCard(kind: .agent, x: 0, y: 0)
+        let b = try flow.addCard(kind: .agent, x: 400, y: 0)
+        let before = LinkGeometry(flow)
+        var renamed = flow
+        renamed.cards[0].name = "Someone else"
+        renamed.cards[0].instructions = "Do it differently"
+        #expect(LinkGeometry(renamed) == before)
+        var moved = flow
+        moved.cards[1].x += 20
+        #expect(LinkGeometry(moved) != before)
+        var linked = flow
+        _ = try linked.addLink(from: a.id, to: b.id)
+        #expect(LinkGeometry(linked) != before)
+    }
+}

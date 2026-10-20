@@ -25,6 +25,7 @@ struct WorkspaceView: View {
     @AppStorage("showsPanel") private var showsPanel = true
     @AppStorage("panelWidth") private var panelWidth = 420.0
     @State private var tab = PanelTab.orchestrator
+    @Environment(\.openWindow) private var openWindow
     private var services: AppServices { AppServices.shared }
 
     var body: some View {
@@ -85,6 +86,18 @@ struct WorkspaceView: View {
                 .transition(.opacity.combined(with: .offset(y: -8)))
             }
 
+            if services.showsPalette, let controller = services.current {
+                VStack {
+                    CommandPalette(controller: controller) { services.showsPalette = false }
+                        .padding(.top, 90)
+                    Spacer()
+                }
+                .background {
+                    Color.clear.contentShape(Rectangle()).onTapGesture { services.showsPalette = false }
+                }
+                .transition(.opacity.combined(with: .offset(y: -8)))
+            }
+
             if services.showsWelcome {
                 OnboardingView { services.closeWelcome() }
                     .transition(.opacity)
@@ -92,6 +105,9 @@ struct WorkspaceView: View {
         }
         .animation(Theme.Motion.standard, value: services.showsWelcome)
         .animation(Theme.Motion.standard, value: services.showsFind)
+        .animation(Theme.Motion.standard, value: services.showsPalette)
+        // The menu bar item normally gives the way to open the window again; this is for when it hasn't appeared.
+        .onAppear { if services.openWorkspace == nil { services.openWorkspace = { openWindow(id: AppServices.workspaceID) } } }
         .animation(Theme.Motion.standard, value: showsSidebar)
         .animation(Theme.Motion.standard, value: showsPanel)
         .onChange(of: obstruction, initial: true) { services.canvasObstruction = obstruction }

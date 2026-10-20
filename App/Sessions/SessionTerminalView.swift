@@ -72,7 +72,10 @@ final class SessionTerminalView: TerminalView, TerminalViewDelegate {
         NSPasteboard.general.writeObjects([text as NSString])
     }
 
-    func clipboardRead(source: TerminalView) -> Data? { NSPasteboard.general.string(forType: .string)?.data(using: .utf8) }
+    // A program asking to read the clipboard (OSC 52) is told there is nothing: whatever was copied last, a
+    // password included, is not handed to a process just because it asked. Cmd+V still pastes, because the
+    // terminal reads the pasteboard itself for that.
+    func clipboardRead(source: TerminalView) -> Data? { nil }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
