@@ -156,6 +156,11 @@ public final class LinkListener: @unchecked Sendable {
     private var stopped = false
     /// Ends a `start` that hasn't returned yet.
     private var abandon: (@Sendable (LinkError) -> Void)?
+    /// True once the listener has been started, and once it has let go of its port for good.
+    private var began = false
+    private var cancelled = false
+    /// Who is waiting in `whenCancelled`.
+    private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let largestInbound: Int
 
@@ -173,6 +178,8 @@ public final class LinkListener: @unchecked Sendable {
     public init(keys: [String: Data], service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame,
                 port: UInt16? = nil) throws {
         self.largestInbound = largestInbound
+        // One with no key it can use would turn everyone away.
+        guard keys.values.contains(where: LinkSecurity.isUsable) else { throw LinkError("no usable key") }
         let parameters = LinkSecurity.parameters(keys: keys)
         if localOnly { parameters.requiredInterfaceType = .loopback }
         if port != nil { parameters.allowLocalEndpointReuse = true }
@@ -220,15 +227,23 @@ public final class LinkListener: @unchecked Sendable {
                             continuation.resume(returning: port)
                         }
                     case .failed(let error):
-                        ended(LinkError("\(error)"))
+                        ended(LinkError("\(error)", addressInUse: error == NWError.posix(.EADDRINUSE)))
                         // A failed listener still holds its port and its advertisement until it is cancelled.
                         listener.cancel()
-                    case .cancelled: ended(LinkError("closed"))
+                    // Waiting for a port something else holds could take for ever. Said at once, so it can be tried
+                    // again soon.
+                    case .waiting(let error) where error == NWError.posix(.EADDRINUSE):
+                        ended(LinkError("\(error)", addressInUse: true))
+                        listener.cancel()
+                    case .cancelled:
+                        self?.letGo()
+                        ended(LinkError("closed"))
                     // Waiting isn't the end: the network may simply not be up yet. The timeout is what gives up.
                     default: break
                     }
                 }
                 queue.asyncAfter(deadline: .now() + timeout) { giveUp(LinkError("timed out")) }
+                lock.withLock { began = true }
                 listener.start(queue: queue)
             }
         } catch {
@@ -245,5 +260,47 @@ public final class LinkListener: @unchecked Sendable {
         }
         abandon?(LinkError("closed"))
         listener.cancel()
+    }
+
+    /// Returns once the listener has let go of its port, after `stop()`, so a new one can have it. At once for one
+    /// that was never started, and after `timeout` at most.
+    public func whenCancelled(timeout: TimeInterval = 2) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now = lock.withLock {
+                if !began || cancelled { return true }
+                cancelWaiters.append(continuation)
+                return false
+            }
+            if now { return continuation.resume() }
+            queue.asyncAfter(deadline: .now() + timeout) { self.resumeCancelWaiters() }
+        }
+    }
+
+    private func letGo() {
+        lock.withLock { cancelled = true }
+        resumeCancelWaiters()
+    }
+
+    private func resumeCancelWaiters() {
+        let waiters = lock.withLock {
+            defer { cancelWaiters = [] }
+            return cancelWaiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+}
+
+/// How long to leave it before listening again on a fixed port that couldn't be listened on.
+public enum ListenRetry {
+    /// A port still held is usually a listener before that is letting go of it, which takes a moment. It is tried
+    /// again after `quick` this many times running, before waiting `slow` as for any other failure.
+    public static let quickTries = 3
+    public static let quick: TimeInterval = 1
+    public static let slow: TimeInterval = 30
+
+    /// The wait before the next try, after `error`, with `quickSoFar` quick tries made since the listener last worked.
+    public static func wait(after error: Error, quickSoFar: Int) -> TimeInterval {
+        guard let error = error as? LinkError, error.addressInUse, quickSoFar < quickTries else { return slow }
+        return quick
     }
 }

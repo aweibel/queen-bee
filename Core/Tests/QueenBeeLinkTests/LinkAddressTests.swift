@@ -181,8 +181,58 @@ import Testing
         // An older key left behind could be found again one day, so it goes.
         #expect(legacy.stored.isEmpty)
         #expect(store.accounts() == ["device-a"])
-        store.delete("device-a")
+        #expect(store.delete("device-a") == errSecSuccess)
         #expect(modern.stored.isEmpty && legacy.stored.isEmpty)
         #expect(store.lookUp("device-a") == .missing)
+        // Nothing left to delete is not a failure.
+        #expect(MigratingKeyStore.gone(store.delete("device-a")))
+    }
+
+    /// A new key that only the old place would take: the key the new place held goes first, or it would be read in
+    /// place of the new one.
+    @Test func aNewKeyKeptInTheOldPlaceIsNotShadowedByAnOlderOne() {
+        let old = Data(repeating: 1, count: 32)
+        let modern = MemoryKeyStore(["device-a": old]), legacy = MemoryKeyStore()
+        modern.writeFails = errSecInteractionNotAllowed
+        let store = MigratingKeyStore(modern: modern, legacy: legacy)
+        #expect(store.write(key, "device-a") == errSecSuccess)
+        #expect(modern.stored.isEmpty)
+        #expect(store.lookUp("device-a") == .found(key))
+    }
+
+    /// When the older key can't be got rid of either, the write fails and the key stays as it was.
+    @Test func aWriteFailsWhenAnOlderKeyWouldShadowIt() {
+        let old = Data(repeating: 1, count: 32)
+        let modern = MemoryKeyStore(["device-a": old]), legacy = MemoryKeyStore()
+        modern.writeFails = errSecInteractionNotAllowed
+        modern.deleteFails = errSecInteractionNotAllowed
+        let store = MigratingKeyStore(modern: modern, legacy: legacy)
+        #expect(store.write(key, "device-a") == errSecInteractionNotAllowed)
+        #expect(legacy.stored.isEmpty)
+        #expect(store.lookUp("device-a") == .found(old))
+    }
+
+    @Test func aDeleteThatFailsSaysSo() {
+        let modern = MemoryKeyStore(["device-a": key]), legacy = MemoryKeyStore()
+        modern.deleteFails = errSecInteractionNotAllowed
+        let store = MigratingKeyStore(modern: modern, legacy: legacy)
+        #expect(store.delete("device-a") == errSecInteractionNotAllowed)
+        #expect(!MigratingKeyStore.gone(errSecInteractionNotAllowed))
+    }
+
+    /// The list made again from the keys leaves out devices that were removed, whose keys couldn't be deleted.
+    @Test func removedDevicesDontComeBackFromTheirKeys() {
+        let accounts = ["device-a", "device-b", "other", DeviceKeys.account("c")]
+        #expect(DeviceKeys.pairedIDs(in: accounts, leavingOut: []) == ["a", "b", "c"])
+        #expect(DeviceKeys.pairedIDs(in: accounts, leavingOut: ["b"]) == ["a", "c"])
+    }
+
+    /// A key of the wrong length can never be used, so it is as good as gone.
+    @Test func aKeyOfTheWrongLengthIsMissing() {
+        #expect(StoredKey.found(key).checked == .found(key))
+        #expect(StoredKey.found(Data(repeating: 1, count: 31)).checked == .missing)
+        #expect(StoredKey.found(Data()).checked == .missing)
+        #expect(StoredKey.unreadable(errSecInteractionNotAllowed).checked == .unreadable(errSecInteractionNotAllowed))
+        #expect(StoredKey.missing.checked == .missing)
     }
 }

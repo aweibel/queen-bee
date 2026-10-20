@@ -6,7 +6,8 @@ public protocol KeyStore {
     func lookUp(_ account: String) -> StoredKey
     /// `errSecSuccess`, or why the key couldn't be kept. A key already kept under that name is replaced.
     func write(_ data: Data, _ account: String) -> OSStatus
-    func delete(_ account: String)
+    /// `errSecSuccess` or `errSecItemNotFound` when no key is kept under that name any more, or why it couldn't be deleted.
+    @discardableResult func delete(_ account: String) -> OSStatus
     /// The names of every key kept here. Empty when they can't be listed.
     func accounts() -> [String]
 }
@@ -46,15 +47,30 @@ public struct MigratingKeyStore: KeyStore {
 
     public func write(_ data: Data, _ account: String) -> OSStatus {
         let status = modern.write(data, account)
-        guard status == errSecSuccess else { return legacy.write(data, account) }
+        guard status == errSecSuccess else {
+            // `modern` is read first, so an older key left there would be found in place of the new one kept in
+            // `legacy`. It goes first, and if it can't be seen to have gone, the write fails and nothing changes.
+            modern.delete(account)
+            switch modern.lookUp(account) {
+            case .missing, .unreadable(errSecMissingEntitlement): return legacy.write(data, account)
+            default: return status
+            }
+        }
         // An older copy of the key would otherwise be found again if `modern` ever couldn't be read.
         legacy.delete(account)
         return status
     }
 
-    public func delete(_ account: String) {
-        modern.delete(account)
-        legacy.delete(account)
+    /// Deleted from both places. The first that couldn't be deleted says why; a place that can't be used at all
+    /// holds nothing to delete.
+    @discardableResult public func delete(_ account: String) -> OSStatus {
+        let statuses = [modern.delete(account), legacy.delete(account)]
+        return statuses.first { !Self.gone($0) } ?? errSecSuccess
+    }
+
+    /// Whether a delete that answered `status` leaves no key behind.
+    public static func gone(_ status: OSStatus) -> Bool {
+        status == errSecSuccess || status == errSecItemNotFound || status == errSecMissingEntitlement
     }
 
     public func accounts() -> [String] { Array(Set(modern.accounts() + legacy.accounts())).sorted() }
@@ -64,9 +80,10 @@ public struct MigratingKeyStore: KeyStore {
 public final class MemoryKeyStore: KeyStore, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: Data] = [:]
-    /// What `lookUp` answers instead of looking, and what `write` fails with, when set.
+    /// What `lookUp` answers instead of looking, and what `write` and `delete` fail with, when set.
     public var lookUpFails: OSStatus?
     public var writeFails: OSStatus?
+    public var deleteFails: OSStatus?
 
     public init(_ keys: [String: Data] = [:]) { self.keys = keys }
 
@@ -81,9 +98,29 @@ public final class MemoryKeyStore: KeyStore, @unchecked Sendable {
         return errSecSuccess
     }
 
-    public func delete(_ account: String) { lock.withLock { keys[account] = nil } }
+    @discardableResult public func delete(_ account: String) -> OSStatus {
+        if let deleteFails { return deleteFails }
+        return lock.withLock { keys.removeValue(forKey: account) } == nil ? errSecItemNotFound : errSecSuccess
+    }
 
     public func accounts() -> [String] { lock.withLock { Array(keys.keys) }.sorted() }
 
     public var stored: [String: Data] { lock.withLock { keys } }
+}
+
+/// How the Mac names each paired device's key: `device-` and the device's id.
+public enum DeviceKeys {
+    public static let prefix = "device-"
+
+    public static func account(_ id: String) -> String { prefix + id }
+
+    /// The ids of the devices whose keys are among `accounts`, less those in `removed`: devices that were unpaired
+    /// and whose key couldn't be deleted, which would otherwise come back when the list is made again from the keys.
+    public static func pairedIDs(in accounts: [String], leavingOut removed: Set<String>) -> [String] {
+        accounts.compactMap { account in
+            guard account.hasPrefix(prefix) else { return nil }
+            let id = String(account.dropFirst(prefix.count))
+            return removed.contains(id) ? nil : id
+        }
+    }
 }

@@ -212,4 +212,44 @@ private final class Tally: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(300))
         #expect(failures.value == 0)
     }
+
+    /// A listener on a fixed port, stopped and waited for, leaves the port to the next one at once.
+    @Test func aStoppedListenerLetsGoOfItsPortForTheNext() async throws {
+        let first = try LinkListener(key: LinkSecurity.randomKey(), service: nil, localOnly: true)
+        let port = try await first.start { $0.close() }
+        first.stop()
+        await first.whenCancelled()
+        let second = try LinkListener(key: LinkSecurity.randomKey(), service: nil, localOnly: true, port: port)
+        #expect(try await second.start { $0.close() } == port)
+        second.stop()
+        await second.whenCancelled()
+    }
+
+    /// One never started has nothing to let go of, and waiting on it doesn't hang.
+    @Test func waitingOnAListenerNeverStartedReturnsAtOnce() async throws {
+        let listener = try LinkListener(key: LinkSecurity.randomKey(), service: nil, localOnly: true)
+        listener.stop()
+        await listener.whenCancelled()
+    }
+
+    /// A key of the wrong length is left out rather than stopping the app, and a listener with no key it can use
+    /// isn't made.
+    @Test func aKeyOfTheWrongLengthNeverStopsTheApp() throws {
+        _ = LinkSecurity.parameters(keys: ["a": Data(repeating: 1, count: 31), "b": LinkSecurity.randomKey()])
+        _ = LinkSecurity.parameters(key: Data())
+        #expect(throws: LinkError("no usable key")) {
+            _ = try LinkListener(keys: ["a": Data(repeating: 1, count: 16)], service: nil, localOnly: true)
+        }
+        _ = try LinkListener(keys: ["a": Data(repeating: 1, count: 16), "b": LinkSecurity.randomKey()], service: nil, localOnly: true)
+    }
+
+    /// A port still held is tried again in a moment, a few times, and then slowly, like any other failure.
+    @Test func aPortStillHeldIsTriedAgainQuicklyAFewTimes() {
+        let held = LinkError("in use", addressInUse: true)
+        #expect(ListenRetry.wait(after: held, quickSoFar: 0) == ListenRetry.quick)
+        #expect(ListenRetry.wait(after: held, quickSoFar: ListenRetry.quickTries - 1) == ListenRetry.quick)
+        #expect(ListenRetry.wait(after: held, quickSoFar: ListenRetry.quickTries) == ListenRetry.slow)
+        #expect(ListenRetry.wait(after: LinkError("other"), quickSoFar: 0) == ListenRetry.slow)
+        #expect(ListenRetry.wait(after: CancellationError(), quickSoFar: 0) == ListenRetry.slow)
+    }
 }
