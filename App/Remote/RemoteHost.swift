@@ -39,7 +39,7 @@ final class RemoteHost {
     /// private network such as Tailscale. Off until it is turned on.
     static let byAddressKey = "remoteByAddress"
     /// The port devices connect to by address. Fixed, so it can be typed into a device once and for all.
-    static let addressPort: UInt16 = 51_720
+    static let addressPort = Remote.addressPort
 
     let devices = RemoteDevices()
     private(set) var isOn = false

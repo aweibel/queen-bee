@@ -54,6 +54,15 @@ import Testing
         #expect(!doubt.doubtsKey && doubt.refusals == 0)
     }
 
+    @Test func theListenerThatLetTheDeviceInBeforeIsTriedFirst() {
+        let found = ["Mac (2)", "Mac", "address"]
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "Mac") == ["Mac", "Mac (2)", "address"])
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "address") == ["address", "Mac (2)", "Mac"])
+        // Nothing known, or nothing that matches: as they came, every one of them.
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: nil) == found)
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "Gone") == found)
+    }
+
     @Test func aKeyInDoubtIsStillTriedSlowly() {
         #expect(LinkVerdict.wait(beforeAttempt: 0, doubtingKey: true) == 30)
         #expect(LinkVerdict.wait(beforeAttempt: 9, doubtingKey: true) == 30)

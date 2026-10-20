@@ -48,6 +48,16 @@ public enum LinkVerdict: Equatable, Sendable {
     public static func resetsWaits(afterConnectedFor seconds: TimeInterval) -> Bool { seconds >= steadyAfter }
 }
 
+/// The places a device may find its Mac's listener, in the order to try them.
+public enum LinkCandidates {
+    /// The one that let the device in last time first, then the rest as they came. Something else on the network
+    /// can copy the Mac's record, so every one is tried, and the one known to be the Mac before the others.
+    public static func ordered<T>(_ candidates: [T], name: (T) -> String?, preferring good: String?) -> [T] {
+        guard let good else { return candidates }
+        return candidates.filter { name($0) == good } + candidates.filter { name($0) != good }
+    }
+}
+
 /// Counts the times running that the Mac's listener was there and turned this device's key down. Once is not
 /// enough to say so: a handshake cut off part-way, or something on the network copying the Mac's name, fails in
 /// the same way. Only after `refusalsBeforeDoubt` in a row does the device say it can't connect, and it carries

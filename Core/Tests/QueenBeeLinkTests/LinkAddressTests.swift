@@ -76,6 +76,30 @@ import Testing
     }
 }
 
+@Suite struct MacAddressTests {
+    @Test func anAddressIsReadAsItIsTyped() {
+        #expect(MacAddress(text: "mac.tail1234.ts.net") == MacAddress(host: "mac.tail1234.ts.net", port: Remote.addressPort))
+        #expect(MacAddress(text: " 100.64.0.7:6000 \n") == MacAddress(host: "100.64.0.7", port: 6000))
+        #expect(MacAddress(text: "[fd7a:115c::1]:6000") == MacAddress(host: "fd7a:115c::1", port: 6000))
+        #expect(MacAddress(text: "fd7a:115c::1") == MacAddress(host: "fd7a:115c::1", port: Remote.addressPort))
+        #expect(MacAddress(text: "[fd7a::1]") == MacAddress(host: "fd7a::1", port: Remote.addressPort))
+    }
+
+    @Test func whatCantBeAnAddressIsNot() {
+        for text in ["", "  ", "my mac", "http://mac", "mac:", "mac:0", "mac:70000", "mac:port", "[fd7a::1", "[fd7a::1]x", ":6000"] {
+            #expect(MacAddress(text: text) == nil, "\(text)")
+        }
+    }
+
+    @Test func anAddressIsShownAsItWouldBeTyped() {
+        #expect(MacAddress(host: "mac.local").text == "mac.local")
+        #expect(MacAddress(host: "10.0.0.2", port: 6000).text == "10.0.0.2:6000")
+        #expect(MacAddress(host: "fd7a::1", port: 6000).text == "[fd7a::1]:6000")
+        for text in ["mac.local", "10.0.0.2:6000", "[fd7a::1]:6000"] { #expect(MacAddress(text: text)?.text == text) }
+        #expect(MacAddress(host: "mac.local").endpoint != nil)
+    }
+}
+
 @Suite struct LinkGateTests {
     /// Which of these addresses, in turn, were let in.
     private func admitted(_ addresses: [String?], to gate: inout LinkGate) -> [Bool] { addresses.map { gate.admit($0) } }
