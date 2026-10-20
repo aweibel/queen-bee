@@ -208,6 +208,11 @@ nonisolated struct Details: Equatable {
             Self.condition(card).forEach { items.append($0) }
             let tries = card.maxTries ?? 3
             add(.row, "Give up after", "\(tries) \(tries == 1 ? "try" : "tries")")
+            add(.note, EditForm.gaveUpText)
+        case .forEach:
+            add(.row, "Split into", (card.split ?? .auto) == .lines ? "Lines" : "List items or lines")
+            add(.row, "At most", "\(card.maxItems ?? 20) items")
+            add(.note, EditForm.forEachText)
         case .switchCard:
             add(.text, "Branches", said((card.branches ?? []).joined(separator: ", ")))
             add(.note, "Claude reads each message and sends it down the branch it fits best. A message that fits none of them goes out Other.")
@@ -225,10 +230,11 @@ nonisolated struct Details: Equatable {
             add(.text, "Note", said(card.text))
         case .approval:
             add(.text, "What to check before approving", said(card.text))
+            if let line = EditForm.waitLine(card) { add(.row, "If nobody answers", line) }
             if let hold {
                 // A card's name may end in a mark of its own, as "Short enough?" does.
                 let stop = hold.from.last.map { "?!.".contains($0) } == true ? "" : "."
-                add(.waiting, "From \(hold.from)\(stop) Waiting for you.", hold.text)
+                add(.waiting, "From \(hold.from)\(stop) Waiting for you." + EditForm.deadlineLine(hold, card: card), hold.text)
                 answerLine = true
             } else {
                 add(.note, "A run stops here and waits for you. On your Mac you can edit the message, then approve or reject it.")
@@ -239,12 +245,13 @@ nonisolated struct Details: Equatable {
             if let hold { add(.waiting, "Running \(hold.command)…") }
         case .script:
             add(.code, "Command", said(card.command))
+            if let line = EditForm.waitLine(card) { add(.row, "If nobody allows it", line) }
             add(.note, "Runs this command in the project's folder, as if you had typed it in Terminal. If the command succeeds, the run carries on from Pass. If it fails, from Fail. Whatever the command prints is what gets passed on.")
             if let hold {
                 if hold.needsAllow {
                     // In place of the Allow button, for a command a device wrote: the Mac's own words for refusing it.
                     let label = hold.allowOnMac == true ? Remote.allowOnMacRefusal
-                        : "You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it."
+                        : "You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it." + EditForm.deadlineLine(hold, card: card)
                     items.append(DetailItem(style: .waiting, label: label, value: hold.command, isCode: true))
                     answerLine = true
                 } else {

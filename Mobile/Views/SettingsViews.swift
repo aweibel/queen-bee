@@ -853,6 +853,7 @@ struct FlowSettingsSheet: View {
         switch name {
         case .subflowLimit: EditForm.subflowLimitText
         case .notify: EditForm.notifyText
+        case .spendingLimit: EditForm.spendingText
         default: nil
         }
     }

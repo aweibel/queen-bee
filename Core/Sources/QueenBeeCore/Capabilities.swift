@@ -98,11 +98,15 @@ public enum Capabilities {
                 settings: [SettingCapability("template", "The rewritten message. {{message}} becomes the incoming message and {{from}} the name of the agent it came from.")])
         case .loop:
             CardCapability(.loop,
-                does: "Checks the message. It goes out done when the check holds or max_tries is used up, and again otherwise.",
+                does: "Checks the message. It goes out done when the check holds, again when it doesn't, and gave-up when max_tries is used up without the check holding.",
                 settings: checkSettings + [
-                    SettingCapability("max_tries", ["type": "integer", "minimum": 1, "maximum": 50], "Tries before it gives up and takes done. Defaults to 3."),
+                    SettingCapability("max_tries", ["type": "integer", "minimum": 1, "maximum": 50], "Tries before it gives up. Defaults to 3."),
                 ],
-                notes: [judgeNote("a failed try"), "Link something to done, or a run that passes its check stops there with no answer. A run whose Loop gave up is recorded as having given up, even if an answer reaches an End card after it."])
+                notes: [
+                    judgeNote("a failed try"),
+                    "Link something to done, or a run that passes its check stops there with no answer.",
+                    "gave-up is for what to do when the tries run out, such as asking the person or ending with a note. With something linked to it, the run goes on from there as usual. With nothing linked to it, a Loop that runs out of tries goes out done instead, and the run is recorded as having given up, even if an answer reaches an End card after it.",
+                ])
         case .end:
             CardCapability(.end,
                 does: "Records the final answer, and saves it to a file if save_to is set.",
@@ -114,12 +118,22 @@ public enum Capabilities {
         case .approval:
             CardCapability(.approval,
                 does: "Holds the message until the person approves or rejects it. They can edit it first.",
-                settings: [SettingCapability("text", "What the person should check before approving.")],
-                notes: ["Put one before anything that can't be taken back, such as sending an email."])
+                settings: [
+                    SettingCapability("text", "What the person should check before approving."),
+                    SettingCapability("wait_minutes", waitSchema, "How many minutes the person has to answer before the card answers for them with when_no_answer, up to \(grouped(HoldTimeLimit.longestMinutes)) (a week). 0, the default, waits for good."),
+                    SettingCapability("when_no_answer", ["type": "string", "enum": ["approved", "rejected"]], "The output taken when nobody answered within wait_minutes. Defaults to rejected."),
+                ],
+                notes: [
+                    "Put one before anything that can't be taken back, such as sending an email.",
+                    "Only set when_no_answer to approved for a step that is safe to take without anyone looking.",
+                ])
         case .script:
             CardCapability(.script,
                 does: "Runs a shell command in the project folder, with the message on its standard input and in $QB_MESSAGE. It goes out pass when the command exits with 0 and fail otherwise, and what it printed is passed on.",
-                settings: [SettingCapability("command", "The shell command to run.")],
+                settings: [
+                    SettingCapability("command", "The shell command to run."),
+                    SettingCapability("wait_minutes", waitSchema, "How many minutes the person has to allow a command they haven't allowed before, up to \(grouped(HoldTimeLimit.longestMinutes)). With no answer by then it goes out fail without running. 0, the default, waits for good."),
+                ],
                 notes: [
                     "The person is asked to allow a command they did not type themselves the first time a run reaches it.",
                     "A command that hasn't finished after \(minutes(scriptTimeout)) minutes is stopped and goes out fail.",
@@ -135,7 +149,40 @@ public enum Capabilities {
                     "A flow that isn't below yours can only be linked in by the person: ask them.",
                     "A flow has one run at a time. A Flow card that reaches a flow which is already running, from another Flow card or because the person started it, waits for that run to end and then runs it. A Flow card that would run a flow this run is already inside goes out fail.",
                 ])
+        case .forEach:
+            CardCapability(.forEach,
+                does: "Splits the message into items and sends them out each, one at a time. What comes back into this card from the cards on each is that item's result, and then the next item goes. When every item is back, it goes out done with all the results together, each under a heading naming its item.",
+                settings: [
+                    SettingCapability("split", ["type": "string", "enum": .array(ItemSplit.allCases.map { .string($0.rawValue) })],
+                                      "How the message becomes items. auto, the default: the elements of a JSON array when the whole message is one, even inside a code fence, and otherwise one item per line. lines: one item per line. Blank lines are skipped."),
+                    SettingCapability("max_items", ["type": "integer", "minimum": 1, "maximum": .number(Double(Engine.mostItems))], "The most items it sends out. Any more are left out, and the log says so. Defaults to \(Engine.defaultItems)."),
+                ],
+                notes: [
+                    "Link each to the cards that work on one item, and link the last of them back into this card. That link is how an item's result comes back: without it the run waits on the first item and ends with no answer.",
+                    "Items go one at a time, so an agent on each works on one item per turn and remembers the items before it.",
+                    "Every hand-off to an agent counts toward the run's limit of \(Engine.maxDeliveries), the ones for each item included. Keep the items times the agents on each well under it.",
+                    "Each item is a fresh pass through the cards on each: their links count passes from 0 again and their Or cards pass on a first message again.",
+                    "A message with no items goes straight out done, unchanged. A message that reaches it from anywhere but the cards on each while items are out is dropped.",
+                    "Have one message come back per item. Don't send an item to several agents and gather them with an Or: a slower agent's reply would come back as the next item's result. Use an And to wait for all of them.",
+                ])
         }
+    }
+
+    private static let waitSchema: JSONValue = ["type": "integer", "minimum": 0, "maximum": .number(Double(HoldTimeLimit.longestMinutes))]
+
+    /// The flow's own settings, as the orchestrator sets them with update_flow.
+    public static let flowSettings = [
+        SettingCapability("spending_limit", ["type": "number", "minimum": 0, "maximum": .number(SpendingLimit.range.upperBound)],
+                          "The most one run may spend, in US dollars, as the app reckons its agents' use at API prices. When a run passes it, the run is stopped, its agents are interrupted, and the person is told. A sub-flow's agents count toward the sub-flow's own limit, not this one. 0 removes the limit. The person may have set it: don't raise or remove it unless they ask."),
+    ]
+
+    /// The flow settings as update_flow takes them.
+    public static var flowSettingSchemas: [String: JSONValue] {
+        Dictionary(uniqueKeysWithValues: flowSettings.map { setting in
+            var fields = setting.schema.objectValue ?? [:]
+            fields["description"] = .string(setting.about)
+            return (setting.key, JSONValue.object(fields))
+        })
     }
 
     /// The most hand-offs a run makes, in words.
@@ -230,8 +277,13 @@ public enum Capabilities {
         lines.append("- Each link has max passes, from \(Link.maxPassesRange.lowerBound) to \(Link.maxPassesRange.upperBound) and \(Link.defaultMaxPasses) unless set: how many times it may fire in one run. That is what makes a loop between cards end.")
         lines += ["", "## Runs", ""]
         lines.append("- \(runLimit)")
-        lines.append("- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries), stopped at the hand-off limit, failed, or stopped.")
+        lines.append("- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries with nothing on gave-up), stopped at the hand-off limit, stopped at the spending limit, failed, or stopped.")
         lines.append("- An agent the run isn't waiting on can be restarted, or stop, without stopping the run. If the run is waiting on it, the run stops.")
+        lines += ["", "## Flow settings", ""]
+        lines.append("Set with update_flow. get_flow gives each one's value now.")
+        for setting in flowSettings {
+            lines.append("- Setting `\(setting.key)` (\(typeName(setting.schema))): \(setting.about)")
+        }
         lines += ["", "## Every agent", ""]
         lines += everyAgent.map { "- \($0)" }
         lines += ["", "## An agent with a browser", ""]
@@ -263,6 +315,9 @@ public enum Capabilities {
         case "integer":
             if let low = schema["minimum"]?.intValue, let high = schema["maximum"]?.intValue { return "whole number, \(low) to \(high)" }
             return "whole number"
+        case "number":
+            if let low = schema["minimum"]?.doubleValue, let high = schema["maximum"]?.doubleValue { return "number, \(grouped(Int(low))) to \(grouped(Int(high)))" }
+            return "number"
         case "array": return "list of text"
         default: return "text"
         }

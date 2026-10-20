@@ -304,6 +304,11 @@ enum RemoteCommands {
                 guard controller.flow.notifyOrchestrator != on else { return nil }
                 return edit(on ? "Tell Orchestrator of Runs" : "Stop Telling Orchestrator of Runs", .flowSettings,
                             say: "turned \(on ? "on" : "off") telling the orchestrator when a run ends") { $0.notifyOrchestrator = on }
+            case .spendingLimit(let dollars):
+                let wanted = SpendingLimit.clamped(dollars)
+                guard wanted != controller.flow.spendingLimit else { return nil }
+                return edit(wanted == nil ? "Remove Spending Limit" : "Change Spending Limit", key: "spending", .flowSettings,
+                            say: wanted.map { "set the spending limit to \(Usage(cost: $0).price) a run" } ?? "removed the spending limit") { $0.spendingLimit = wanted }
             }
 
         // MARK: Flows

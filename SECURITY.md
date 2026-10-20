@@ -66,6 +66,16 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   and only the orchestrator's secret unlocks the flow-editing tools. That keeps an agent from using those tools through
   its own session. It is not a wall against anything that can run commands as you: other software on your account,
   or an agent you have allowed to run any shell command, could read another session's secret.
+- **Runs can be started from outside the app.** `qb run` starts a flow over the same socket, without asking. Only
+  your account can reach the socket, so this is you or software running as you, which includes an agent allowed to
+  run shell commands. It only runs flows in a folder you have added to the app and trusted. A
+  `queenbee://run` link can be opened by any web page or app, so the app shows the flow and the message and starts
+  nothing until you press Run. A link's message is capped at 16,000 characters and cleaned of control characters.
+- **Runs can have a spending limit, and holds a time limit.** A flow's spending limit stops a run once its agents
+  have used more than that, at API prices; it is checked each time an agent finishes a turn, so a run can go a
+  turn past it. The orchestrator can set or change the limit with its tools. An Approval card can answer for you
+  when you don't answer in time, approving if its settings say so, so only let it approve a step that is safe to
+  take unseen. A Script card nobody allowed in time is skipped, never run.
 - **Sessions use Claude Code's classic renderer.** Queen Bee starts every session with Claude Code's classic
   renderer, whatever your own "tui" setting says, so a card's terminal keeps its scroll-back and a paired device
   has it to show. It is passed to each session when it starts. Nothing is written to your Claude Code settings.

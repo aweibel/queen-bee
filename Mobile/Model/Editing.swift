@@ -74,7 +74,7 @@ extension RemoteClient {
     // MARK: Menus
 
     /// The kinds of card that can be added, in the order of the Mac's own list.
-    static let cardKinds: [CardKind] = [.agent, .start, .ifElse, .switchCard, .and, .or, .prompt, .loop, .approval, .script, .flow, .end, .note]
+    static let cardKinds: [CardKind] = [.agent, .start, .ifElse, .switchCard, .and, .or, .prompt, .loop, .forEach, .approval, .script, .flow, .end, .note]
 
     /// What a long press on something offers. `point` is where on the canvas the finger is, for a card added there.
     func menu(for target: CanvasModel.Selection, at point: CGPoint? = nil) -> EditMenu? {

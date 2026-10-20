@@ -124,3 +124,59 @@ public actor LatestWins {
         }
     }
 }
+
+/// The most a run of a flow may spend. The app reckons what its agents have used since the run began, at API
+/// prices, each time an agent's turn ends, and stops the run once that is past the flow's limit.
+public enum SpendingLimit {
+    /// The smallest and largest limit a flow may have, in dollars.
+    public static let range = 0.01...10_000.0
+
+    /// A limit as it is kept: within the range, to the cent, and nil for none or for nothing that is a number.
+    public static func clamped(_ dollars: Double?) -> Double? {
+        guard let dollars, dollars.isFinite, dollars > 0 else { return nil }
+        return (min(max(dollars, range.lowerBound), range.upperBound) * 100).rounded() / 100
+    }
+
+    /// The line the log gives a run stopped for spending `spent` against `limit`, or nil while it may go on.
+    public static func passed(limit: Double?, spent: Usage) -> String? {
+        guard let limit = clamped(limit), spent.cost > limit else { return nil }
+        return "Run stopped: its agents had spent about \(spent.price), more than this flow's limit of \(Usage(cost: limit).price) for one run"
+    }
+}
+
+/// How long an Approval card waits for the person, and a Script card for its command to be allowed, before the
+/// card answers for them.
+public enum HoldTimeLimit {
+    /// The longest a card may be set to wait: a week, in minutes.
+    public static let longestMinutes = 7 * 24 * 60
+
+    /// How long `card` waits before answering, or nil when it waits for good.
+    public static func wait(for card: Card) -> Duration? {
+        guard card.kind == .approval || card.kind == .script, let minutes = card.waitMinutes, minutes > 0 else { return nil }
+        return .seconds(min(minutes, longestMinutes) * 60)
+    }
+
+    /// The output the card takes when nobody answered in time. A Script card never runs a command nobody allowed.
+    public static func port(for card: Card) -> String {
+        card.kind == .approval && card.whenNoAnswer == "approved" ? "approved" : card.kind == .approval ? "rejected" : "fail"
+    }
+
+    /// What the log says when the card answered for the person, such as "No answer after 8 hours, so it was rejected".
+    public static func line(for card: Card) -> String {
+        let after = "No answer after \(describe(minutes: min(card.waitMinutes ?? 0, longestMinutes)))"
+        switch port(for: card) {
+        case "approved": return "\(after), so it was approved"
+        case "rejected": return "\(after), so it was rejected"
+        default: return "\(after), so its command was not run"
+        }
+    }
+
+    /// "45 minutes", "1 hour", "8 hours", "1 hour 30 minutes", "2 days".
+    public static func describe(minutes: Int) -> String {
+        func count(_ n: Int, _ unit: String) -> String { "\(n) \(unit)\(n == 1 ? "" : "s")" }
+        let days = minutes / (24 * 60), hours = minutes % (24 * 60) / 60, rest = minutes % 60
+        let parts = [days > 0 ? count(days, "day") : nil, hours > 0 ? count(hours, "hour") : nil, rest > 0 ? count(rest, "minute") : nil]
+        let said = parts.compactMap { $0 }.joined(separator: " ")
+        return said.isEmpty ? count(0, "minute") : said
+    }
+}

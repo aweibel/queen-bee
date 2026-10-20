@@ -51,10 +51,11 @@ nonisolated struct FieldKey: Hashable, Sendable {
     /// The names are `RemoteCardPatch`'s for a card's settings.
     enum Name: String, Sendable {
         case name, instructions, model, effort, permissionMode, role, browser, command, trigger, check, value, maxTries, branches, template, saveTo, text, flowRef
+        case waitMinutes, whenNoAnswer, split, maxItems
         /// A link's limit.
         case limit
         case groupName
-        case flowName, subflowLimit, notify
+        case flowName, subflowLimit, notify, spendingLimit
     }
 
     var flowID: String
@@ -69,6 +70,7 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .flowName: return .text(flow.name)
             case .subflowLimit: return .number(Nesting.clamped(flow.subflowLimit))
             case .notify: return .flag(flow.notifyOrchestrator)
+            case .spendingLimit: return .text(EditForm.dollars(flow.spendingLimit))
             default: return nil
             }
         case .link(let id):
@@ -97,7 +99,11 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .saveTo: return .text(card.saveTo ?? "")
             case .text: return .text(card.text ?? "")
             case .flowRef: return .text(CanvasContent.innerFlow(of: card, in: siblings, excluding: flow.id)?.id ?? "")
-            case .limit, .groupName, .flowName, .subflowLimit, .notify: return nil
+            case .waitMinutes: return .text("\(card.waitMinutes ?? 0)")
+            case .whenNoAnswer: return .text(card.whenNoAnswer ?? "rejected")
+            case .split: return .text((card.split ?? .auto).rawValue)
+            case .maxItems: return .number(card.maxItems ?? 20)
+            case .limit, .groupName, .flowName, .subflowLimit, .notify, .spendingLimit: return nil
             }
         }
     }
@@ -108,7 +114,8 @@ nonisolated struct FieldKey: Hashable, Sendable {
         case .name, .groupName, .flowName, .branches: Remote.nameLimit
         case .instructions, .command, .value, .template, .text: Remote.textLimit
         case .saveTo, .trigger: Remote.pathLimit
-        case .model, .effort, .permissionMode, .role, .browser, .check, .maxTries, .flowRef, .limit, .subflowLimit, .notify: nil
+        case .model, .effort, .permissionMode, .role, .browser, .check, .maxTries, .flowRef, .limit, .subflowLimit, .notify,
+             .waitMinutes, .whenNoAnswer, .split, .maxItems, .spendingLimit: nil
         }
     }
 
@@ -164,6 +171,11 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .flowName: return .renameFlow(flowID: flowID, name: value.text)
             case .subflowLimit: return .setFlowOption(flowID: flowID, option: .subflowLimit(levels: value.number))
             case .notify: return .setFlowOption(flowID: flowID, option: .notifyOrchestrator(on: value.flag))
+            case .spendingLimit:
+                let typed = value.text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: ".")
+                // Empty is no limit. Anything else that isn't an amount isn't sent.
+                if typed.isEmpty { return .setFlowOption(flowID: flowID, option: .spendingLimit(dollars: nil)) }
+                return Double(typed).map { .setFlowOption(flowID: flowID, option: .spendingLimit(dollars: $0)) }
             default: return nil
             }
         case .link(let id):
@@ -191,7 +203,11 @@ nonisolated struct FieldKey: Hashable, Sendable {
             case .saveTo: patch.saveTo = value.text
             case .text: patch.text = value.text
             case .flowRef: patch.flowRef = value.text
-            case .limit, .groupName, .flowName, .subflowLimit, .notify: return nil
+            case .waitMinutes: patch.waitMinutes = Int(value.text) ?? 0
+            case .whenNoAnswer: patch.whenNoAnswer = value.text
+            case .split: patch.split = ItemSplit(rawValue: value.text)
+            case .maxItems: patch.maxItems = value.number
+            case .limit, .groupName, .flowName, .subflowLimit, .notify, .spendingLimit: return nil
             }
             return .patchCard(flowID: flowID, cardID: id, patch: patch)
         }
@@ -379,7 +395,14 @@ nonisolated struct EditForm: Equatable {
                                           (CheckKind.notContains.rawValue, "Message doesn't contain"), (CheckKind.regex.rawValue, "Matches a pattern")]))
             // Named and prompted for the check the Mac has. The view names it for the check on show.
             add(.value, Self.valueLabel(card.check ?? .judge), .line(placeholder: Self.valuePlaceholder(card.check ?? .judge), lines: 4))
-            if card.kind == .loop { add(.maxTries, "Give up after", .stepper(1...20, unit: "try", units: "tries")) }
+            if card.kind == .loop {
+                add(.maxTries, "Give up after", .stepper(1...20, unit: "try", units: "tries"))
+                note(Self.gaveUpText)
+            }
+        case .forEach:
+            add(.split, "Split into", choices([(ItemSplit.auto.rawValue, "List items or lines"), (ItemSplit.lines.rawValue, "Lines")]))
+            add(.maxItems, "At most", .stepper(1...Engine.mostItems, unit: "item", units: "items"))
+            note(Self.forEachText)
         case .switchCard:
             add(.branches, "Branches", .branches)
             note("Claude reads each message and sends it down the branch it fits best. A message that fits none of them goes out Other.")
@@ -396,6 +419,8 @@ nonisolated struct EditForm: Equatable {
             add(.text, "Note", .text(placeholder: "", isMono: false))
         case .approval:
             add(.text, "What to check before approving", .line(placeholder: "Is this email right to send?", lines: 3))
+            add(.waitMinutes, "Wait for an answer", Self.waitChoices(card))
+            if (card.waitMinutes ?? 0) > 0 { add(.whenNoAnswer, "Then", choices([("rejected", "Reject it"), ("approved", "Approve it")])) }
             if !details.items.contains(where: { $0.style == .waiting }) {
                 note("A run stops here and waits for you. You can edit the message, then approve or reject it.")
             }
@@ -411,6 +436,7 @@ nonisolated struct EditForm: Equatable {
         case .script:
             add(.command, "Command", .text(placeholder: "A command to run in the project's folder", isMono: true))
             caution(Self.scriptLine)
+            add(.waitMinutes, "Wait to be allowed", Self.waitChoices(card))
             note("Runs this command in the project's folder, as if you had typed it in Terminal. If the command succeeds, the run carries on from Pass. If it fails, from Fail. Whatever the command prints is what gets passed on.")
         }
         // What a run is waiting with at this card, what is wrong with its wiring, that the run stopped here, and what its
@@ -480,9 +506,51 @@ nonisolated struct EditForm: Equatable {
             fields.append(EditField(key: key(.subflowLimit), label: "Sub-flows can go", control: .stepper(0...Nesting.deepestLimit, unit: "level deep", units: "levels deep"),
                                     mac: .number(Nesting.clamped(flow.subflowLimit))))
         }
+        fields.append(EditField(key: key(.spendingLimit), label: "Stop a run once it has spent ($)", control: .line(placeholder: "No limit", lines: 1),
+                                mac: .text(dollars(flow.spendingLimit))))
         fields.append(EditField(key: key(.notify), label: "Tell the orchestrator when a run ends", control: .toggle, mac: .flag(flow.notifyOrchestrator)))
         return fields
     }
+
+    /// "5", "2.50", or empty for no limit, as the Mac's flow settings show it.
+    static func dollars(_ amount: Double?) -> String {
+        guard let amount else { return "" }
+        return amount == amount.rounded() ? String(format: "%.0f", amount) : String(format: "%.2f", amount)
+    }
+
+    /// The Mac's choices for how long an Approval or Script card waits for the person, and the card's own if it is another.
+    static func waitChoices(_ card: Card) -> EditField.Control {
+        let minutes = card.waitMinutes ?? 0, all = [0, 15, 30, 60, 120, 240, 480, 24 * 60, 2 * 24 * 60, 7 * 24 * 60]
+        return .choice((all + (all.contains(minutes) ? [] : [minutes])).sorted().map {
+            EditField.Choice(value: "\($0)", label: $0 == 0 ? "As long as it takes" : "Up to \(HoldTimeLimit.describe(minutes: $0))")
+        })
+    }
+
+    /// What a card with a time limit does when it is up, or nil for one that waits for good.
+    static func waitLine(_ card: Card) -> String? {
+        guard let minutes = card.waitMinutes, minutes > 0 else { return nil }
+        let after = "After \(HoldTimeLimit.describe(minutes: minutes))"
+        switch HoldTimeLimit.port(for: card) {
+        case "approved": return "\(after), approved"
+        case "rejected": return "\(after), rejected"
+        default: return "\(after), skipped"
+        }
+    }
+
+    /// When a waiting card answers for the person, after what the details say it is waiting for.
+    static func deadlineLine(_ hold: PendingHold, card: Card) -> String {
+        guard let deadline = hold.deadline else { return "" }
+        let time = deadline.formatted(date: .omitted, time: .shortened)
+        switch HoldTimeLimit.port(for: card) {
+        case "approved": return " If nobody answers by \(time), it is approved."
+        case "rejected": return " If nobody answers by \(time), it is rejected."
+        default: return " If nobody allows it by \(time), it is skipped."
+        }
+    }
+
+    static let gaveUpText = "When the tries run out, the message goes out Gave up. If nothing is linked to Gave up, it goes out Done instead."
+    static let forEachText = "Sends each item out Each, one at a time. Link the last card that works on an item back into this card: what comes back that way is that item's result, and then the next item goes. When all of them are back, everything goes out Done together."
+    static let spendingText = "Your Mac adds up what a run's agents have used, at API prices, each time one of them finishes a turn. A run that goes past this amount is stopped. Leave it empty for no limit."
 
     static let subflowLimitText = "A Flow card runs another flow, which can hold Flow cards of its own. This is how far down that may go under this flow. 0 means no sub-flows."
     static let subflowText = "This is a sub-flow. How deep sub-flows can go is set on the flow at the top."

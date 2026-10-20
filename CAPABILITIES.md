@@ -67,15 +67,16 @@ Rewrites the message from a template.
 - Setting `template` (text): The rewritten message. {{message}} becomes the incoming message and {{from}} the name of the agent it came from.
 
 ### Loop until (`loop`)
-Checks the message. It goes out done when the check holds or max_tries is used up, and again otherwise.
-- Outputs: done, again
+Checks the message. It goes out done when the check holds, again when it doesn't, and gave-up when max_tries is used up without the check holding.
+- Outputs: done, again, gave-up
 - Input: yes
-- Size when added: 240 by 120 points
+- Size when added: 240 by 144 points
 - Setting `check` (judge | contains | not-contains | regex): How value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value.
 - Setting `value` (text): The statement, text or pattern the check tests.
-- Setting `max_tries` (whole number, 1 to 50): Tries before it gives up and takes done. Defaults to 3.
+- Setting `max_tries` (whole number, 1 to 50): Tries before it gives up. Defaults to 3.
 - A judge check that takes longer than 60 seconds counts as a failed try.
-- Link something to done, or a run that passes its check stops there with no answer. A run whose Loop gave up is recorded as having given up, even if an answer reaches an End card after it.
+- Link something to done, or a run that passes its check stops there with no answer.
+- gave-up is for what to do when the tries run out, such as asking the person or ending with a note. With something linked to it, the run goes on from there as usual. With nothing linked to it, a Loop that runs out of tries goes out done instead, and the run is recorded as having given up, even if an answer reaches an End card after it.
 
 ### End (`end`)
 Records the final answer, and saves it to a file if save_to is set.
@@ -97,7 +98,10 @@ Holds the message until the person approves or rejects it. They can edit it firs
 - Input: yes
 - Size when added: 240 by 120 points
 - Setting `text` (text): What the person should check before approving.
+- Setting `wait_minutes` (whole number, 0 to 10080): How many minutes the person has to answer before the card answers for them with when_no_answer, up to 10,080 (a week). 0, the default, waits for good.
+- Setting `when_no_answer` (approved | rejected): The output taken when nobody answered within wait_minutes. Defaults to rejected.
 - Put one before anything that can't be taken back, such as sending an email.
+- Only set when_no_answer to approved for a step that is safe to take without anyone looking.
 
 ### Script (`script`)
 Runs a shell command in the project folder, with the message on its standard input and in $QB_MESSAGE. It goes out pass when the command exits with 0 and fail otherwise, and what it printed is passed on.
@@ -105,6 +109,7 @@ Runs a shell command in the project folder, with the message on its standard inp
 - Input: yes
 - Size when added: 240 by 120 points
 - Setting `command` (text): The shell command to run.
+- Setting `wait_minutes` (whole number, 0 to 10080): How many minutes the person has to allow a command they haven't allowed before, up to 10,080. With no answer by then it goes out fail without running. 0, the default, waits for good.
 - The person is asked to allow a command they did not type themselves the first time a run reaches it.
 - A command that hasn't finished after 10 minutes is stopped and goes out fail.
 - Only the last 20,000 characters of what it printed are passed on.
@@ -120,6 +125,20 @@ Runs another flow in this project as one step, giving it the message as its comm
 - A flow that isn't below yours can only be linked in by the person: ask them.
 - A flow has one run at a time. A Flow card that reaches a flow which is already running, from another Flow card or because the person started it, waits for that run to end and then runs it. A Flow card that would run a flow this run is already inside goes out fail.
 
+### For each (`for-each`)
+Splits the message into items and sends them out each, one at a time. What comes back into this card from the cards on each is that item's result, and then the next item goes. When every item is back, it goes out done with all the results together, each under a heading naming its item.
+- Outputs: each, done
+- Input: yes
+- Size when added: 240 by 120 points
+- Setting `split` (auto | lines): How the message becomes items. auto, the default: the elements of a JSON array when the whole message is one, even inside a code fence, and otherwise one item per line. lines: one item per line. Blank lines are skipped.
+- Setting `max_items` (whole number, 1 to 50): The most items it sends out. Any more are left out, and the log says so. Defaults to 20.
+- Link each to the cards that work on one item, and link the last of them back into this card. That link is how an item's result comes back: without it the run waits on the first item and ends with no answer.
+- Items go one at a time, so an agent on each works on one item per turn and remembers the items before it.
+- Every hand-off to an agent counts toward the run's limit of 50, the ones for each item included. Keep the items times the agents on each well under it.
+- Each item is a fresh pass through the cards on each: their links count passes from 0 again and their Or cards pass on a first message again.
+- A message with no items goes straight out done, unchanged. A message that reaches it from anywhere but the cards on each while items are out is dropped.
+- Have one message come back per item. Don't send an item to several agents and gather them with an Or: a slower agent's reply would come back as the next item's result. Use an And to wait for all of them.
+
 ## Links
 
 - A link joins one card's output to another card's input. A card can't link to itself.
@@ -128,8 +147,13 @@ Runs another flow in this project as one step, giving it the message as its comm
 ## Runs
 
 - A run hands agents at most 50 messages. When the next hand-off would pass that, the run stops there and nothing more is sent. Keep a flow's loops short enough to finish inside it.
-- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries), stopped at the hand-off limit, failed, or stopped.
+- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries with nothing on gave-up), stopped at the hand-off limit, stopped at the spending limit, failed, or stopped.
 - An agent the run isn't waiting on can be restarted, or stop, without stopping the run. If the run is waiting on it, the run stops.
+
+## Flow settings
+
+Set with update_flow. get_flow gives each one's value now.
+- Setting `spending_limit` (number, 0 to 10,000): The most one run may spend, in US dollars, as the app reckons its agents' use at API prices. When a run passes it, the run is stopped, its agents are interrupted, and the person is told. A sub-flow's agents count toward the sub-flow's own limit, not this one. 0 removes the limit. The person may have set it: don't raise or remove it unless they ask.
 
 ## Every agent
 
@@ -159,4 +183,4 @@ What the browser can't do:
 
 ## Your tools
 
-The orchestrator builds and runs a flow with: `get_flow`, `add_card`, `update_card`, `remove_card`, `add_link`, `remove_link`, `run_flow`, `stop_flow`, `read_agent`, `create_subflow`, `get_run_log`. Each one's own description says how to call it.
+The orchestrator builds and runs a flow with: `get_flow`, `add_card`, `update_card`, `remove_card`, `add_link`, `remove_link`, `update_flow`, `run_flow`, `stop_flow`, `read_agent`, `create_subflow`, `get_run_log`. Each one's own description says how to call it.

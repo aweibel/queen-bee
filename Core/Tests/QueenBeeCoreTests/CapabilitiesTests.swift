@@ -26,6 +26,7 @@ import Testing
             "instructions": "Be brief", "model": "opus", "effort": "high", "permission_mode": "plan", "cwd": "/tmp/x", "browser": true,
             "command": "echo hi", "check": "contains", "value": "DONE", "max_tries": 4, "branches": ["x", "y"],
             "template": "{{message}}", "save_to": "out.md", "text": "Check this", "flow": "",
+            "wait_minutes": 30, "when_no_answer": "approved", "split": "lines", "max_items": 5,
         ]
         for card in Capabilities.cards {
             for setting in card.settings {

@@ -62,6 +62,9 @@ public struct PendingHold: Identifiable, Equatable, Sendable, Codable {
     /// command is allowed at the Mac and nowhere else: no device may answer for the person there. Left out
     /// when it isn't so, so a hold reads the same to a device that knows nothing of this.
     public var allowOnMac: Bool?
+    /// When the card answers for the person if nobody has, for a card with a time limit. Nil for one that waits for good,
+    /// and left out then, so a hold reads the same to a device that knows nothing of this.
+    public var deadline: Date?
 
     /// Whether a paired device may allow this script's command.
     public var canBeAllowedFromDevice: Bool { kind == .script && needsAllow && allowOnMac != true }
@@ -169,6 +172,14 @@ public enum RunEnding: String, Codable, Sendable, CaseIterable {
     case failed
     /// Somebody stopped it.
     case stopped
+    /// Its agents had spent more than the flow allows one run, so the app stopped it.
+    case spentLimit
+
+    /// An ending a later version of the app knows and this one doesn't is read as stopped, so a run kept by that
+    /// version still opens here.
+    public init(from decoder: Decoder) throws {
+        self = RunEnding(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .stopped
+    }
 
     /// In a few plain words, for the run's row in the history.
     public var label: String {
@@ -179,6 +190,7 @@ public enum RunEnding: String, Codable, Sendable, CaseIterable {
         case .hitLimit: "stopped at the hand-off limit"
         case .failed: "failed"
         case .stopped: "stopped"
+        case .spentLimit: "stopped at its spending limit"
         }
     }
 
@@ -186,7 +198,7 @@ public enum RunEnding: String, Codable, Sendable, CaseIterable {
     public var outcome: RunRecord.Outcome {
         switch self {
         case .finishedWithAnswer, .endedWithoutAnswer, .gaveUp: .finished
-        case .hitLimit, .stopped: .stopped
+        case .hitLimit, .stopped, .spentLimit: .stopped
         case .failed: .failed
         }
     }

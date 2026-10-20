@@ -97,3 +97,92 @@ import Testing
         #expect(try String(contentsOf: url, encoding: .utf8) == "new")
     }
 }
+
+/// The most a run may spend, and how long a card waits for the person.
+@Suite struct RunLimitsTests {
+    @Test func aRunMayGoOnUpToItsSpendingLimit() {
+        #expect(SpendingLimit.passed(limit: nil, spent: Usage(cost: 1_000)) == nil)
+        #expect(SpendingLimit.passed(limit: 5, spent: Usage(cost: 5)) == nil)
+        #expect(SpendingLimit.passed(limit: 5, spent: Usage(cost: 5.12))
+                == "Run stopped: its agents had spent about $5.12, more than this flow's limit of $5.00 for one run")
+    }
+
+    @Test func aLimitIsKeptWithinItsRangeToTheCent() {
+        #expect(SpendingLimit.clamped(0) == nil && SpendingLimit.clamped(-3) == nil && SpendingLimit.clamped(.nan) == nil)
+        #expect(SpendingLimit.clamped(0.001) == 0.01)
+        #expect(SpendingLimit.clamped(2.345) == 2.35 || SpendingLimit.clamped(2.345) == 2.34)
+        #expect(SpendingLimit.clamped(1_000_000) == SpendingLimit.range.upperBound)
+    }
+
+    @Test func aTimeLimitIsSaidInPlainWords() {
+        #expect(HoldTimeLimit.describe(minutes: 45) == "45 minutes")
+        #expect(HoldTimeLimit.describe(minutes: 60) == "1 hour")
+        #expect(HoldTimeLimit.describe(minutes: 480) == "8 hours")
+        #expect(HoldTimeLimit.describe(minutes: 90) == "1 hour 30 minutes")
+        #expect(HoldTimeLimit.describe(minutes: 2 * 24 * 60) == "2 days")
+    }
+
+    @Test func aCardWithATimeLimitAnswersWithItsChosenOutput() throws {
+        var flow = Flow(name: "Test")
+        var patch = CardPatch()
+        patch.waitMinutes = 480
+        let approval = try flow.addCard(kind: .approval, name: "Sign off", patch: patch)
+        #expect(HoldTimeLimit.wait(for: approval) == .seconds(480 * 60))
+        #expect(HoldTimeLimit.port(for: approval) == "rejected")
+        #expect(HoldTimeLimit.line(for: approval) == "No answer after 8 hours, so it was rejected")
+        patch = CardPatch()
+        patch.whenNoAnswer = "approved"
+        let approving = try flow.updateCard("Sign off", patch: patch)
+        #expect(HoldTimeLimit.port(for: approving) == "approved")
+        #expect(HoldTimeLimit.line(for: approving) == "No answer after 8 hours, so it was approved")
+        // A script nobody allowed never runs.
+        patch = CardPatch()
+        patch.waitMinutes = 30
+        let script = try flow.addCard(kind: .script, name: "Deploy", patch: patch)
+        #expect(HoldTimeLimit.port(for: script) == "fail")
+        #expect(HoldTimeLimit.line(for: script) == "No answer after 30 minutes, so its command was not run")
+    }
+
+    @Test func aTimeLimitIsClearedByZeroAndKeptUnderAWeek() throws {
+        var flow = Flow(name: "Test")
+        var patch = CardPatch()
+        patch.waitMinutes = 1_000_000
+        #expect(try flow.addCard(kind: .approval, name: "A", patch: patch).waitMinutes == HoldTimeLimit.longestMinutes)
+        patch.waitMinutes = 0
+        let cleared = try flow.updateCard("A", patch: patch)
+        #expect(cleared.waitMinutes == nil && HoldTimeLimit.wait(for: cleared) == nil)
+        // Other kinds of card have no time limit.
+        patch.waitMinutes = 10
+        #expect(try flow.addCard(kind: .note, name: "N", patch: patch).waitMinutes == nil)
+    }
+
+    @Test func aRunStoppedForSpendingSaysSoAndInterruptsItsAgents() async throws {
+        var flow = Flow(name: "Test")
+        var patch = CardPatch()
+        patch.command = "Go"
+        try flow.addCard(kind: .start, name: "Start", patch: patch)
+        let writer = try flow.addCard(kind: .agent, name: "Writer")
+        try flow.addLink(from: "Start", to: "Writer")
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        let out = await engine.stop(ending: .spentLimit, line: "Run stopped: too dear")
+        #expect(out.finished && out.ending == .spentLimit && out.log == ["Run stopped: too dear"])
+        #expect(out.leftWaiting == [writer.id])
+        #expect(RunEnding.spentLimit.outcome == .stopped)
+    }
+
+    @Test func anEndingThisVersionDoesNotKnowReadsAsStopped() throws {
+        let record = try JSONDecoder().decode([RunEnding].self, from: Data(#"["finishedWithAnswer", "somethingNew"]"#.utf8))
+        #expect(record == [.finishedWithAnswer, .stopped])
+        #expect(String(decoding: try JSONEncoder().encode(RunEnding.spentLimit), as: UTF8.self) == #""spentLimit""#)
+    }
+
+    @Test func aFlowFromBeforeSpendingLimitsHasNone() throws {
+        let flow = Flow(name: "Old")
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(flow)) as? [String: Any])
+        json["spendingLimit"] = nil
+        let read = try JSONDecoder().decode(Flow.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(read.spendingLimit == nil)
+    }
+}
+

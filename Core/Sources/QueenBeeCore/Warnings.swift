@@ -52,6 +52,11 @@ private func warning(for card: Card, in flow: Flow, circling: Bool) -> String? {
         if nothing(on: "done") { return "Nothing on Done" }
     case .end:
         if Checks.isProtectedSavePath(card.saveTo ?? "") { return "Can't save there" }
+    case .forEach:
+        if nothing(on: "each") { return "Nothing on Each" }
+        // An item's result comes back along a link into this card from the cards on Each.
+        if !comesBack(to: card, in: flow) { return "Nothing on Each links back to it" }
+        if nothing(on: "done") { return "Nothing on Done" }
     case .or, .prompt:
         break
     }
@@ -83,6 +88,12 @@ private func branch(splitting and: Card, in flow: Flow) -> Card? {
         if sides.count >= 2, split >= 2 { return branch }
     }
     return nil
+}
+
+/// Whether a card reached from a For each card's Each output links back into it, which is how each item's result returns.
+private func comesBack(to forEach: Card, in flow: Flow) -> Bool {
+    let body = reachable(from: flow.links(from: forEach.id, port: "each").map(\.to), in: flow, avoiding: forEach.id)
+    return flow.links(into: forEach.id).contains { body.contains($0.from) }
 }
 
 /// Every card a message can reach from `ids`, them included, never passing through `avoiding`.

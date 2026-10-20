@@ -62,6 +62,19 @@ private struct CardSettings: View {
                         Text("tries").font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
                     }
                 }
+                note("When the tries run out, the message goes out Gave up. If nothing is linked to Gave up, it goes out Done instead.")
+            case .forEach:
+                row("Split into") {
+                    MenuField(options: [(value: ItemSplit.auto, label: "List items or lines"), (value: .lines, label: "Lines")],
+                              selection: card.split ?? .auto) { v in patch { $0.split = v } }
+                }
+                row("At most") {
+                    HStack(spacing: 4) {
+                        StepField(value: card.maxItems ?? 20, range: 1...Engine.mostItems) { v in patch { $0.maxItems = v } }
+                        Text("items").font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
+                    }
+                }
+                note("Sends each item out Each, one at a time. Link the last card that works on an item back into this card: what comes back that way is that item's result, and then the next item goes. When all of them are back, everything goes out Done together. “List items” is used when the message is a JSON list. Every hand-off to an agent counts toward a run's limit of \(Engine.maxDeliveries).")
             case .switchCard:
                 LineField("Branches, separated by commas", placeholder: "bug, feature, question",
                           text: (card.branches ?? []).joined(separator: ", ")) { v in
@@ -94,6 +107,7 @@ private struct CardSettings: View {
             case .approval:
                 LineField("What to check before approving", placeholder: "Is this email right to send?",
                           text: card.text ?? "", lines: 1...3) { v in patch { $0.text = v } }
+                WaitSettings(card: card, patch: patch)
                 if let hold = controller.holds.first(where: { $0.cardID == card.id }) {
                     ApprovalReview(controller: controller, hold: hold)
                         .id(hold.id)
@@ -134,6 +148,7 @@ private struct CardSettings: View {
                 EditorField("Command", text: card.command ?? "", mono: true) { v in controller.setScriptCommand(card.id, v) }
                     .help("For scripts that need it: the incoming message is in $QB_MESSAGE and on standard input, and the sender's name is in $QB_FROM.")
                 note("Runs this command in the project's folder, as if you had typed it in Terminal. If the command succeeds, the run carries on from Pass. If it fails, from Fail. Whatever the command prints is what gets passed on.")
+                WaitSettings(card: card, patch: patch)
                 if let hold = controller.holds.first(where: { $0.cardID == card.id }) {
                     ScriptReview(controller: controller, hold: hold)
                         .id(hold.id)
@@ -406,6 +421,34 @@ private struct CardSettings: View {
     }
 }
 
+/// How long an Approval card waits for an answer, and what it answers if none comes. On a Script card, how long
+/// a command nobody has allowed yet waits before it is skipped.
+private struct WaitSettings: View {
+    let card: Card
+    let patch: ((inout CardPatch) -> Void) -> Void
+
+    private static let choices = [0, 15, 30, 60, 120, 240, 480, 24 * 60, 2 * 24 * 60, 7 * 24 * 60]
+
+    var body: some View {
+        let minutes = card.waitMinutes ?? 0
+        let options = (Self.choices + (Self.choices.contains(minutes) ? [] : [minutes])).sorted()
+        row(card.kind == .approval ? "Wait for an answer" : "Wait to be allowed") {
+            MenuField(options: options.map { (value: $0, label: $0 == 0 ? "As long as it takes" : "Up to \(HoldTimeLimit.describe(minutes: $0))") },
+                      selection: minutes) { v in patch { $0.waitMinutes = v } }
+        }
+        if minutes > 0 {
+            if card.kind == .approval {
+                row("Then") {
+                    MenuField(options: [(value: "rejected", label: "Reject it"), (value: "approved", label: "Approve it")],
+                              selection: card.whenNoAnswer ?? "rejected") { v in patch { $0.whenNoAnswer = v } }
+                }
+            } else {
+                note("If nobody lets the command run in time, it is skipped and the run carries on from Fail.")
+            }
+        }
+    }
+}
+
 /// A message waiting at an Approval card: read it, change it if need be, then send it on or back.
 private struct ApprovalReview: View {
     let controller: FlowController
@@ -417,6 +460,11 @@ private struct ApprovalReview: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("From \(hold.from). Waiting for you.")
                 .font(.dsMono(Theme.Size.caption, .medium))
+            if let deadline = hold.deadline, let card = controller.flow.card(hold.cardID) {
+                Text("If you don't answer by \(deadline.formatted(date: .omitted, time: .shortened)), it will be \(HoldTimeLimit.port(for: card) == "approved" ? "approved" : "rejected") for you.")
+                    .font(.dsSans(Theme.Size.caption))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             TextEditor(text: $draft)
                 .font(.dsSans(Theme.Size.body))
                 .frame(height: 150)
@@ -460,7 +508,8 @@ private struct ScriptReview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if hold.needsAllow {
-                Text("You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it.")
+                Text("You didn't write this command yourself, so it is waiting for you. Read it, then let it run or skip it."
+                     + (hold.deadline.map { " If you haven't by \($0.formatted(date: .omitted, time: .shortened)), it is skipped." } ?? ""))
                     .font(.dsSans(Theme.Size.caption))
                     .fixedSize(horizontal: false, vertical: true)
                 Text(hold.command)

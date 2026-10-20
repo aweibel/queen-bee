@@ -68,7 +68,7 @@ actor FakeHost: ToolHost {
     @Test func everyToolIsDefinedWithAnObjectSchema() {
         #expect(Tools.definitions.map(\.name) == [
             "get_flow", "add_card", "update_card", "remove_card", "add_link", "remove_link",
-            "run_flow", "stop_flow", "read_agent", "create_subflow", "get_run_log",
+            "update_flow", "run_flow", "stop_flow", "read_agent", "create_subflow", "get_run_log",
         ])
         for tool in Tools.definitions {
             #expect(!tool.description.isEmpty)
@@ -321,6 +321,43 @@ actor FakeHost: ToolHost {
     @Test func argumentsThatAreNotAnObjectCountAsEmpty() async {
         let result = await Tools.call(name: "get_run_log", arguments: .null, host: FakeHost())
         #expect(!result.isError)
+    }
+
+    @Test func updateFlowSetsAndClearsTheSpendingLimit() async throws {
+        let host = FakeHost(flow: try sample())
+        let set = await Tools.call(name: "update_flow", arguments: ["spending_limit": .number(2.5)], host: host)
+        #expect(!set.isError && set.text.contains("$2.50"))
+        #expect(await host.flow.spendingLimit == 2.5)
+        let shown = await Tools.call(name: "get_flow", arguments: [:], host: host)
+        #expect(try JSONValue.parse(Data(shown.text.utf8))["spending_limit"]?.doubleValue == 2.5)
+        let cleared = await Tools.call(name: "update_flow", arguments: ["spending_limit": 0], host: host)
+        #expect(!cleared.isError && cleared.text.contains("no spending limit"))
+        #expect(await host.flow.spendingLimit == nil)
+        let nothing = await Tools.call(name: "update_flow", arguments: [:], host: host)
+        #expect(nothing.isError)
+    }
+
+    @Test func anApprovalsTimeLimitAndAnswerCanBeSet() async throws {
+        let host = FakeHost()
+        _ = await Tools.call(name: "add_card", arguments: ["kind": "approval", "name": "Sign off", "wait_minutes": 480, "when_no_answer": "Approved"], host: host)
+        let card = try #require(await host.flow.resolveCard("Sign off"))
+        #expect(card.waitMinutes == 480 && card.whenNoAnswer == "approved")
+        let bad = await Tools.call(name: "update_card", arguments: ["card": "Sign off", "when_no_answer": "maybe"], host: host)
+        #expect(bad.isError && bad.text.contains("approved or rejected"))
+        let script = await Tools.call(name: "add_card", arguments: ["kind": "script", "when_no_answer": "approved"], host: host)
+        #expect(script.isError)
+        let shown = try JSONValue.parse(Data(await Tools.call(name: "get_flow", arguments: [:], host: host).text.utf8))
+        #expect(shown["cards"]?.arrayValue?.first?["wait_minutes"] == 480)
+    }
+
+    @Test func aForEachsSettingsCanBeSet() async throws {
+        let host = FakeHost()
+        let added = await Tools.call(name: "add_card", arguments: ["kind": "for-each", "name": "Each", "split": "lines", "max_items": 10], host: host)
+        #expect(!added.isError && added.text.contains("Outputs: each, done."))
+        let card = try #require(await host.flow.resolveCard("Each"))
+        #expect(card.split == .lines && card.maxItems == 10)
+        let bad = await Tools.call(name: "update_card", arguments: ["card": "Each", "split": "words"], host: host)
+        #expect(bad.isError)
     }
 
     @Test func saveToInsideAProtectedFolderIsRefused() async throws {

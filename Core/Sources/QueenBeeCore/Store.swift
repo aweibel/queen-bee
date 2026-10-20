@@ -133,8 +133,12 @@ public struct FlowStore: Sendable {
 
     private static func read(_ url: URL) -> Flow? {
         guard let data = try? Data(contentsOf: url),
-              let flow = try? JSONDecoder().decode(Flow.self, from: data),
+              var flow = try? JSONDecoder().decode(Flow.self, from: data),
               flow.version == Flow.currentVersion, flow.hasSafeIDs else { return nil }
+        // A kind of card that has gained an output since the file was written, as Loop until did, gets the room for it.
+        for index in flow.cards.indices {
+            flow.cards[index].height = max(flow.cards[index].height, Card.minimumHeight(for: flow.cards[index]))
+        }
         return flow
     }
 
