@@ -1,13 +1,14 @@
 import Foundation
+import QueenBeeCore
 import Subprocess
 import System
 
 /// Runs a Script card's command, and remembers which commands the person has allowed.
 enum ScriptRunner {
-    /// A command that hasn't finished by now is stopped and counts as failed.
-    nonisolated static let timeout: Duration = .seconds(600)
+    /// A command that hasn't finished by now is stopped and counts as failed. Declared with the card's capabilities.
+    nonisolated static let timeout = Capabilities.scriptTimeout
     /// As much of what a command printed as is passed on: the end of it, where a failure usually is.
-    nonisolated static let outputLimit = 20_000
+    nonisolated static let outputLimit = Capabilities.scriptOutputLimit
     /// As much as is read at all. A command that prints more than this is counted as failed.
     nonisolated static let readLimit = 8_000_000
     /// The message is on standard input in full. The copy in the environment is cut short,

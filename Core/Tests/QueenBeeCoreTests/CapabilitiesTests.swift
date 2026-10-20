@@ -73,6 +73,17 @@ import Testing
         #expect(reference.contains("- `read` (never asks the person)"))
     }
 
+    @Test func theReferenceStatesTheLimitsTheEngineAndScriptCardsKeep() {
+        let reference = Capabilities.reference
+        #expect(reference.contains("at most \(Engine.maxDeliveries) messages"))
+        #expect(reference.contains(Capabilities.runLimit))
+        #expect(reference.contains("hasn't finished after \(Int(Capabilities.scriptTimeout.components.seconds / 60)) minutes"))
+        #expect(Capabilities.scriptOutputLimit == 20_000 && reference.contains("the last 20,000 characters"))
+        #expect(reference.contains("takes longer than \(Int(Engine.judgeTimeout.components.seconds)) seconds counts as no"))
+        #expect(reference.contains("A flow has one run at a time"))
+        #expect(reference.contains("Inside a loop, it passes on one per round"))
+    }
+
     @Test func theSavedFileIsWhatTheCodeSaysNow() throws {
         let saved = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("CAPABILITIES.md")

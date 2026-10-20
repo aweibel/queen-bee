@@ -49,6 +49,11 @@ public struct CardCapability: Sendable {
 /// it, a setting that isn't listed here can't be set by the orchestrator, and the tests fail if a setting in
 /// `CardPatch` is missing or `CAPABILITIES.md` is out of date. `./scripts/build.sh` rewrites that file.
 public enum Capabilities {
+    /// A Script card's command that hasn't finished by now is stopped and goes out fail.
+    public static let scriptTimeout: Duration = .seconds(600)
+    /// As much of what a Script card's command printed as is passed on: the end of it, where a failure usually is.
+    public static let scriptOutputLimit = 20_000
+
     public static func card(_ kind: CardKind) -> CardCapability {
         switch kind {
         case .agent:
@@ -71,17 +76,22 @@ public enum Capabilities {
         case .ifElse:
             CardCapability(.ifElse,
                 does: "Checks the message and sends it out yes or no.",
-                settings: checkSettings)
+                settings: checkSettings,
+                notes: [judgeNote("no")])
         case .switchCard:
             CardCapability(.switchCard,
                 does: "Claude picks the one branch that fits the message.",
                 outputsNote: "one per branch name, plus other",
                 settings: [SettingCapability("branches", ["type": "array", "items": ["type": "string"]], "The branch names. Each one becomes an output.")],
-                notes: ["Changing the branches removes links from branches that no longer exist."])
+                notes: ["Changing the branches removes links from branches that no longer exist.", judgeNote("other")])
         case .and:
-            CardCapability(.and, does: "Waits for a message from every card linked into it, then passes them on together.")
+            CardCapability(.and,
+                does: "Waits for a message from every card linked into it, then passes them on together.",
+                notes: ["Don't feed it from different outputs of one If or Switch card: a message leaves by one output, so it would wait for ever and the run would end with no answer."])
         case .or:
-            CardCapability(.or, does: "Passes on the first message that reaches it in a run and drops later ones.")
+            CardCapability(.or,
+                does: "Passes on the first message that reaches it and drops later ones.",
+                notes: ["It passes on one message per run. Inside a loop, it passes on one per round: each time a Loop card goes out again, every Or that again leads to passes on the next first message."])
         case .prompt:
             CardCapability(.prompt,
                 does: "Rewrites the message from a template.",
@@ -91,7 +101,8 @@ public enum Capabilities {
                 does: "Checks the message. It goes out done when the check holds or max_tries is used up, and again otherwise.",
                 settings: checkSettings + [
                     SettingCapability("max_tries", ["type": "integer", "minimum": 1, "maximum": 50], "Tries before it gives up and takes done. Defaults to 3."),
-                ])
+                ],
+                notes: [judgeNote("a failed try"), "Link something to done, or a run that passes its check stops there with no answer. A run whose Loop gave up is recorded as having given up, even if an answer reaches an End card after it."])
         case .end:
             CardCapability(.end,
                 does: "Records the final answer, and saves it to a file if save_to is set.",
@@ -109,7 +120,11 @@ public enum Capabilities {
             CardCapability(.script,
                 does: "Runs a shell command in the project folder, with the message on its standard input and in $QB_MESSAGE. It goes out pass when the command exits with 0 and fail otherwise, and what it printed is passed on.",
                 settings: [SettingCapability("command", "The shell command to run.")],
-                notes: ["The person is asked to allow a command they did not type themselves the first time a run reaches it."])
+                notes: [
+                    "The person is asked to allow a command they did not type themselves the first time a run reaches it.",
+                    "A command that hasn't finished after \(minutes(scriptTimeout)) minutes is stopped and goes out fail.",
+                    "Only the last \(grouped(scriptOutputLimit)) characters of what it printed are passed on.",
+                ])
         case .flow:
             CardCapability(.flow,
                 does: "Runs another flow in this project as one step, giving it the message as its command. It goes out done with that flow's final answer, or fail.",
@@ -118,8 +133,31 @@ public enum Capabilities {
                     "To make a new sub-flow, use create_subflow, which also adds this card. To reuse a flow that exists, set flow to one of the other_flows that get_flow lists. Never write flow files yourself.",
                     "Sub-flows only nest as deep as the person allows on the flow at the top. get_flow gives sub_flow_levels_left: at 0 this flow can't have a Flow card. An edit that would go deeper is refused; don't try to work round it.",
                     "A flow that isn't below yours can only be linked in by the person: ask them.",
+                    "A flow has one run at a time. A Flow card that reaches a flow which is already running, from another Flow card or because the person started it, waits for that run to end and then runs it. A Flow card that would run a flow this run is already inside goes out fail.",
                 ])
         }
+    }
+
+    /// The most hand-offs a run makes, in words.
+    public static var runLimit: String {
+        "A run hands agents at most \(Engine.maxDeliveries) messages. When the next hand-off would pass that, the run stops there and nothing more is sent. Keep a flow's loops short enough to finish inside it."
+    }
+
+    /// What happens when the judge takes too long, for a card whose check it answers.
+    private static func judgeNote(_ counts: String) -> String {
+        "A judge check that takes longer than \(Int(Engine.judgeTimeout.components.seconds)) seconds counts as \(counts)."
+    }
+
+    private static func minutes(_ duration: Duration) -> Int { Int(duration.components.seconds / 60) }
+
+    /// 20000 as "20,000", the same in every language the Mac is set to.
+    private static func grouped(_ number: Int) -> String {
+        var digits = String(number), out = ""
+        while digits.count > 3 {
+            out = "," + digits.suffix(3) + out
+            digits.removeLast(3)
+        }
+        return digits + out
     }
 
     private static let checkSettings = [
@@ -190,6 +228,10 @@ public enum Capabilities {
         lines += ["## Links", ""]
         lines.append("- A link joins one card's output to another card's input. A card can't link to itself.")
         lines.append("- Each link has max passes, from \(Link.maxPassesRange.lowerBound) to \(Link.maxPassesRange.upperBound) and \(Link.defaultMaxPasses) unless set: how many times it may fire in one run. That is what makes a loop between cards end.")
+        lines += ["", "## Runs", ""]
+        lines.append("- \(runLimit)")
+        lines.append("- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries), stopped at the hand-off limit, failed, or stopped.")
+        lines.append("- An agent the run isn't waiting on can be restarted, or stop, without stopping the run. If the run is waiting on it, the run stops.")
         lines += ["", "## Every agent", ""]
         lines += everyAgent.map { "- \($0)" }
         lines += ["", "## An agent with a browser", ""]
