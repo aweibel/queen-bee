@@ -67,6 +67,9 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 
   ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
 
+- An Approval card can be told to wait at most so long, then approve or reject the message itself. A Script card can be told how long to wait for you to allow a command before skipping it.
+- A **For each** card splits a list into items, one per line or the items of a JSON list, and sends them out Each one at a time. Link the last card that works on an item back into the For each card: what comes back that way is that item's result. When every item is back, all the results go out Done together. A **Loop until** card that runs out of tries goes out Gave up, or Done if nothing is linked to Gave up.
+- A flow's settings (the sliders button in the toolbar) can stop a run once it has spent a set amount, reckoned at API prices from what its agents have used.
 - Turn on **Browser** in an agent's settings to give it a web browser in its card: terminal on the left, the live page on the right. The agent opens and reads pages by itself and asks before it clicks or types, unless its permissions say otherwise. Click into the page to use it yourself, for instance to sign in to a site; agents with a browser in the same project share those sign-ins, and **Clear browser data** in the flow's settings forgets them. It uses Chrome, Chromium, Edge or Brave if one is installed, and offers to download a browser of its own if not.
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
@@ -87,6 +90,19 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
 - **View → Appearance** switches between light, dark and following the system.
 - **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows, and run, answer and edit them if you let it. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
+
+### Start a flow from outside the app
+
+The app ships a small command, `qb`, inside it. With Queen Bee open, it starts a flow from Terminal or a script:
+
+```sh
+alias qb="/Applications/Queen Bee.app/Contents/MacOS/qb"
+qb run ~/work/site "Review" "Check the homepage for broken links"
+```
+
+It names the project folder, the flow by its name or id, and the message the run starts with, as if you had typed it into the Start card (leave it out to use the card's own). It waits for the run to end, prints what reached the End cards and exits 0. A run that ends with no answer prints how it ended and exits 1; a run that couldn't start, because the app isn't open, the flow isn't found or is already running, exits 3. `--no-wait` returns as soon as the run has started. The folder must be one you have added to Queen Bee and trusted.
+
+A link starts a flow too: `queenbee://run?flow=<flow id>&message=<message>`, with the message URL-encoded. Any web page or app can open such a link, so Queen Bee shows you the flow and the message and starts the run only if you press **Run**.
 
 ## On your iPad or iPhone
 

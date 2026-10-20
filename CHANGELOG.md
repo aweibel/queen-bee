@@ -8,6 +8,11 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ### Added
 
+- A spending limit for a flow's runs, in the flow's settings, on a paired device and for the orchestrator. A run whose agents have used more than it, at API prices, is stopped as Stop would stop it, and the log, the run's history and a notice say so.
+- Loop until has a third output, Gave up, taken when its tries run out. A Loop with nothing linked to Gave up goes out Done as before.
+- An Approval card can wait at most a set time, then approve or reject the message itself, and the log says so: "No answer after 8 hours, so it was rejected". A Script card can wait a set time for its command to be allowed, then skip it.
+- A For each card: it splits a message into lines, or the items of a JSON list, sends each one in turn to the cards on Each, collects what comes back for each, and passes all of it on from Done. Every hand-off counts toward a run's limit of 50, and it sends 50 items at most. The canvas warns about one with nothing on Each or no way back.
+- `qb run <folder> <flow> "message"` starts a flow from Terminal or a script, waits for it to end and prints its answer; `--no-wait` only starts it. A `queenbee://run?flow=…&message=…` link starts one too, once you say yes in the app.
 - Run history says how each run ended: finished, ended without an answer, gave up after the most tries, stopped at the hand-off limit, failed or stopped. So does the notice when a run ends.
 - Two more warnings on the canvas: an And whose inputs are on different sides of one If or Switch, which can never hear from all of them, and a Loop with nothing on Done.
 - The orchestrator's reference now states the limits a run keeps: 50 hand-offs, a Script card's 10 minutes and last 20,000 characters, a condition's 60 seconds, and how Or and Flow cards behave.
