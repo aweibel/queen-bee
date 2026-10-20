@@ -562,15 +562,15 @@ final class AppServices {
 
     /// Answers one helper request. `session` is "<flowID>/<cardID>" or "<flowID>/orchestrator".
     func handle(_ request: WireRequest) async -> JSONValue {
+        // `qb run` is typed by the person, or a script of theirs, with no session behind it and so no secret. Only this
+        // Mac's own account can reach the socket, whose folder no one else may open.
+        if request.kind == "run" { return await runFromCommandLine(request.payload) }
         var parts = request.session.split(separator: "/", maxSplits: 1).map(String.init)
         if request.kind != "test" {
             // Who is asking comes from the secret, never from the name the request gives itself.
             guard let owner = credentialOwners[request.session] else { return fallback(for: request) }
             parts = owner.split(separator: "/", maxSplits: 1).map(String.init)
         }
-        // `qb run` is typed by the person, or a script of theirs, with no session behind it. Only this Mac's own
-        // account can reach the socket, whose folder no one else may open.
-        if request.kind == "run" { return await runFromCommandLine(request.payload) }
         if request.kind == "test" {
             guard TestHarness.isEnabled else { return ["error": "testing is off"] }
             if let reply = await TestHarness.handleRemote(request.payload) { return reply }
