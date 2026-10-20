@@ -8,10 +8,19 @@ import QueenBeeCore
 /// pass count. A link a message is travelling right now gets orange dashes that march
 /// toward the card it is headed for.
 final class LinkLayerView: NSView {
-    var flow: Flow? { didSet { refresh() } }
-    var selectedLinkID: String? { didSet { needsDisplay = true } }
+    /// The canvas sets this on every change to the flow. Only a change to what the links are drawn from redraws them.
+    var flow: Flow? {
+        didSet {
+            let now = LinkGeometry(flow)
+            guard now != geometry else { return }
+            geometry = now
+            refresh()
+        }
+    }
+    private var geometry = LinkGeometry(nil)
+    var selectedLinkID: String? { didSet { if selectedLinkID != oldValue { needsDisplay = true } } }
     /// How many times each link has fired in the run on show.
-    var passes: [String: Int] = [:] { didSet { needsDisplay = true } }
+    var passes: [String: Int] = [:] { didSet { if passes != oldValue { needsDisplay = true } } }
     /// Links a message is travelling now.
     var liveLinkIDs: Set<String> = [] { didSet { if liveLinkIDs != oldValue { refresh() } } }
     /// The route of a link being dragged out of a port, not made yet.

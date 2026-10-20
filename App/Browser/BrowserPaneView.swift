@@ -22,7 +22,10 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     override var isFlipped: Bool { true }
 
     /// The card is on screen and large enough to read, so the page is worth streaming.
-    var isInView = false { didSet { if isInView != oldValue { tab.setStreaming(isInView && window != nil) } } }
+    var isInView = false { didSet { if isInView != oldValue { updateStreaming() } } }
+    /// Watches whether the window can be seen at all: minimised, hidden or covered by other windows, nobody is
+    /// looking at the page and it isn't streamed.
+    private var occlusionObserver: NSObjectProtocol?
 
     init(tab: BrowserTab) {
         self.tab = tab
@@ -84,11 +87,26 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        tab.setStreaming(isInView && window != nil)
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
+        if let window {
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateStreaming() }
+            }
+        }
+        updateStreaming()
+    }
+
+    private func updateStreaming() {
+        tab.setStreaming(isInView && window?.occlusionState.contains(.visible) == true)
     }
 
     /// The card's view is being thrown away. A newer view of the same card may already have taken the tab over.
     func letGo() {
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
         tab.setStreaming(false)
     }
 

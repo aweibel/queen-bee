@@ -203,7 +203,11 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
     private var didInitialScroll = false
     /// False until the flow's saved cards are on screen, so only cards added later draw in.
     private var didFirstSync = false
-    private var boundsObservation: NSObjectProtocol?
+    /// Notifications the canvas listens to while it is in a window: its own scrolling, and the window and app
+    /// losing the keyboard. Taken away when it leaves the window, so switching flows doesn't pile them up.
+    private var observers: [NSObjectProtocol] = []
+    /// Saves where the canvas is looking a moment after it stops moving.
+    private var placeSave: Task<Void, Never>?
 
     init(controller: FlowController) {
         self.controller = controller
@@ -244,13 +248,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         marquee.delegate = self
         document.addGestureRecognizer(marquee)
 
-        // The zoom pill shows the zoom level, however it was changed: pinch, menu or button.
         scrollView.contentView.postsBoundsChangedNotifications = true
-        boundsObservation = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.publishZoom() }
-        }
 
         observe()
     }
@@ -276,6 +274,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
             controller.viewport = scrollView.documentVisibleRect
             // A card's browser only streams its page while the card is in view.
             cardViews.values.forEach { ($0 as? AgentCardView)?.updateBrowserVisibility() }
+            if didInitialScroll { savePlaceSoon() }
         }
         let zoom = Double(scrollView.magnification)
         if let controller, abs(controller.zoom - zoom) > 0.004 {
@@ -310,6 +309,12 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         linkLayer.liveLinkIDs = controller.liveLinkIDs
         if case .link(let id) = controller.selection { linkLayer.selectedLinkID = id } else { linkLayer.selectedLinkID = nil }
 
+        // Who feeds each card and which outputs each card uses, worked out once rather than once per card.
+        var senders: [String: Set<String>] = [:], usedPorts: [String: Set<String>] = [:]
+        for link in flow.links {
+            senders[link.to, default: []].insert(link.from)
+            usedPorts[link.from, default: []].insert(link.port)
+        }
         var seen = Set<String>()
         for card in flow.cards {
             seen.insert(card.id)
@@ -328,10 +333,10 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
             var context = CardContext()
             context.isSelected = controller.selection.cardIDs.contains(card.id)
             context.isFocused = controller.focusedCardID == card.id
-            context.linkedInputs = flow.links.contains { $0.to == card.id }
-            context.linkedPorts = Set(flow.links(from: card.id).map(\.port))
+            context.linkedInputs = senders[card.id] != nil
+            context.linkedPorts = usedPorts[card.id] ?? []
             context.warning = warnings[card.id]
-            context.inputCount = Set(flow.links(into: card.id).map(\.from)).count
+            context.inputCount = senders[card.id]?.count ?? 0
             context.result = controller.results[card.id]
             if flow.isSubflow == true, context.result == nil {
                 // In a sub-flow the Start and End are its way in and its way out.
@@ -357,6 +362,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
             if card.kind == .agent, let agentView = view as? AgentCardView {
                 let session = controller.session(forCard: card.id)
                 context.sessionState = session.state
+                context.isSlowToStart = session.isSlowToStart
                 context.needsRestart = !controller.settingsAwaitingRestart(forCard: card.id).isEmpty
                 context.isLive = session.state == .working || session.state == .needsYou
                     || (controller.isRunning && context.mark.arrivals > context.mark.passes)
@@ -380,6 +386,7 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
     private func syncGroups(_ flow: Flow, _ controller: FlowController) {
         let groups = flow.groups ?? []
         var folded: Set<String> = []
+        let waiting = groups.isEmpty ? [] : Set(controller.cardsNeedingYou.map(\.id))
         for group in groups {
             guard let frame = GroupFrameView.frame(of: group, in: flow, zoom: scrollView.magnification) else { continue }
             let view: GroupFrameView
@@ -396,7 +403,6 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
             }
             if group.isFolded { folded.formUnion(group.cardIDs) }
             let members = flow.cards.filter { group.cardIDs.contains($0.id) }
-            let waiting = Set(controller.cardsNeedingYou.map(\.id))
             let failed = members.contains { controller.marks[$0.id]?.failed == true }
             let live = members.contains { card in
                 waiting.contains(card.id) || controller.holds.contains { $0.cardID == card.id }
@@ -430,7 +436,12 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         panMonitor = nil
         endHand()
         responderObservation = nil
-        guard let window else { return }
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        guard let window else {
+            savePlace()
+            return
+        }
         if TestHarness.isEnabled, LaunchArguments.floats {
             window.level = .floating
             window.orderFrontRegardless()
@@ -459,18 +470,62 @@ final class CanvasView: NSView, NSGestureRecognizerDelegate {
         }
         // Space let go while another window or app had the keyboard would never be seen here.
         for name in [NSWindow.didResignKeyNotification, NSApplication.didResignActiveNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.endHand() }
-            }
+            })
         }
+        // The zoom pill shows the zoom level, however it was changed: pinch, menu or button.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.publishZoom() }
+        })
+    }
+
+    // MARK: Where the canvas was left
+
+    private var placeID: String? {
+        controller.map { CanvasPlaces.id(flow: $0.flow.id, project: $0.project.root) }
+    }
+
+    private func savePlaceSoon() {
+        placeSave?.cancel()
+        placeSave = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.savePlace()
+        }
+    }
+
+    /// Remembers where the canvas is looking and how far it is zoomed, for the next time this flow is shown.
+    func savePlace() {
+        placeSave?.cancel()
+        placeSave = nil
+        guard didInitialScroll, let placeID else { return }
+        CanvasPlaces.save(.init(origin: scrollView.documentVisibleRect.origin, zoom: scrollView.magnification), for: placeID)
+    }
+
+    /// Puts the canvas back where it was left, if it has been shown before. False for a flow seen for the first time.
+    private func restorePlace() -> Bool {
+        guard let placeID, let place = CanvasPlaces.place(for: placeID) else { return false }
+        let zoom = min(scrollView.maxMagnification, max(Self.fitFloor, place.zoom))
+        // A fit may have left it below the usual floor; publishZoom raises the floor again once it is back above.
+        if zoom < scrollView.minMagnification { scrollView.minMagnification = zoom }
+        scrollView.magnification = zoom
+        document.scroll(place.origin)
+        document.needsDisplay = true
+        cardViews.values.forEach { $0.zoom = zoom }
+        return true
     }
 
     override func layout() {
         super.layout()
         if !didInitialScroll, bounds.width > 0 {
+            if !restorePlace() {
+                // Start with the canvas's origin just clear of the panels floating over its left edge.
+                document.scroll(CGPoint(x: -(AppServices.shared.canvasObstruction.left + 20), y: -(CanvasView.titleBarHeight + 16)))
+            }
             didInitialScroll = true
-            // Start with the canvas's origin just clear of the panels floating over its left edge.
-            document.scroll(CGPoint(x: -(AppServices.shared.canvasObstruction.left + 20), y: -(CanvasView.titleBarHeight + 16)))
         }
         // A canvas that has just appeared, or whose window changed size, hasn't scrolled, so
         // nothing else would tell the zoom control and the map where it is looking.

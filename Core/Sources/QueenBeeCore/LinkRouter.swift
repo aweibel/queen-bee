@@ -62,3 +62,26 @@ public enum LinkRouter {
         return best.point
     }
 }
+
+/// Everything the drawn links of a flow depend on: the links, where each card is and how big, its outputs, and
+/// the groups that fold cards away. Two flows with equal geometry draw the same links, so a change elsewhere,
+/// such as a card's name or instructions, needn't redraw them.
+public struct LinkGeometry: Equatable, Sendable {
+    struct Shape: Equatable, Sendable {
+        var id: String
+        var frame: CGRect
+        var ports: [String]
+    }
+
+    let links: [Link]
+    let cards: [Shape]
+    let groups: [CardGroup]
+
+    public init(_ flow: Flow?) {
+        links = flow?.links ?? []
+        cards = (flow?.cards ?? []).map {
+            Shape(id: $0.id, frame: CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height), ports: ports(of: $0))
+        }
+        groups = flow?.groups ?? []
+    }
+}
