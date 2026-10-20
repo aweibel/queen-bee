@@ -72,6 +72,9 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
 - **Messages typed into a terminal are cleaned.** A hand-off the app types into an agent's terminal has its
   escape sequences and control characters removed first, so text one agent wrote can't press keys in another's
   session.
+- **A terminal doesn't hand over your clipboard.** A program in an agent's terminal can put text on the clipboard
+  (OSC 52 copy), but when it asks to read the clipboard it is told there is nothing there. Only ⌘V pastes, and only
+  into the terminal you press it in.
 - **Updates are signed.** The app only installs an update signed with the project's update key. Releases are signed
   with a Developer ID but are not yet notarized by Apple. The terminal installer refuses an app that isn't signed
   with the project's Developer ID certificate, checked up to Apple's root.

@@ -6,6 +6,34 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Flow › Next Agent Needing You (⌘J) goes from card to card waiting on you, across open flows. The Dock icon shows how many there are.
+- A menu bar item: what is waiting on you, each open flow and whether it is running, and Stop for a run. Click a card to go to it.
+- Edit › Command Palette (⌘K): add any kind of card, run or stop the flow, go to a card by name, and link the selected card to another by name.
+- Each flow's canvas opens where you left it, at the same zoom, also after you reopen the app.
+- An agent still starting after 20 seconds says so on its card, with Retry. It may be asking you something in its terminal, such as whether to trust the folder.
+
+### Changed
+
+- Queen Bee has one window. File › New Window is gone; the Dock icon, a notification or the menu bar item brings the window back after you close it.
+- Quitting while a run is going or an agent is working or waiting on you asks first.
+- Deleting a flow moves it to the Trash, with its run history kept, as a delete from a paired device does.
+- ⌘Z in an agent's terminal or a card's browser no longer undoes changes to the canvas. An Undo, Redo or delete that would remove an agent in the middle of its work asks first.
+- A card's new name in its settings is kept when you click or tab away, not only on Return. The Log tab stays put while you scroll up to read it.
+
+### Fixed
+
+- An agent whose conversation Claude Code summarised mid-task no longer looks idle, so a hand-off isn't typed into it while it works.
+- An agent whose folder was changed starts a new conversation in the new folder instead of failing to resume every time it starts.
+- If your shell's startup files take more than 10 seconds to load, Queen Bee goes on without them and says so, instead of never starting its agents.
+- Downloading the browser for agent cards no longer holds up the app, and a failed download no longer leaves its file open.
+- The canvas no longer slows down with every switch of flow, and with many cards it redraws less. A card's browser stops streaming while the window is hidden or covered. While agents run, macOS no longer slows the app down in the background.
+
+### Security
+
+- A program running in an agent's terminal can no longer read your clipboard by asking the terminal for it (OSC 52). Pasting with ⌘V works as before.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added
