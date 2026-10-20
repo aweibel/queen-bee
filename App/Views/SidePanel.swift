@@ -159,7 +159,7 @@ struct RunPicker: View {
             ForEach(controller.runs.reversed()) { run in
                 let isShown = controller.viewedRunID == run.id || (controller.viewedRunID == nil && run.id == controller.runs.last?.id)
                 Toggle(isOn: Binding(get: { isShown }, set: { _ in controller.view(run: run.id) })) {
-                    Text("\(Self.label(for: run.started)) · \(run.outcome.rawValue) · \(run.handOffs) \(run.handOffs == 1 ? "hand-off" : "hand-offs")")
+                    Text("\(Self.label(for: run.started)) · \(run.summary) · \(run.handOffs) \(run.handOffs == 1 ? "hand-off" : "hand-offs")")
                     Text(run.command)
                 }
             }

@@ -6,6 +6,28 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Run history says how each run ended: finished, ended without an answer, gave up after the most tries, stopped at the hand-off limit, failed or stopped. So does the notice when a run ends.
+- Two more warnings on the canvas: an And whose inputs are on different sides of one If or Switch, which can never hear from all of them, and a Loop with nothing on Done.
+- The orchestrator's reference now states the limits a run keeps: 50 hand-offs, a Script card's 10 minutes and last 20,000 characters, a condition's 60 seconds, and how Or and Flow cards behave.
+
+### Changed
+
+- Stop ends a run at once, even while a condition is being judged, and interrupts the run's agents that are in the middle of a turn, so they stop spending on it.
+- A Flow card that reaches a sub-flow that is already running waits for that run to end and then runs it, instead of failing.
+
+### Fixed
+
+- An agent the run isn't waiting on no longer stops the run when its session ends, is restarted or its card is deleted. When the run is waiting on it, the log names it and says why.
+- An Or card inside a loop passes on the first reply of every round, not only the first round's.
+- A condition that takes longer than 60 seconds to judge counts as No and says so, instead of holding up the run, and a long message is no longer too big to be judged.
+- The hand-off that would pass a run's limit of 50 is no longer typed into an agent after the run has stopped.
+- Retry and "run from here" give a card all of its message, not the first 8,000 characters.
+- A reply an agent finishes for a run that has ended is not passed on in the next run.
+- A flow's file is flushed to the disk before it replaces the old one, and the version before is kept, so a power cut can't leave an empty flow.
+- A run's history is never overwritten by an older copy, and the last run's cost is recorded even when the flow is closed straight after it.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added

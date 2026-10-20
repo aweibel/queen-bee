@@ -35,6 +35,8 @@ nonisolated struct RunHistory: Codable, Sendable {
     // Added after the first release that kept history, so a file from then still loads.
     var messages: [String: [LinkMessage]]?
     var runs: [RunRecord]?
+    /// The whole text of the latest run's messages that `messages` keeps cut short, by message id.
+    var wholeMessages: [String: String]?
 }
 
 /// One open flow: the graph, its sessions, and its runs. Every change to the graph goes
@@ -96,8 +98,24 @@ final class FlowController: ToolHost {
     /// The card whose "run from here" box is open in the settings panel.
     var runFromCardID: String?
     @ObservationIgnored private var currentRun: (id: String, started: Date, command: String)?
-    /// How many runs are kept, and how much of each message.
-    private static let keptRuns = 20, runsWithMessages = 3, keptMessageLength = 8_000, keptMessagesPerLink = 10
+    /// How many runs are kept, and for how many of them what links carried. How much of each message is kept is
+    /// `CarriedMessages`'s to say.
+    private static let keptRuns = 20, runsWithMessages = 3
+    /// The whole text of the messages in `messages` that are kept there cut short, by message id: what Retry and
+    /// "run from here" give a card again.
+    @ObservationIgnored private var wholeMessages: [UUID: String] = [:]
+    /// Lets the Flow cards that run this flow take turns: a flow has one run at a time.
+    @ObservationIgnored let subflowTurns = RunTurns()
+    /// The flows the run that is going is inside, by id, when a Flow card began it. Empty for a run begun here.
+    @ObservationIgnored private var runInside: Set<String> = []
+    /// Flow cards waiting for a run of this flow to end, by run id.
+    @ObservationIgnored private var endWaiters: [String: [CheckedContinuation<RunRecord?, Never>]] = [:]
+    /// The run each agent's turn under way is working for, read off the hand-off that began the turn.
+    @ObservationIgnored private var turnRun: [String: String] = [:]
+    /// Set when the flow has been deleted, so nothing writes its history back.
+    @ObservationIgnored private var isDeleted = false
+    /// Every flow's history is written through this, so an older save never lands on top of a newer one.
+    private static let historyWriter = LatestWins()
     /// Messages waiting at Approval and Script cards in the run that is going.
     private(set) var holds: [PendingHold] = []
     /// The work behind each hold that runs by itself: a script's command, or a Flow card's inner run.
@@ -356,6 +374,8 @@ final class FlowController: ToolHost {
         linkPasses = history.linkPasses
         handOffs = history.handOffs
         messages = history.messages ?? [:]
+        for (id, text) in history.wholeMessages ?? [:] { if let id = UUID(uuidString: id) { wholeMessages[id] = text } }
+        wholeMessages = CarriedMessages.kept(wholeMessages, for: messages)
         runs = history.runs ?? []
         // What was loaded is earlier runs; the orchestrator is only told about new ones.
         runLogStart = log.count
@@ -370,21 +390,26 @@ final class FlowController: ToolHost {
         }
     }
 
-    private func saveHistory() {
+    /// `evenIfClosed` is for work that finishes after the flow was closed and still belongs in its history, such as
+    /// the last run's cost. Nothing is written for a flow that has been deleted.
+    private func saveHistory(evenIfClosed: Bool = false) {
         historyTask?.cancel()
         historyTask = nil
-        guard !isClosed else { return }
+        guard !isDeleted, evenIfClosed || !isClosed else { return }
         // What is saved as "now" is always the latest run, even while an earlier one is on show.
         let latest = viewedRunID == nil ? nil : runs.last
+        let latestMessages = latest?.messages ?? messages
+        var whole: [String: String] = [:]
+        for (id, text) in CarriedMessages.kept(wholeMessages, for: latestMessages) { whole[id.uuidString] = text }
         let history = RunHistory(log: log, results: latest?.results ?? results, marks: latest?.marks ?? marks,
                                  linkPasses: latest?.linkPasses ?? linkPasses, handOffs: latest?.handOffs ?? handOffs,
-                                 messages: latest?.messages ?? messages, runs: runs)
-        // Encoding and writing can take a while for a long log, so neither holds up the canvas.
+                                 messages: latestMessages, runs: runs, wholeMessages: whole.isEmpty ? nil : whole)
+        // Encoding and writing can take a while for a long log, so neither holds up the canvas. The writes can
+        // finish in any order, so each takes a ticket now and one never lands on top of a newer one.
         let url = historyURL
+        let ticket = Self.historyWriter.ticket()
         Task.detached(priority: .utility) {
-            guard let data = try? JSONEncoder().encode(history) else { return }
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
+            await FlowController.historyWriter.write({ try JSONEncoder().encode(history) }, ticket: ticket, to: url)
         }
     }
 
@@ -429,14 +454,15 @@ final class FlowController: ToolHost {
         for (key, value) in read where usage[key] != value { usage[key] = value }
     }
 
-    /// A moment after a run ends, once Claude Code has written its totals, the run is given its share.
+    /// A moment after a run ends, once Claude Code has written its totals, the run is given its share. That is
+    /// still done when the flow has been closed meanwhile, as it often is straight after a run.
     private func recordUsage(forRun id: String) {
         let before = usageAtRunStart
         Task {
             // Long enough for a sub-flow that ended just before this run to have costed its own.
             try? await Task.sleep(for: .seconds(4))
             await self.refreshUsage()
-            guard !self.isClosed, let index = self.runs.firstIndex(where: { $0.id == id }) else { return }
+            guard !self.isDeleted, let index = self.runs.firstIndex(where: { $0.id == id }) else { return }
             var shares: [String: Usage] = [:]
             for (key, now) in self.usage where key != Self.orchestratorKey {
                 let share = now.since(before[key] ?? Usage())
@@ -451,7 +477,7 @@ final class FlowController: ToolHost {
                 if !share.isZero { shares[card.id] = share }
             }
             self.runs[index].usage = shares
-            self.saveHistory()
+            self.saveHistory(evenIfClosed: true)
         }
     }
 
@@ -482,6 +508,7 @@ final class FlowController: ToolHost {
         linkPasses.removeAll()
         liveLinks.removeAll()
         messages.removeAll()
+        wholeMessages.removeAll()
         handOffs = 0
         viewedRunID = nil
         runLogStart = log.count
@@ -491,20 +518,23 @@ final class FlowController: ToolHost {
     private func finishRecord(_ output: RunOutput) {
         guard let run = currentRun else { return }
         currentRun = nil
-        let outcome: RunRecord.Outcome = marks.values.contains(where: \.failed) ? .failed
-            : output.log.contains { $0.hasPrefix("Run stopped") } ? .stopped : .finished
-        runs.append(RunRecord(id: run.id, started: run.started, ended: Date(), outcome: outcome, command: run.command,
-                              log: Array(log.dropFirst(runLogStart)), results: results, marks: marks, linkPasses: linkPasses,
-                              messages: messages, handOffs: handOffs))
+        let ending = output.ending
+        let outcome: RunRecord.Outcome = marks.values.contains(where: \.failed) ? .failed : ending?.outcome ?? .finished
+        let record = RunRecord(id: run.id, started: run.started, ended: Date(), outcome: outcome, command: run.command,
+                               log: Array(log.dropFirst(runLogStart)), results: results, marks: marks, linkPasses: linkPasses,
+                               messages: messages, handOffs: handOffs, ending: ending)
+        runs.append(record)
         if runs.count > Self.keptRuns { runs.removeFirst(runs.count - Self.keptRuns) }
         // The messages a link carried are kept for the newest few runs only; older runs keep their path and answers.
         for index in runs.indices.dropLast(Self.runsWithMessages) where !runs[index].messages.isEmpty { runs[index].messages = [:] }
         recordUsage(forRun: run.id)
+        endWaiters.removeValue(forKey: run.id)?.forEach { $0.resume(returning: record) }
     }
 
-    /// The last message that reached a card in the run on show: what "run from here" starts with.
+    /// The last message that reached a card in the run on show, whole: what "run from here" and Retry start with.
     func lastMessage(into cardID: String) -> LinkMessage? {
         flow.links(into: cardID).compactMap { messages[$0.id]?.last }.max { $0.date < $1.date }
+            .map { CarriedMessages.whole($0, from: wholeMessages) }
     }
 
     /// A paired device's Clear: the log and the earlier runs go, but for the lines that say what a device did or that
@@ -528,6 +558,7 @@ final class FlowController: ToolHost {
 
     /// The flow is being deleted: its history goes with it.
     func forgetHistory() {
+        isDeleted = true
         historyTask?.cancel()
         historyTask = nil
         try? FileManager.default.removeItem(at: historyURL)
@@ -571,6 +602,10 @@ final class FlowController: ToolHost {
         stallNotice?.cancel()
         currentRun = nil
         isRunning = false
+        // A Flow card waiting on this flow's run hears that it ended with nothing to pass on.
+        endWaiters.values.joined().forEach { $0.resume(returning: nil) }
+        endWaiters.removeAll()
+        subflowTurns.somethingEnded()
         if let engine { Task { _ = await engine.stop() } }
         scheduleTask?.cancel()
         watchers.values.forEach { $0.watcher.stop() }
@@ -698,8 +733,10 @@ final class FlowController: ToolHost {
     private func reconcile() {
         let agentIDs = Set(flow.cards.filter { $0.kind == .agent }.map(\.id))
         for (id, session) in sessions where id != Self.orchestratorKey && !agentIDs.contains(id) {
+            let name = session.launched?.name
             session.terminate()
             sessions[id] = nil
+            agentStopped(id, name: name, reason: "its card was deleted")
         }
         heldBack.formIntersection(agentIDs)
         // A card that was deleted, or had its Browser switch turned off, gives its tab back.
@@ -1108,18 +1145,31 @@ final class FlowController: ToolHost {
     /// A terminal that has run a process doesn't take a second one, so a restart gets a new terminal.
     private func freshSession(for id: String) -> TerminalSession {
         if let old = sessions[id], old.state != .notStarted {
+            let wasLive = old.isLive
             old.terminate()
             sessions[id] = nil
             sessionGeneration += 1
+            // A run waiting on this agent will never hear the reply its old session owed.
+            if wasLive, id != Self.orchestratorKey { agentStopped(id, reason: "it was restarted") }
         }
         return session(forCard: id)
     }
 
     private func sessionExited(_ id: String) {
-        guard id != Self.orchestratorKey, isRunning, let engine else { return }
-        let name = flow.card(id)?.name ?? id
-        markFailed(id)
-        Task { self.absorb(await engine.agentFailed(flow: self.flow, cardID: id, reason: "\(name)'s session exited"), sender: nil) }
+        guard id != Self.orchestratorKey else { return }
+        agentStopped(id, reason: "its session ended")
+    }
+
+    /// An agent's session ended, was ended, or its turn failed. That stops the run only if the run is waiting on the
+    /// agent: the engine decides. `name` is for a card that has just been deleted.
+    private func agentStopped(_ id: String, name: String? = nil, reason: String) {
+        guard isRunning, let engine else { return }
+        turnRun[id] = nil
+        Task {
+            let output = await engine.agentFailed(flow: self.flow, cardID: id, name: name, reason: reason)
+            if output.finished { self.markFailed(id) }
+            self.absorb(output, sender: nil)
+        }
     }
 
     private func readyEngine() -> Engine? {
@@ -1190,15 +1240,16 @@ final class FlowController: ToolHost {
         switch event {
         case "SessionStart":
             pluginSpoke.remove(who)
+        case "UserPromptSubmit":
+            // A turn begun by a hand-off works for the run the hand-off came from, which may have ended by the
+            // time the turn does.
+            turnRun[who] = Engine.runID(inHandOff: payload["prompt"]?.stringValue ?? "")
         case "Stop":
             let reply = payload["last_assistant_message"]?.stringValue ?? ""
             session.lastReply = reply
             routeIfPluginIsSilent(who, reply: reply)
         case "StopFailure":
-            guard isRunning, let engine else { return }
-            let name = flow.card(who)?.name ?? who
-            markFailed(who)
-            Task { self.absorb(await engine.agentFailed(flow: self.flow, cardID: who, reason: "\(name)'s turn ended with an API error"), sender: nil) }
+            agentStopped(who, reason: "its turn ended with an API error")
         default:
             break
         }
@@ -1212,7 +1263,8 @@ final class FlowController: ToolHost {
             try? await Task.sleep(for: .seconds(3))
             guard self.isRunning, !self.pluginSpoke.contains(who) else { return }
             self.append("\(self.flow.card(who)?.name ?? who)'s reply didn't come through the usual way, so Queen Bee passed it on itself")
-            self.absorb(await engine.agentReplied(flow: self.flow, cardID: who, text: reply), sender: nil)
+            let forRun = self.turnRun.removeValue(forKey: who)
+            self.absorb(await engine.agentReplied(flow: self.flow, cardID: who, text: reply, forRun: forRun), sender: nil)
         }
     }
 
@@ -1225,7 +1277,9 @@ final class FlowController: ToolHost {
         pluginSpoke.insert(who)
         sessions[who]?.lastReply = answer
         guard let engine = readyEngine() else { return [] }
-        return absorb(await engine.agentReplied(flow: flow, cardID: who, text: answer, waitingOnAnswer: asked), sender: who)
+        // Each turn is routed once, so what is known of the run it worked for goes with it.
+        let forRun = turnRun.removeValue(forKey: who)
+        return absorb(await engine.agentReplied(flow: flow, cardID: who, text: answer, waitingOnAnswer: asked, forRun: forRun), sender: who)
     }
 
     /// The plugin reports how its sends went. A hand-off that didn't arrive is typed in.
@@ -1317,6 +1371,8 @@ final class FlowController: ToolHost {
     struct RunStart {
         var began: Bool
         var status: String
+        /// The run that began.
+        var runID: String?
     }
 
     @discardableResult
@@ -1325,14 +1381,22 @@ final class FlowController: ToolHost {
     }
 
     /// `note` is a line for the run's log saying who started it, when that wasn't the person at this Mac.
-    func start(command: String? = nil, startCardID: String? = nil, levelsLeft given: Int? = nil, note: String? = nil) async -> RunStart {
+    /// `inside` is the flows a Flow card's run of this one is inside.
+    func start(command: String? = nil, startCardID: String? = nil, levelsLeft given: Int? = nil, inside: Set<String> = [],
+               note: String? = nil) async -> RunStart {
         guard let engine = readyEngine() else { return RunStart(began: false, status: services.problem ?? "Claude Code isn't ready yet.") }
         runsStarting += 1
-        defer { runsStarting -= 1 }
+        defer {
+            runsStarting -= 1
+            subflowTurns.somethingEnded()
+        }
         isClosed = false
         // Run directly, a flow goes by its own place under the flow at the top. Run by a Flow
         // card, it is handed what is left of the run's allowance.
-        if !isRunning { runLevelsLeft = given ?? levelsLeft }
+        if !isRunning {
+            runLevelsLeft = given ?? levelsLeft
+            runInside = inside
+        }
         // With several Start cards, the one that is selected is the one meant.
         var startCardID = startCardID
         if startCardID == nil, case .card(let id) = selection, flow.card(id)?.kind == .start { startCardID = id }
@@ -1347,7 +1411,8 @@ final class FlowController: ToolHost {
             if let note { append(note, kept: true) }
         }
         absorb(output, sender: nil)
-        return RunStart(began: began, status: output.log.last ?? (output.runID.map { "Run \($0) started" } ?? "Nothing to run"))
+        return RunStart(began: began, status: output.log.last ?? (output.runID.map { "Run \($0) started" } ?? "Nothing to run"),
+                        runID: began ? output.runID : nil)
     }
 
     /// Starts a run part-way through: `message` arrives at the card as if a link had brought it.
@@ -1364,8 +1429,12 @@ final class FlowController: ToolHost {
         }
         isClosed = false
         runLevelsLeft = levelsLeft
+        runInside = []
         runsStarting += 1
-        defer { runsStarting -= 1 }
+        defer {
+            runsStarting -= 1
+            subflowTurns.somethingEnded()
+        }
         let output = await engine.start(flow: flow, at: cardID, message: message, fromName: sender)
         if let id = output.runID {
             clearForRun()
@@ -1373,7 +1442,7 @@ final class FlowController: ToolHost {
             if let note { append(note, kept: true) }
         }
         absorb(output, sender: nil)
-        return RunStart(began: output.runID != nil, status: output.log.last ?? "Nothing to run")
+        return RunStart(began: output.runID != nil, status: output.log.last ?? "Nothing to run", runID: output.runID)
     }
 
     /// Whether Retry is offered on a card: the last run stopped there, and a message reached it.
@@ -1409,7 +1478,8 @@ final class FlowController: ToolHost {
             if let file = result.saveTo, !file.isEmpty { save(result.text, to: file, card: result.cardName) }
         }
         var forPlugin: [(to: String, text: String)] = []
-        for delivery in output.deliveries {
+        // A run that has ended hands nothing more to anyone.
+        for delivery in output.finished ? [] : output.deliveries {
             let target = session(forCard: delivery.toCardID)
             if !target.isLive { startSession(forCard: delivery.toCardID) }
             let live = session(forCard: delivery.toCardID)
@@ -1424,9 +1494,12 @@ final class FlowController: ToolHost {
             }
         }
         for travel in output.travels {
-            var carried = messages[travel.linkID] ?? []
-            carried.append(LinkMessage(date: Date(), from: travel.fromName, text: String(travel.text.prefix(Self.keptMessageLength))))
-            messages[travel.linkID] = Array(carried.suffix(Self.keptMessagesPerLink))
+            CarriedMessages.add(travel.text, from: travel.fromName, at: Date(), link: travel.linkID, to: &messages, whole: &wholeMessages)
+        }
+        // Agents still working on a run that has ended stop, so they spend nothing more on it.
+        for id in output.leftWaiting {
+            sessions[id]?.interrupt()
+            turnRun[id] = nil
         }
         output.holds.forEach(take)
         if let asking = output.asking {
@@ -1446,9 +1519,10 @@ final class FlowController: ToolHost {
             holds.removeAll()
             lastRunEnded = Date()
             finishRecord(output)
+            subflowTurns.somethingEnded()
             notifyOrchestrator(of: output)
             let stopped = marks.values.contains(where: \.failed)
-            Notifier.post(title: stopped ? "\(flow.name) stopped" : "\(flow.name) finished",
+            Notifier.post(title: "\(flow.name) \(stopped ? "stopped" : (output.ending ?? .finishedWithAnswer).label)",
                           body: log.last?.text ?? "", flowID: flow.id, cardID: nil)
         } else if output.runID != nil {
             isRunning = true
@@ -1494,20 +1568,19 @@ final class FlowController: ToolHost {
         guard let inner, inner !== self else {
             return resolve(hold.id, port: "fail", text: "The flow this card runs is no longer in the project.")
         }
-        // Whatever a flow's file says, a run never goes deeper than the flow at the top allows.
-        guard runLevelsLeft >= 1 else {
-            return resolve(hold.id, port: "fail", text: "\(inner.flow.name) wasn't run: it is deeper than the sub-flow limit of the flow this run started from.")
+        // Whatever a flow's file says, a run never goes deeper than the flow at the top allows, and never into a
+        // flow it is already inside, which would wait on itself for ever.
+        let inside = runInside.union([flow.id])
+        if let refusal = subflowRefusal(running: inner.flow.id, named: inner.flow.name, levelsLeft: runLevelsLeft, inside: inside) {
+            return resolve(hold.id, port: "fail", text: refusal)
         }
-        // This also stops two flows that run each other from going round for ever.
-        guard !inner.isRunning else {
-            return resolve(hold.id, port: "fail", text: "\(inner.flow.name) was already running.")
+        let levels = runLevelsLeft - 1
+        if inner.isRunning || inner.isStartingRun || inner.subflowTurns.isTaken {
+            append("\(inner.flow.name) is already running, so \(flow.card(hold.cardID)?.name ?? "the Flow card") waits for that run to end")
         }
         holdTasks[hold.id] = Task {
-            let answer = await withTaskCancellationHandler {
-                await inner.runToEnd(command: hold.text, levelsLeft: self.runLevelsLeft - 1)
-            } onCancel: {
-                Task { @MainActor in await inner.stop() }
-            }
+            // Cancelling this stops the inner run, if it has begun: see `runToEnd`.
+            let answer = await inner.runToEnd(command: hold.text, levelsLeft: levels, inside: inside)
             guard !Task.isCancelled else { return }
             self.holdTasks[hold.id] = nil
             self.resolve(hold.id, port: answer.finished ? "done" : "fail", text: answer.text)
@@ -1604,19 +1677,33 @@ final class FlowController: ToolHost {
     /// The Start cards a run could begin at, for choosing between them.
     var startCards: [Card] { flow.cards.filter { $0.kind == .start } }
 
-    /// Runs the flow and waits for the run to end. The answer is what reached its End cards.
-    func runToEnd(command: String, levelsLeft: Int) async -> (finished: Bool, text: String) {
-        let before = runs.last?.id
-        let status = await run(command: command, levelsLeft: levelsLeft)
-        while isRunning, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(300)) }
+    /// Runs the flow for a Flow card and waits for the run to end. The answer is what reached its End cards.
+    /// A flow has one run at a time: this waits its turn behind other Flow cards running it, and behind a run
+    /// started some other way. Cancelling it gives up its place, or stops the run it began.
+    func runToEnd(command: String, levelsLeft: Int, inside: Set<String>) async -> (finished: Bool, text: String) {
+        guard await subflowTurns.take(whenFree: { !self.isRunning && !self.isStartingRun }) else { return (false, "The run was stopped.") }
+        defer { subflowTurns.release() }
+        let started = await start(command: command, levelsLeft: levelsLeft, inside: inside)
+        guard started.began, let id = started.runID else { return (false, started.status) }
+        let ended = await withTaskCancellationHandler {
+            await runEnded(id)
+        } onCancel: {
+            Task { @MainActor in if self.currentRun?.id == id { await self.stop() } }
+        }
         if Task.isCancelled { return (false, "The run was stopped.") }
-        guard let record = runs.last, record.id != before else { return (false, status) }
+        guard let record = ended else { return (false, "\(flow.name) was closed before its run ended.") }
         let answers = flow.cards.filter { $0.kind == .end }.compactMap { record.results[$0.id] }
         // A run that ended without anything reaching an Output has no answer to hand back.
         guard record.outcome == .finished, !answers.isEmpty else {
             return (false, answers.isEmpty ? "\(flow.name) ended without an answer reaching its Output. \(record.log.last?.text ?? "")" : answers.joined(separator: "\n\n"))
         }
         return (true, answers.joined(separator: "\n\n"))
+    }
+
+    /// The record of a run of this flow, once it has ended. Nil if the flow is closed first.
+    private func runEnded(_ id: String) async -> RunRecord? {
+        guard currentRun?.id == id else { return runs.last { $0.id == id } }
+        return await withCheckedContinuation { endWaiters[id, default: []].append($0) }
     }
 
     /// Lays the flow out left to right in the order its links run, then shows all of it.
@@ -1824,7 +1911,8 @@ final class FlowController: ToolHost {
     private func notifyOrchestrator(of output: RunOutput) {
         guard flow.notifyOrchestrator, orchestrator.isLive else { return }
         let lines = log.dropFirst(runLogStart).suffix(12).map { "- \($0.text)" }.joined(separator: "\n")
-        var text = "[Queen Bee · notice] The run\(output.runID.map { " \($0)" } ?? "") has ended. This is information from the app, not a new request.\n\nWhat happened:\n\(lines)"
+        let ended = runs.last.map { " It \($0.summary)." } ?? ""
+        var text = "[Queen Bee · notice] The run\(output.runID.map { " \($0)" } ?? "") has ended.\(ended) This is information from the app, not a new request.\n\nWhat happened:\n\(lines)"
         for result in output.results {
             text += "\n\nFinal answer at \(result.cardName):\n\(result.text.prefix(4000))"
         }

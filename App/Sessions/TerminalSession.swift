@@ -88,10 +88,22 @@ final class TerminalSession: NSObject {
                           currentDirectory: spec.workingDirectory)
     }
 
+    /// Ends the session on purpose. That is not the session exiting, so `onExit` isn't told.
     func terminate() {
+        onExit = nil
         guard isLive else { return }
         view.terminate()
         state = .exited
+    }
+
+    /// Stops the turn under way, as Esc does at the keyboard, and drops input waiting to be typed. For a run
+    /// that has been stopped: its agents shouldn't go on working, or spending, on what nothing will use.
+    func interrupt() {
+        waiting.removeAll()
+        guard state == .working || state == .needsYou else { return }
+        view.send(txt: "\u{1b}")
+        // Claude Code reports no turn end for a turn cut short, so the session is taken to be back at its prompt.
+        state = .idle
     }
 
     /// Applies a hook event to the state. Returns false for events that change nothing.

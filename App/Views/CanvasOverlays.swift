@@ -488,7 +488,7 @@ struct CostBreakdown: View {
                 part("Recent runs", trailing: nil) {
                     ForEach(Array(costed)) { run in
                         HStack {
-                            Text("\(RunPicker.label(for: run.started)) · \(run.outcome.rawValue)").font(.dsMono(Theme.Size.caption))
+                            Text("\(RunPicker.label(for: run.started)) · \(run.summary)").font(.dsMono(Theme.Size.caption))
                             Spacer()
                             Text(run.cost.price).font(.dsMono(Theme.Size.caption, .medium))
                         }

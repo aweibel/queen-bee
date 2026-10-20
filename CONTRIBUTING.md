@@ -92,9 +92,10 @@ Bugs:
   (`App/Sessions/TerminalSession.swift`, `flushSoon`).
 - **A Loop set above 3 tries stops early.** Links default to 3 passes, so the run ends at the link's limit before
   the Loop card gives up (`Core/Sources/QueenBeeCore/Engine.swift`, `send`).
-- **A reply from a stopped run can leak into the next run**, once the same agent has been handed a message
-  there. Replies carry no run identity. The engine only checks that the agent is owed a reply
-  (`Core/Sources/QueenBeeCore/Engine.swift`, `agentReplied`).
+- **A reply from a stopped run can still leak into the next run** when the app never saw the hand-off that
+  began the turn. Stop interrupts the run's agents, and a turn begun by a hand-off of another run is dropped,
+  but the run is read off the prompt the `UserPromptSubmit` hook reports, and a turn without one is passed on
+  (`App/FlowController.swift`, `turnRun`; `Core/Sources/QueenBeeCore/Engine.swift`, `agentReplied`).
 - **Stop Its Agents also stops the flow's schedule** until the flow is opened again.
 - **Schedules stay on through some orchestrator edits:** changes inside a sub-flow, a Prompt card added after
   Start, or Start linked to a different agent.
