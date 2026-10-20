@@ -5,10 +5,18 @@ enum ConnectionStatus: Equatable {
     case connected(String)
     case reconnecting
     case macNotFound
+    /// The Mac was there and turned this device's key down, several times running. The app goes on trying.
+    case cantConnect
+    /// This device's key can't be read until it is unlocked.
+    case locked
 
     @MainActor init(_ client: RemoteClient) {
         if client.state == .connected {
             self = .connected(client.mac?.macName ?? "your Mac")
+        } else if client.keyUnreadable {
+            self = .locked
+        } else if client.keyInDoubt {
+            self = .cantConnect
         } else {
             // Not being connected is only "reconnecting" until the Mac has been looked for and not found.
             self = client.macNotFound ? .macNotFound : .reconnecting
@@ -20,8 +28,16 @@ enum ConnectionStatus: Equatable {
         case .connected(let mac): "Connected to \(mac)"
         case .reconnecting: "Reconnecting"
         case .macNotFound: "Mac not found"
+        case .cantConnect: "Can't connect to your Mac — retrying"
+        case .locked: "Unlock this device to connect"
         }
     }
+
+    /// Whether there is more to say under the pill than fits in it.
+    var hasHelp: Bool { self == .macNotFound || self == .cantConnect }
+
+    /// What to say under "Can't connect".
+    static let cantConnectHelp = "Your Mac didn't accept this device's key. It may have been removed on your Mac, or the connection was cut off. Queen Bee keeps trying. If you removed this device on your Mac, pair it again."
 
     var isConnected: Bool {
         if case .connected = self { true } else { false }
@@ -33,9 +49,10 @@ enum ConnectionStatus: Equatable {
     /// tell it so, and from here that looks the same as a Mac that isn't there.
     static let removedHelp = "If you removed this device on your Mac, open Settings here, choose “Forget this Mac” and pair again."
 
-    /// What to say under "Mac not found".
+    /// What to say under "Mac not found", or "Can't connect".
     @MainActor static func help(_ client: RemoteClient) -> String {
-        client.macLongNotFound ? "\(macNotFoundHelp) \(removedHelp)" : macNotFoundHelp
+        if ConnectionStatus(client) == .cantConnect { return cantConnectHelp }
+        return client.macLongNotFound ? "\(macNotFoundHelp) \(removedHelp)" : macNotFoundHelp
     }
 }
 
@@ -60,14 +77,14 @@ struct ConnectionPill: View {
         }
         .animation(Theme.Motion.standard, value: status)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(status == .macNotFound ? "\(status.text). \(ConnectionStatus.help(client))" : status.text)
+        .accessibilityLabel(status.hasHelp ? "\(status.text). \(ConnectionStatus.help(client))" : status.text)
     }
 
     private func dot(for status: ConnectionStatus) -> UIColor {
         switch status {
         case .connected: Theme.passInk
-        case .reconnecting: Theme.live
-        case .macNotFound: Theme.failInk
+        case .reconnecting, .locked: Theme.live
+        case .macNotFound, .cantConnect: Theme.failInk
         }
     }
 }

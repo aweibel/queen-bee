@@ -102,6 +102,11 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
     // Note
     public var text: String?
 
+    /// Only ever set on a paired device: the kind a newer Mac gave this card, which this app doesn't know. The card
+    /// is shown as a note saying to update the app, and can't be changed or copied from the device. See
+    /// `Remote.read(fromMac:)`.
+    public var unknownKind: String?
+
     public init(id: String, kind: CardKind, name: String, x: Double, y: Double, width: Double, height: Double) {
         self.id = id; self.kind = kind; self.name = name
         self.x = x; self.y = y; self.width = width; self.height = height

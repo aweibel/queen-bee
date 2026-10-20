@@ -28,8 +28,58 @@ import Testing
         #expect(LinkVerdict.refused(text) == .needsUpdate(text))
     }
 
-    @Test func aKeyTheMacTurnedDownMeansPairAgain() {
-        #expect(LinkVerdict.failed(LinkError("bad key", keyRefused: true)) == .mustPairAgain(LinkVerdict.keyRefusedText))
+    /// A handshake that failed may have been cut off, or made with something copying the Mac's name. It is never
+    /// on its own a reason to stop trying.
+    @Test func aKeyTheMacTurnedDownMeansTryAgain() {
+        #expect(LinkVerdict.failed(LinkError("bad key", keyRefused: true)) == .tryAgain)
+    }
+
+    @Test func onlySeveralRefusalsInARowPutTheKeyInDoubt() {
+        var doubt = KeyDoubt()
+        let refused = LinkError("bad key", keyRefused: true)
+        doubt.note(refused)
+        doubt.note(refused)
+        #expect(!doubt.doubtsKey)
+        // Something else in between starts the count again: the Mac wasn't there to judge the key.
+        doubt.note(LinkError("timed out"))
+        doubt.note(refused)
+        doubt.note(refused)
+        #expect(!doubt.doubtsKey)
+        // Giving up from here says nothing either way.
+        doubt.note(CancellationError())
+        doubt.note(refused)
+        #expect(doubt.doubtsKey)
+        // Let in, and the doubt is gone.
+        doubt.note(nil)
+        #expect(!doubt.doubtsKey && doubt.refusals == 0)
+    }
+
+    @Test func theListenerThatLetTheDeviceInBeforeIsTriedFirst() {
+        let found = ["Mac (2)", "Mac", "address"]
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "Mac") == ["Mac", "Mac (2)", "address"])
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "address") == ["address", "Mac (2)", "Mac"])
+        // Nothing known, or nothing that matches: as they came, every one of them.
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: nil) == found)
+        #expect(LinkCandidates.ordered(found, name: { $0 }, preferring: "Gone") == found)
+    }
+
+    @Test func aKeyInDoubtIsStillTriedSlowly() {
+        #expect(LinkVerdict.wait(beforeAttempt: 0, doubtingKey: true) == 30)
+        #expect(LinkVerdict.wait(beforeAttempt: 9, doubtingKey: true) == 30)
+    }
+
+    /// One that drops within seconds of being let in, every time, must not be made again every second.
+    @Test func onlyAConnectionThatLastedStartsTheWaitsAgain() {
+        #expect(!LinkVerdict.resetsWaits(afterConnectedFor: 0.5))
+        #expect(!LinkVerdict.resetsWaits(afterConnectedFor: 9))
+        #expect(LinkVerdict.resetsWaits(afterConnectedFor: 10))
+        #expect(LinkVerdict.resetsWaits(afterConnectedFor: 3_600))
+    }
+
+    @Test func onlyTheErrorsOfTwoDifferentKeysCountAsARefusal() {
+        for status: OSStatus in [-9846, -9820, -9845, -9821, -9825, -9864] { #expect(LinkError.isKeyRefusal(tlsStatus: status)) }
+        // Closed part-way, cut off, refused outright, or a handshake that simply failed.
+        for status: OSStatus in [-9806, -9805, -9816, -9844, -9824, errSecSuccess] { #expect(!LinkError.isKeyRefusal(tlsStatus: status)) }
     }
 
     @Test func anythingElseGoingWrongMeansTryAgain() {
@@ -39,7 +89,7 @@ import Testing
     }
 
     @Test func retriesBackOffToEightSeconds() {
-        #expect((0..<6).map(LinkVerdict.wait(beforeAttempt:)) == [1, 2, 4, 8, 8, 8])
+        #expect((0..<6).map { LinkVerdict.wait(beforeAttempt: $0) } == [1, 2, 4, 8, 8, 8])
     }
 
     @Test func aListenerThatDoesNotAnswerTwiceRunningMeansTheMacIsOutOfReach() {
@@ -52,7 +102,7 @@ import Testing
         let port = try await listener.start { server in Task { try? await server.start() } }
         let wrongKey = await failure(to: port, key: LinkSecurity.randomKey())
         #expect(wrongKey?.keyRefused == true)
-        #expect(wrongKey.map(LinkVerdict.failed) == .mustPairAgain(LinkVerdict.keyRefusedText))
+        #expect(wrongKey.map(LinkVerdict.failed) == .tryAgain)
 
         listener.stop()
         try await Task.sleep(for: .milliseconds(200))

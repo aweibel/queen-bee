@@ -197,7 +197,9 @@ You need Xcode 27 and xcodegen, as for building the Mac app.
    open QueenBee.xcodeproj
    ```
 
-5. Plug in the iPad or iPhone. In Xcode's toolbar pick the **QueenBeeMobile** scheme and your device.
+5. Plug in the iPad or iPhone. In Xcode's toolbar pick the **QueenBeeMobile** scheme and your device. It installs a
+   Release build, which has none of the test harness in it. **QueenBeeMobile Debug** is the same app built for
+   debugging from Xcode.
 6. On the device, turn on **Settings → Privacy & Security → Developer Mode**, and restart it when asked. The switch only appears once the device has been connected to Xcode.
 7. Press **Run** in Xcode.
 8. The first time, the app won't open until you trust yourself as its developer: on the device, **Settings → General → VPN & Device Management**, tap your Apple ID, then **Trust**. Open Queen Bee again.
@@ -213,6 +215,36 @@ Both need to be on the same Wi-Fi.
 3. Choose your Mac from the list, then point the camera at the code.
 
 From then on the device connects by itself whenever both apps are open on the same Wi-Fi. To stop a device connecting, click **Remove** beside it in the Mac's settings, or tap the gear on the device and choose **Forget this Mac**. [SECURITY.md](SECURITY.md) says what a paired device can see and what each side stores.
+
+If the device can't connect, its pill says so and it keeps trying. When your Mac turns its key down several times
+running, it says "Can't connect to your Mac — retrying" and offers **Pair Again…** beside that. A Mac going to
+sleep or a Wi-Fi drop part-way through connecting never makes a device forget its key.
+
+Switching to another app for a moment doesn't disconnect: the device stays connected for about 25 seconds after you
+leave Queen Bee, then lets go until you come back.
+
+### Connect from another network
+
+Pairing needs the same Wi-Fi. After that, a device can also reach the Mac by its address, as over a private network
+such as [Tailscale](https://tailscale.com).
+
+1. On the Mac, in **Settings → Remote**, turn on **Let devices connect by address too**. The Mac shows the port it
+   listens on, 51720, and the addresses it can be reached at.
+2. On the device, tap the gear, and under **Connect by address** type one of those addresses, such as
+   `mac.tail1234.ts.net` or `100.64.0.7`, then **Save**. Add `:port` only if the Mac shows a different port.
+
+The device still looks for the Mac on the Wi-Fi first, and tries the address when it isn't found there. Each device
+still needs its own key from pairing, and the connection is encrypted with it as on the Wi-Fi. Use an address only on
+a network you trust: don't open the port to the internet.
+
+### Notifications
+
+While Queen Bee on the device is connected, and for the short while after you leave it, it can tell you when a
+message is waiting for approval, a Script card is waiting to be allowed, a session asks you something, or a run
+ends. On a device with **Can control**, an approval can be answered from the notification with **Approve** or
+**Reject**, and a script with **Allow** or **Don't Allow**, once the device is unlocked. The app asks whether it may
+notify you the first time it connects; the switch is under **Notifications** in its settings. Nothing comes from a
+server, so once iOS stops the app in the background, nothing more arrives until you open it again.
 
 ### Run it in the Simulator
 

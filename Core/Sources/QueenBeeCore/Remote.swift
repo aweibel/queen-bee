@@ -104,15 +104,38 @@ public enum Remote {
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
 }
 
+/// What one end can do beyond what every app on this `Remote.version` does. Each end says what it can in its first
+/// message, and the other uses a thing only when both can, so an app that knows nothing of one still connects.
+public enum RemoteFeature {
+    /// The device takes `HostMessage.historyChanged`, so a run that ends sends only that run and not every earlier one.
+    public static let historyChanges = "historyChanges"
+    /// The Mac remembers the answer to each command a device sent lately, by the device's `RemoteHello.epoch` and
+    /// the command's id. A command sent again with the same id after a dropped link is answered with what became
+    /// of it the first time, and is never done twice. See `CommandMemory`.
+    public static let commandMemory = "commandMemory"
+}
+
 /// The first thing a device sends on a new connection.
 public struct RemoteHello: Codable, Equatable, Sendable {
     public var version: Int
     public var deviceID: String
     public var deviceName: String
+    /// Made up afresh each time the app starts. Its command ids only go up while it runs, so the two together
+    /// name one command for good. Nil from an app that doesn't send commands again.
+    public var epoch: String?
+    /// See `RemoteFeature`. Nil from an app that has none.
+    public var features: [String]?
+    /// On a connection made to the Mac's address and not to the listener it keeps for this device: the device's
+    /// proof that it holds its own key, made with `LinkSecurity.proof(key:binding:)`. That listener takes every
+    /// paired device's key, so it is the proof and not the key that says which device this is.
+    public var proof: Data?
 
-    public init(version: Int, deviceID: String, deviceName: String) {
+    public init(version: Int, deviceID: String, deviceName: String, epoch: String? = nil, features: [String]? = nil, proof: Data? = nil) {
         self.version = version; self.deviceID = deviceID; self.deviceName = deviceName
+        self.epoch = epoch; self.features = features; self.proof = proof
     }
+
+    public func has(_ feature: String) -> Bool { features?.contains(feature) == true }
 }
 
 public struct RemoteWelcome: Codable, Equatable, Sendable {
@@ -120,10 +143,14 @@ public struct RemoteWelcome: Codable, Equatable, Sendable {
     public var macName: String
     /// False means the device may watch and nothing else.
     public var canControl: Bool
+    /// See `RemoteFeature`. Nil from a Mac that has none.
+    public var features: [String]?
 
-    public init(version: Int, macName: String, canControl: Bool) {
-        self.version = version; self.macName = macName; self.canControl = canControl
+    public init(version: Int, macName: String, canControl: Bool, features: [String]? = nil) {
+        self.version = version; self.macName = macName; self.canControl = canControl; self.features = features
     }
+
+    public func has(_ feature: String) -> Bool { features?.contains(feature) == true }
 }
 
 public struct RemoteFlowSummary: Codable, Equatable, Sendable, Identifiable {
@@ -361,6 +388,10 @@ public enum HostMessage: Codable, Equatable, Sendable {
     /// Everything one link has carried.
     case messages(id: String, link: String, all: [LinkMessage])
     case history(id: String, runs: [RunRecord])
+    /// The earlier runs, as the runs that are new or changed since the last `.history` or `.historyChanged`, and
+    /// the ids of all of them in order. Sent only to a device that has `RemoteFeature.historyChanges`, in place
+    /// of `.history`, which is still what a flow being opened comes with. See `RemoteSnapshot.historyChange`.
+    case historyChanged(id: String, runs: [RunRecord], order: [String])
     case terminal(id: String, key: String, chunk: TerminalChunk)
     /// What became of the command the device sent with that id. No refusal means it was done.
     /// A refusal is in the Mac's words, and is shown to the person as it is. A command that is a step of a

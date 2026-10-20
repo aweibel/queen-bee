@@ -63,6 +63,13 @@ public struct RemoteMirror: Equatable, Sendable {
         return lastCommandID
     }
 
+    /// The same, for a command whose id the caller picked: one that keeps its id for the whole time the app runs,
+    /// so that sent again after a dropped link the Mac knows it for the same command.
+    public mutating func willSend(_ command: RemoteCommand, id: Int) {
+        lastCommandID = max(lastCommandID, id)
+        if command.isAnswered { waiting[id] = command }
+    }
+
     /// Whether this very command has been sent and not yet answered.
     public func isWaiting(for command: RemoteCommand) -> Bool { waiting.values.contains(command) }
 
@@ -154,6 +161,9 @@ public struct RemoteMirror: Equatable, Sendable {
         case .history(let id, let runs):
             guard isShowing(id) else { break }
             snapshot?.runs = runs
+        case .historyChanged(let id, let runs, let order):
+            guard isShowing(id), let old = snapshot?.runs else { break }
+            snapshot?.runs = RemoteSnapshot.applying(runs, order: order, to: old)
         case .terminal:
             return terminalEvent(in: message).map { [$0] } ?? []
         // A card's browser is drawn from its own feed, as a terminal is, and changes nothing here.
