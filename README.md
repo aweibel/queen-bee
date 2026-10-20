@@ -241,11 +241,11 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 448 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to, the keys it sends, a card's browser on a device and the browser's tools
+cd Core && swift test        # unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to, the keys it sends, a card's browser on a device and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
-The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`.
+The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`. A scenario that can't run on this Mac, such as one whose app isn't built, is counted as skipped. The run fails when a scenario you named was skipped, or when nothing passed.
 
 The iPad and iPhone app is checked in the iOS Simulator by ten scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
 
@@ -274,14 +274,17 @@ The iPad and iPhone app is checked in the iOS Simulator by ten scenarios that on
 
 ## Releasing
 
-For maintainers. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, put the same version in `Plugin/qb-link/.claude-plugin/plugin.json` and in `serverInfo` in `Core/Sources/QueenBeeCore/MCP.swift`, add a section for the version to `CHANGELOG.md`, then:
+For maintainers. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, put the same version in `Plugin/qb-link/.claude-plugin/plugin.json` and in `MCPServer.version` in `Core/Sources/QueenBeeCore/MCP.swift`, add a section for the version to `CHANGELOG.md`, commit, then:
 
 ```sh
-./scripts/release.sh            # build, sign, notarize and write appcast.xml, into dist/
-./scripts/release.sh publish    # the same, then tag, push and create the GitHub release
+./scripts/release.sh check      # the checks alone: the version matches everywhere, the build number is above appcast.xml's, the tree is clean
+./scripts/release.sh            # build, sign, notarize and write the feed, into dist/
+./scripts/release.sh publish    # the same, then release it on GitHub, tag it and push appcast.xml
 ```
 
-The script's header lists the certificate, notarization profile and update key it needs.
+`swift test` fails too when the three versions disagree. Publish puts the disk image on GitHub before it pushes `appcast.xml`, so installed copies are never pointed at a download that isn't there, and running it again after a failure carries on from the step that failed. Releases from a `release/<version>` branch reach installed copies once that branch is merged into `main`, where they read the feed.
+
+The releases so far are signed but not notarized: they were made with `QB_SKIP_NOTARIZE=1`. The script notarizes when the notarization profile is set up. Its header lists the certificate, profile and update key it needs.
 
 ## Contributing
 

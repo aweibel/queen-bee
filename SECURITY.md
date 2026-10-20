@@ -73,8 +73,9 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   escape sequences and control characters removed first, so text one agent wrote can't press keys in another's
   session.
 - **Updates are signed.** The app only installs an update signed with the project's update key. Releases are signed
-  with a Developer ID but are not yet notarized by Apple. The terminal installer refuses an app that isn't signed
-  with the project's Developer ID certificate, checked up to Apple's root.
+  with a Developer ID but are not yet notarized by Apple. The terminal installer refuses a disk image, and the app
+  inside it, that isn't signed with the project's Developer ID certificate, checked up to Apple's root, and checks
+  the disk image before it opens it. The release script holds what it builds to the same requirement.
 - **Remote is off until you turn it on.** With "Let your iPad or iPhone connect" on in Settings, an iPad or iPhone
   you paired can connect over your local network and see your flows, their runs and their terminals. A paired
   device can only watch until you turn on "Can control" for it, which the next point is about. A device that
