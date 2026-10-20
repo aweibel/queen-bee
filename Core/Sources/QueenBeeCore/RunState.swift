@@ -142,6 +142,44 @@ public struct Usage: Codable, Equatable, Sendable {
     }
 }
 
+/// How a run came to end, as the engine saw it.
+public enum RunEnding: String, Codable, Sendable, CaseIterable {
+    /// A message reached an End card and nothing was left to do.
+    case finishedWithAnswer
+    /// Nothing was left to do, but no message reached an End card: a branch with nothing linked, an And
+    /// still waiting, an agent with nothing to pass on.
+    case endedWithoutAnswer
+    /// A Loop card ran out of tries on the way, so whatever came out is what it gave up with.
+    case gaveUp
+    /// Agents were handed as many messages as one run allows.
+    case hitLimit
+    /// An agent the run was waiting on failed.
+    case failed
+    /// Somebody stopped it.
+    case stopped
+
+    /// In a few plain words, for the run's row in the history.
+    public var label: String {
+        switch self {
+        case .finishedWithAnswer: "finished"
+        case .endedWithoutAnswer: "ended without an answer"
+        case .gaveUp: "gave up after the most tries"
+        case .hitLimit: "stopped at the hand-off limit"
+        case .failed: "failed"
+        case .stopped: "stopped"
+        }
+    }
+
+    /// The three kinds of ending a device from before endings were told apart knows.
+    public var outcome: RunRecord.Outcome {
+        switch self {
+        case .finishedWithAnswer, .endedWithoutAnswer, .gaveUp: .finished
+        case .hitLimit, .stopped: .stopped
+        case .failed: .failed
+        }
+    }
+}
+
 /// One run, kept so it can be looked at again: where it went, what each link carried and how it ended.
 public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     public enum Outcome: String, Codable, Sendable { case finished, stopped, failed }
@@ -160,14 +198,24 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     public var handOffs: Int
     /// What each agent's session used during the run, by card id. Filled in a moment after the run ends.
     public var usage: [String: Usage]?
+    /// How the run ended, more closely than `outcome` says. Nil for a run kept before endings were told apart.
+    /// A device that doesn't know of it reads the record as it always has.
+    public var ending: RunEnding?
 
     public init(id: String, started: Date, ended: Date, outcome: Outcome, command: String, log: [LogLine],
                 results: [String: String], marks: [String: RunMark], linkPasses: [String: Int],
-                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil) {
+                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil, ending: RunEnding? = nil) {
         self.id = id; self.started = started; self.ended = ended; self.outcome = outcome; self.command = command
         self.log = log; self.results = results; self.marks = marks; self.linkPasses = linkPasses
-        self.messages = messages; self.handOffs = handOffs; self.usage = usage
+        self.messages = messages; self.handOffs = handOffs; self.usage = usage; self.ending = ending
     }
 
     public var cost: Usage { (usage ?? [:]).values.reduce(Usage(), +) }
+
+    /// How the run ended, in a few words.
+    public var summary: String {
+        // A run an agent failed in is shown as failed whatever else the engine said of its ending.
+        if outcome == .failed { return RunEnding.failed.label }
+        return ending?.label ?? outcome.rawValue
+    }
 }
