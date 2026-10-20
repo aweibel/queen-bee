@@ -56,6 +56,7 @@ private struct ExpandedTerminal: Identifiable {
 struct ConnectionBar: View {
     @Environment(RemoteClient.self) private var client
     let showSettings: () -> Void
+    @State private var asksToPairAgain = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -73,7 +74,7 @@ struct ConnectionBar: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Settings")
             }
-            if ConnectionStatus(client) == .macNotFound {
+            if ConnectionStatus(client).hasHelp {
                 Hairline()
                 Text(ConnectionStatus.help(client))
                     .dsSans(Theme.Touch.caption + 1)
@@ -83,6 +84,17 @@ struct ConnectionBar: View {
                     .frame(width: 280, alignment: .leading)
                     .padding(Theme.Space.m)
                     .accessibilityHidden(true)
+            }
+            if ConnectionStatus(client) == .cantConnect {
+                // Beside the trying, never in place of it: the key may be fine and the connection only cut off.
+                Button("Pair Again…") { asksToPairAgain = true }
+                    .buttonStyle(.panel(.quiet))
+                    .padding([.horizontal, .bottom], Theme.Space.m)
+                    .confirmationDialog("Pair this device again?", isPresented: $asksToPairAgain, titleVisibility: .visible) {
+                        Button("Pair Again", role: .destructive) { client.pairAgain() }
+                    } message: {
+                        Text("This device forgets its key for \(client.mac?.macName ?? "your Mac"). On your Mac, choose “Pair a device…” in Settings to show a new code.")
+                    }
             }
         }
         .fixedSize(horizontal: true, vertical: false)

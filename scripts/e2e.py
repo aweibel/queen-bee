@@ -3135,6 +3135,8 @@ def scenario_controls():
     print(f"        screenshots: {mobile.shots}", flush=True)
     # What `DebugCannedRun` in the app plays, stage by stage, and how its made-up Mac answers.
     watch_only, away = "can only watch", "Not connected to your Mac right now."
+    # What a command that went and was never answered is told: it may have been done.
+    unsure = "Your Mac didn't answer. Check the run on your Mac."
     on = ("-qbControl", "1")
 
     def controls(state):
@@ -3250,8 +3252,8 @@ def scenario_controls():
               controls(s).get("waiting") == ["approve"] and controls(s).get("disabled") == ["Approve", "Reject"]
               and drawn(s, "Sign off") == [(t, False) for t in approval] and controls(s).get("bar") == ["Stop"], f"{controls(s)} {drawn(s, 'Sign off')}")
         s = mobile.wait(lambda s: did(s), 15, "the link to drop")
-        check("when the link drops, what was waiting is told so, and nothing is kept to send later",
-              did(s) == [("approve:Sign off", away)] and controls(s).get("waiting") == [] and controls(s).get("refusal") == away, str(controls(s)))
+        check("when the link drops, what was waiting is told that what became of it is not known, and nothing is kept to send later",
+              did(s) == [("approve:Sign off", unsure)] and controls(s).get("waiting") == [] and controls(s).get("refusal") == unsure, str(controls(s)))
         check("and with no Mac there are no controls, and no line about turning them on", nothing(s) and controls(s).get("hint") is None, str(controls(s)))
         s = play(2, *on, "-qbSilent", "1", "-qbAnswerWait", "2", "-qbZoomCard", "Sign off", "-qbDo", "approve:Sign off", steps=1)
         check("a command the Mac never answers stops being waited for, and the person is told to look on the Mac, not that it failed",

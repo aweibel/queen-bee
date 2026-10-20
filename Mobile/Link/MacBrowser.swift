@@ -12,7 +12,9 @@ nonisolated struct FoundMac: Identifiable, Hashable, Sendable {
 
 /// What came of looking for this device's own listener on its Mac.
 nonisolated enum ListenerSearch: Sendable {
-    case found(NWEndpoint)
+    /// Every listener that says it is the one, with the service name each goes by. Usually one. Anything on the
+    /// network can copy a Mac's record, so the device tries each in turn, the one that let it in before first.
+    case found([(endpoint: NWEndpoint, name: String?)])
     /// iOS won't let the app look: the person turned Local Network off for it.
     case blocked
     case failed
@@ -116,7 +118,8 @@ final class MacBrowser {
     }
 
     /// Waits until the paired Mac's listener for this device shows up on the network, and returns where it is.
-    /// Nil if the wait is cancelled. There is no time limit: a Mac that is asleep may be back in an hour.
+    /// Nil if the wait is cancelled. There is no time limit: a Mac that is asleep may be back in an hour. The caller
+    /// sets one by cancelling, as it does when it can also reach the Mac by address.
     /// `onAllowed` is called, on the browser's queue, when iOS has let the app look.
     nonisolated static func findListener(deviceID: String, macID: String, onAllowed: @escaping @Sendable () -> Void) async -> ListenerSearch? {
         // The record is asked for along with the name, because it is what says whose listener each one is.
@@ -163,7 +166,11 @@ final class MacBrowser {
                 if case .failed = state { self?.finish(.failed) }
             }
             browser.browseResultsChangedHandler = { [weak self] results, _ in
-                if let match = results.first(where: isWanted) { self?.finish(.found(match.endpoint)) }
+                let matches = results.filter(isWanted).map { result -> (endpoint: NWEndpoint, name: String?) in
+                    if case .service(let name, _, _, _) = result.endpoint { return (result.endpoint, name) }
+                    return (result.endpoint, nil)
+                }
+                if !matches.isEmpty { self?.finish(.found(matches)) }
             }
             browser.start(queue: DispatchQueue(label: "dev.queenbee.mobile.search"))
         }
