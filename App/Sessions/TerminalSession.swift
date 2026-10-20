@@ -62,6 +62,11 @@ final class TerminalSession: NSObject {
     /// Counts launches, so the check on a slow start only looks at the launch that set it going.
     @ObservationIgnored private var launches = 0
 
+    // A session let go while still live mustn't keep the Mac awake for good.
+    isolated deinit {
+        KeepAwake.note(self, live: false, working: false)
+    }
+
     init(key: String) {
         self.key = key
         view = SessionTerminalView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))

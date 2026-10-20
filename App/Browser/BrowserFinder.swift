@@ -88,6 +88,8 @@ private nonisolated final class ArchiveDownload: NSObject, URLSessionDownloadDel
     /// Why the finished file wasn't taken, when it wasn't.
     private var problem: Error?
     private var reported = -1.0
+    /// How the download ended, kept when it ended before `run` was waiting for it, as when it was cancelled at once.
+    private var outcome: Result<Void, Error>?
 
     init(to destination: URL, progress: @escaping @Sendable (Double) -> Void) {
         self.destination = destination
@@ -97,13 +99,19 @@ private nonisolated final class ArchiveDownload: NSObject, URLSessionDownloadDel
     func run(_ url: URL) async throws {
         let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
+        let task = session.downloadTask(with: url)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                lock.withLock { self.continuation = continuation }
-                session.downloadTask(with: url).resume()
+                let ended = lock.withLock {
+                    if outcome == nil { self.continuation = continuation }
+                    return outcome
+                }
+                if let ended { return continuation.resume(with: ended) }
+                task.resume()
             }
         } onCancel: {
-            session.invalidateAndCancel()
+            // A task cancelled before it started still ends through the delegate, so `run` always hears.
+            task.cancel()
         }
     }
 
@@ -138,14 +146,12 @@ private nonisolated final class ArchiveDownload: NSObject, URLSessionDownloadDel
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let ended: Result<Void, Error> = (error ?? lock.withLock { problem }).map { .failure($0) } ?? .success(())
         let waiting = lock.withLock {
             defer { continuation = nil }
-            return (continuation, problem)
+            if continuation == nil { outcome = ended }
+            return continuation
         }
-        if let error = error ?? waiting.1 {
-            waiting.0?.resume(throwing: error)
-        } else {
-            waiting.0?.resume()
-        }
+        waiting?.resume(with: ended)
     }
 }

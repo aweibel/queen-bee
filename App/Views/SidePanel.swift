@@ -228,11 +228,16 @@ private struct LogList: View {
                 if atEnd || isScrolling { followsEnd = atEnd }
             }
             // By the last line, not the count: a full log stays the same length as it turns over.
-            .onChange(of: controller.log.last?.id) {
-                if followsEnd, let last = controller.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            .onChange(of: controller.shownLog.last?.id) {
+                if followsEnd, let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+            // Another run's log starts at its end.
+            .onChange(of: controller.viewedRunID) {
+                followsEnd = true
+                if let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
             .onAppear {
-                if let last = controller.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
         .background(Theme.surface.ui)
