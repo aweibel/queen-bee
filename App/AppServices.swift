@@ -435,8 +435,13 @@ final class AppServices {
     /// such as a cloned repository, is only opened once the person has said they trust it.
     func confirmTrust(_ root: URL) -> Bool {
         let path = root.standardizedFileURL.path
+        // A test copy opens the scratch folders it is told to without asking, and remembers them only while it runs.
+        if TestHarness.isEnabled {
+            trustedWhileTesting.insert(path)
+            return true
+        }
         var trusted = Set(UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? [])
-        if trusted.contains(path) || TestHarness.isEnabled { return true }
+        if trusted.contains(path) { return true }
         let flows = (try? FileManager.default.contentsOfDirectory(at: FlowStore(root: root).directory, includingPropertiesForKeys: nil)) ?? []
         if flows.contains(where: { $0.pathExtension == "json" }) {
             let alert = NSAlert()
@@ -451,6 +456,8 @@ final class AppServices {
         UserDefaults.standard.set(trusted.sorted(), forKey: Self.trustedKey)
         return true
     }
+    /// The folders a test copy was told to open, which it trusts as a person's copy trusts the ones they said yes to.
+    @ObservationIgnored private var trustedWhileTesting: Set<String> = []
     /// A test run opens scratch folders, which shouldn't come back the next time the app starts.
     private var remembersProjects: Bool { !TestHarness.isEnabled }
 
@@ -748,7 +755,9 @@ final class AppServices {
 
     /// Whether the person has said they trust the flows in this folder, or it had none when they added it.
     private func isTrusted(_ root: URL) -> Bool {
-        TestHarness.isEnabled || (UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? []).contains(root.standardizedFileURL.path)
+        let path = root.standardizedFileURL.path
+        if TestHarness.isEnabled { return trustedWhileTesting.contains(path) }
+        return (UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? []).contains(path)
     }
 
     @ObservationIgnored private let linkOpener = LinkOpener()

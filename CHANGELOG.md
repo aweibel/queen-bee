@@ -8,7 +8,7 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ### Added
 
-- A spending limit for a flow's runs, in the flow's settings, on a paired device and for the orchestrator. A run whose agents have used more than it, at API prices, is stopped as Stop would stop it, and the log, the run's history and a notice say so.
+- A spending limit for a flow's runs, in the flow's settings, on a paired device and for the orchestrator. A run whose agents have used more than it, at API prices, is stopped as Stop would stop it, and the log, the run's history and a notice say so. Their use is read every few seconds while the run goes on, so a long turn is stopped part-way through, before its reply is passed on.
 - Loop until has a third output, Gave up, taken when its tries run out. A Loop with nothing linked to Gave up goes out Done as before.
 - An Approval card can wait at most a set time, then approve or reject the message itself, and the log says so: "No answer after 8 hours, so it was rejected". A Script card can wait a set time for its command to be allowed, then skip it.
 - A For each card: it splits a message into lines, or the items of a JSON list, sends each one in turn to the cards on Each, collects what comes back for each, and passes all of it on from Done. Every hand-off counts toward a run's limit of 50, and it sends 50 items at most. The canvas warns about one with nothing on Each or no way back.

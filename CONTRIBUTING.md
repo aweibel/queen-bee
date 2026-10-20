@@ -25,7 +25,8 @@ that file and not the project.
 
 ```sh
 cd Core && swift test    # under a second; run it before every pull request
-./scripts/e2e.py         # about seven minutes; starts real Claude Code sessions on Haiku, which uses your account
+./scripts/e2e.py         # about nine minutes; starts real Claude Code sessions on Haiku, which uses your account
+./scripts/e2e.py features   # For each, Gave up, time limits on holds, the spending limit (one short Sonnet turn) and qb run
 ```
 
 ### The iPad and iPhone app

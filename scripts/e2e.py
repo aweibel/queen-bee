@@ -8,7 +8,8 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/build.sh && ./scripts/e2e.py            # every scenario
     ./scripts/e2e.py guard loop                        # some of them
 
-Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, deep, browser, nobrowser, noclaude.
+Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, features, deep, browser,
+nobrowser, noclaude.
 `mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
 `mobile` is run only when named: it runs the iPad app in the iOS Simulator against the test copy. Build it
 first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by QB_E2E_SHOTS, or a new one.
@@ -5020,6 +5021,247 @@ def scenario_timed(app):
     app.op(fid, "trigger", card="Clock")
 
 
+# For each: three lines go one at a time through an agent and come back, then out Done together.
+EACH = flow("Each", [
+    card("start", "Start", 0, 0, command="apple\nbanana\ncherry"),
+    card("for-each", "Every fruit", 312, 0, split="lines"),
+    card("agent", "Upper", 624, 0, instructions=(
+        "Each message you get has a first line in square brackets, which you ignore. Reply with the rest of the "
+        "message in capital letters, and nothing else.")),
+    card("end", "All", 1180, 0),
+], [("Start", "out", "Every fruit", 3), ("Every fruit", "each", "Upper", 3), ("Upper", "out", "Every fruit", 3),
+    ("Every fruit", "done", "All", 3)])
+
+# Two Loop cards whose check never holds, each with two tries: one with Gave up linked, one without.
+GAVEUP = flow("Gaveup", [
+    card("start", "Linked", 0, 0, command="try"),
+    card("loop", "Never", 312, 0, check="contains", value="UNREACHABLE", maxTries=2, height=144),
+    card("prompt", "Again", 312, 240, template="{{message}} again"),
+    card("end", "Gave up", 624, 0),
+    card("end", "Passed", 624, 240),
+    card("start", "Unlinked", 0, 480, command="try"),
+    card("loop", "Never 2", 312, 480, check="contains", value="UNREACHABLE", maxTries=2, height=144),
+    card("prompt", "Again 2", 312, 720, template="{{message}} again"),
+    card("end", "Done 2", 624, 480),
+], [("Linked", "out", "Never", 9), ("Never", "again", "Again", 9), ("Again", "out", "Never", 9),
+    ("Never", "gave-up", "Gave up", 9), ("Never", "done", "Passed", 9),
+    ("Unlinked", "out", "Never 2", 9), ("Never 2", "again", "Again 2", 9), ("Again 2", "out", "Never 2", 9),
+    ("Never 2", "done", "Done 2", 9)])
+
+# Three holds in a row that each answer for the person when the minute is up: approved, rejected by default,
+# and a command nobody allowed, which is skipped.
+HOLDS = flow("Holds", [
+    card("start", "Start", 0, 0, command="nobody is watching"),
+    card("approval", "Say yes", 312, 0, text="Fine?", waitMinutes=1, whenNoAnswer="approved"),
+    card("approval", "Say no", 624, 0, text="Really fine?", waitMinutes=1),
+    card("script", "Touch", 936, 0, command="touch ran-unasked.txt", waitMinutes=1),
+    card("end", "Ran", 1248, 0),
+    card("end", "Skipped", 1248, 192),
+    card("end", "Wrong", 936, 384),
+], [("Start", "out", "Say yes", 9), ("Say yes", "approved", "Say no", 9), ("Say yes", "rejected", "Wrong", 9),
+    ("Say no", "approved", "Wrong", 9), ("Say no", "rejected", "Touch", 9),
+    ("Touch", "pass", "Ran", 9), ("Touch", "fail", "Skipped", 9)])
+
+# One agent busy with a slow command, under the smallest spending limit a flow may have, a cent. A Haiku turn costs
+# less than that, so this one agent is on Sonnet, whose first reply passes it.
+SPEND = flow("Spend", [
+    card("start", "Start", 0, 0, command="Run the shell command `sh count.sh`, which counts to 40 slowly. Then reply with exactly: SLEPT"),
+    card("agent", "Spender", 312, 0, model="sonnet"),
+    card("end", "Out", 868, 0),
+], [("Start", "out", "Spender", 3), ("Spender", "out", "Out", 3)])
+SPEND["spendingLimit"] = 0.01
+
+# For qb run: one that answers at once, and one that waits on the person.
+CLI = flow("Cli", [card("start", "Start", 0, 0, command="from the start card"), card("end", "Answer", 312, 0)],
+           [("Start", "out", "Answer", 9)])
+CLIWAIT = flow("Cliwait", [
+    card("start", "Start", 0, 0, command="wait for me"),
+    card("approval", "Gate", 312, 0, text="Go on?"),
+    card("end", "Answer", 624, 0),
+], [("Start", "out", "Gate", 9), ("Gate", "approved", "Answer", 9)])
+
+FLOWS.update({"features": EACH, "gaveup": GAVEUP, "holds": HOLDS, "spend": SPEND, "cli": CLI, "cliwait": CLIWAIT})
+QB = os.path.join(APP, "Contents/MacOS/qb")
+
+
+def qb(app, *args, timeout=60):
+    """Runs `qb run` against the test copy, as a script on this Mac would."""
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "qb.sock"))
+    started = time.time()
+    done = subprocess.run([QB, "run", *args], env=env, capture_output=True, text=True, timeout=timeout)
+    return done.returncode, done.stdout, done.stderr, time.time() - started
+
+
+def scenario_features(app):
+    print("features: For each, Gave up, time limits on holds, the spending limit and qb run", flush=True)
+
+    # For each
+    fid = EACH["id"]
+    app.open_flow(EACH)
+    app.op(fid, "run")
+    try:
+        s = app.wait(fid, lambda s: not s["isRunning"] and s["runs"], 240, "the For each run to end")
+    except TimeoutError as e:
+        check("For each sends every item through the agent and passes on what came back", False, str(e)[:400])
+        app.op(fid, "stop")
+        s = app.state(fid)
+    log = s["log"]
+    sent = [line for line in log if line.startswith('For each "Every fruit" → Each')]
+    check("For each sends its three items one at a time, in order",
+          sent == [f'For each "Every fruit" → Each (item {i} of 3)' for i in (1, 2, 3)], str(sent))
+    check("and goes out Done once all three are back",
+          any(line == 'For each "Every fruit" → Done, with what came back for all 3 items' for line in log), str(log[-4:]))
+    out = s["results"].get("All", "")
+    headings = ["## From item 1: apple", "## From item 2: banana", "## From item 3: cherry"]
+    places = [out.find(h) for h in headings]
+    check("End gets each item's result under a heading naming it, in order", all(p >= 0 for p in places) and places == sorted(places), out[:300])
+    parts = [out[a:b] for a, b in zip(places, places[1:] + [len(out)])] if all(p >= 0 for p in places) else []
+    check("each result is what the agent made of that item",
+          len(parts) == 3 and all(w in p for w, p in zip(["APPLE", "BANANA", "CHERRY"], parts)), out[:300])
+    check("the agent took one turn per item", s["marks"].get("Upper", {}).get("passes") == 3 and s["handOffs"] == 3,
+          f"{s['marks'].get('Upper')} handOffs={s['handOffs']}")
+    check("the run is recorded as finished", s["runs"] and s["runs"][-1]["ending"] == "finishedWithAnswer", str(s["runs"][-1:]))
+    app.op(fid, "close")
+
+    # Gave up
+    gid = GAVEUP["id"]
+    app.op(gid, "select")
+    time.sleep(1)
+    app.op(gid, "pick", card="Linked")
+    app.op(gid, "run")
+    s = app.wait(gid, lambda s: not s["isRunning"] and s["runs"], 30, "the linked Gave up run to end")
+    check("a Loop that runs out of tries goes out Gave up when something is linked to it",
+          list(s["results"]) == ["Gave up"] and s["results"]["Gave up"] == "try again", str(s["results"]))
+    check("the log says it gave up after two tries", 'Loop "Never" → Gave up after 2 tries' in s["log"]
+          and sum('Loop "Never" → Again' in line for line in s["log"]) == 1, str([l for l in s["log"] if "Loop" in l]))
+    check("a run that dealt with giving up is recorded as finished", s["runs"][-1]["ending"] == "finishedWithAnswer"
+          and s["runs"][-1]["summary"] == "finished", str(s["runs"][-1]))
+    check("the Loop card counts its Gave up", s["marks"].get("Never", {}).get("ports") == {"again": 1, "gave-up": 1}, str(s["marks"].get("Never")))
+    app.op(gid, "pick", card="Unlinked")
+    app.op(gid, "run")
+    s = app.wait(gid, lambda s: not s["isRunning"] and len(s["runs"]) == 2, 30, "the unlinked Gave up run to end")
+    check("with nothing on Gave up, it goes out Done instead", list(s["results"]) == ["Done 2"], str(s["results"]))
+    check("the log says it left by Done after two tries", 'Loop "Never 2" → Done after 2 tries' in s["log"], str(s["log"][-4:]))
+    check("and the run is recorded as having given up", s["runs"][-1]["ending"] == "gaveUp"
+          and s["runs"][-1]["summary"] == "gave up after the most tries", str(s["runs"][-1]))
+    app.op(gid, "pick")
+    app.op(gid, "close")
+
+    # Time limits on holds, with a minute counted as two seconds.
+    hid = HOLDS["id"]
+    app.op(hid, "holdMinute", seconds=2)
+    try:
+        app.op(hid, "select")
+        time.sleep(1)
+        app.op(hid, "run")
+        h = held(app, hid, "Say yes")
+        check("an Approval with a time limit waits for the person first", h[0]["text"] == "nobody is watching", str(h))
+        s = app.wait(hid, lambda s: not s["isRunning"] and s["runs"], 30, "the holds to answer for themselves")
+        log = s["log"]
+        check("an Approval set to approve does so when nobody answers, and says so",
+              "Say yes: No answer after 1 minute, so it was approved" in log, str(log[-8:]))
+        check("one left at the default rejects", "Say no: No answer after 1 minute, so it was rejected" in log, str(log[-8:]))
+        check("a command nobody allowed in time is skipped, and the log says so",
+              "Touch: No answer after 1 minute, so its command was not run" in log, str(log[-8:]))
+        check("and it goes out Fail", list(s["results"]) == ["Skipped"] and "Nobody let the command run in time" in s["results"]["Skipped"],
+              str(s["results"]))
+        check("without running the command", not os.path.exists(os.path.join(app.project, "ran-unasked.txt")))
+        check("nothing is left held", s["holds"] == [], str(s["holds"]))
+    finally:
+        app.op(hid, "holdMinute")
+    app.op(hid, "close")
+
+    # Spending limit
+    sid = SPEND["id"]
+    with open(os.path.join(app.project, "count.sh"), "w") as script:
+        script.write("for i in $(seq 1 40); do echo $i; sleep 1; done\n")
+    app.open_flow(SPEND)
+    app.op(sid, "run")
+    started = time.time()
+    try:
+        s = app.wait(sid, lambda s: not s["isRunning"] and s["runs"], 90, "the run to stop at its spending limit")
+    except TimeoutError as e:
+        check("a run whose agent passes the spending limit is stopped", False, str(e)[:400])
+        app.op(sid, "stop")
+        s = app.state(sid)
+    took = time.time() - started
+    check("a run whose agent passes the spending limit is stopped before the agent finishes", s["runs"] and s["runs"][-1]["ending"] == "spentLimit"
+          and "Out" not in s["results"], f"{s['runs'][-1:]} {s['results']} after {took:.0f}s, cost {s['cost']}")
+    check("the log says why", any(line.startswith("Run stopped: its agents had spent about") and "more than this flow's limit" in line
+                                  for line in s["log"]), str(s["log"][-4:]))
+    check("its history says it stopped at its spending limit", s["runs"] and s["runs"][-1]["summary"] == "stopped at its spending limit", str(s["runs"][-1:]))
+    try:
+        s = app.wait(sid, lambda s: s["sessions"]["Spender"]["state"] == "idle", 20, "Spender to be interrupted")
+        check("the agent was interrupted", "SLEPT" not in (s["sessions"]["Spender"]["lastReply"] or ""), str(s["sessions"]["Spender"]))
+    except TimeoutError as e:
+        check("the agent was interrupted", False, str(e)[:300])
+    app.op(sid, "close")
+
+    # qb run
+    check("the app carries the qb helper", os.access(QB, os.X_OK), QB)
+    code, out, err, took = qb(app, app.project, "Cli", "hello from the shell")
+    check("qb run prints what reached End and exits 0", code == 0 and out == "hello from the shell\n", f"{code} {out!r} {err!r}")
+    code, out, err, took = qb(app, app.project, "cli")
+    check("with no message it runs the Start card's own command, and finds the flow by name in any case",
+          code == 0 and out == "from the start card\n", f"{code} {out!r} {err!r}")
+    check("the run is in the flow's history, noted as started from the command line",
+          len(app.state(CLI["id"])["runs"]) == 2 and "Started from the command line" in app.state(CLI["id"])["log"], str(app.state(CLI["id"])["runs"]))
+    wid = CLIWAIT["id"]
+    code, out, err, took = qb(app, app.project, "Cliwait", "--no-wait")
+    check("--no-wait returns at once with 0, saying on standard error that the run started, and prints no answer",
+          code == 0 and took < 10 and out == "" and err.startswith("Started run ") and "of Cliwait" in err,
+          f"{code} {out!r} {err!r} {took:.1f}s")
+    h = held(app, wid, "Gate")
+    check("and the run goes on in the app", h[0]["text"] == "wait for me", str(h))
+    code, out, err, took = qb(app, app.project, "Cliwait")
+    check("a flow that is already running is refused with 3 and why", code == 3 and "already going" in err, f"{code} {out!r} {err!r}")
+    app.op(wid, "stop")
+    app.wait(wid, lambda s: not s["isRunning"], 20, "the run to stop")
+
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "qb.sock"))
+    waiting = subprocess.Popen([QB, "run", app.project, "Cliwait", "approved from afar"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        held(app, wid, "Gate")
+        time.sleep(1)
+        check("qb run waits while the run is held", waiting.poll() is None)
+        app.op(wid, "hold", answer="approve")
+        out, err = waiting.communicate(timeout=30)
+        check("and prints the answer once it is approved", waiting.returncode == 0 and out == "approved from afar\n", f"{waiting.returncode} {out!r} {err!r}")
+    finally:
+        if waiting.poll() is None:
+            waiting.kill()
+    waiting = subprocess.Popen([QB, "run", app.project, "Cliwait"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        held(app, wid, "Gate")
+        app.op(wid, "stop")
+        out, err = waiting.communicate(timeout=30)
+        check("a run that is stopped exits 1 and says how it ended", waiting.returncode == 1 and out == "" and "stopped" in err,
+              f"{waiting.returncode} {out!r} {err!r}")
+    finally:
+        if waiting.poll() is None:
+            waiting.kill()
+    app.op(wid, "close")
+
+    code, out, err, took = qb(app, app.project, "Nope")
+    check("an unknown flow exits 3 and says so", code == 3 and "has no flow called Nope" in err, f"{code} {out!r} {err!r}")
+    stranger = tempfile.mkdtemp(prefix="qb-e2e-stranger-")
+    write(stranger, 0, CLI)
+    code, out, err, took = qb(app, stranger, "Cli")
+    projects = call(app.support, "*", {"op": "app"})["projects"]
+    check("a folder never opened in the app is refused with 3, and not opened",
+          code == 3 and "hasn't opened" in err and not any(os.path.realpath(p) == os.path.realpath(stranger) for p in projects),
+          f"{code} {out!r} {err!r} {projects}")
+    shutil.rmtree(stranger, ignore_errors=True)
+    code, out, err, took = qb(app, os.path.join(app.project, "no-such-folder"), "Cli")
+    check("a folder that isn't there exits 3", code == 3 and "There is no folder" in err, f"{code} {out!r} {err!r}")
+    code, out, err, took = qb(app, app.project)
+    check("a command without a flow prints how to use it and exits 2", code == 2 and "usage: qb run" in err, f"{code} {out!r} {err!r}")
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "nothing-here.sock"))
+    done = subprocess.run([QB, "run", app.project, "Cli"], env=env, capture_output=True, text=True, timeout=30)
+    check("with the app out of reach it exits 3 and says so", done.returncode == 3 and "Couldn't reach Queen Bee" in done.stderr,
+          f"{done.returncode} {done.stderr!r}")
+
+
 def level(n, last=4):
     """One link in a chain of flows that each run the next. The last just passes its message to its Output."""
     if n == last:
@@ -5843,14 +6085,15 @@ def scenario_noclaude(project):
 
 
 def main():
-    wanted = sys.argv[1:] or ["guard", "settings", "remote", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "deep", "browser", "nobrowser", "noclaude"]
+    wanted = sys.argv[1:] or ["guard", "settings", "remote", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "features", "deep", "browser", "nobrowser", "noclaude"]
     if not os.path.exists(APP):
         sys.exit("Build the app first: ./scripts/build.sh")
     sweep()
     project = tempfile.mkdtemp(prefix="qb-e2e-")
     # Guard is written first so it is the flow the app opens on, and the others wait their turn.
     for i, name in enumerate(["guard", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "inner", "subflow", "timed"]
-                             + [f"level{n}" for n in range(5)] + ["doors", "slow", "edits", "unasked", "browser"]):
+                             + [f"level{n}" for n in range(5)] + ["doors", "slow", "edits", "unasked", "browser"]
+                             + ["features", "gaveup", "holds", "spend", "cli", "cliwait"]):
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 

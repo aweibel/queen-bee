@@ -89,6 +89,8 @@ final class FlowController: ToolHost {
     private(set) var usage: [String: Usage] = [:]
     /// Each session's usage when the latest run began, to tell the run's share from the rest.
     @ObservationIgnored private var usageAtRunStart: [String: Usage] = [:]
+    /// Reads the agents' use every few seconds while a run goes on, for its spending limit.
+    @ObservationIgnored private var spendingWatch: Task<Void, Never>?
     /// The cost breakdown is open over the canvas.
     var showsCost = false
     /// How many more levels of sub-flow the run that is going may still enter.
@@ -524,6 +526,24 @@ final class FlowController: ToolHost {
         viewedRunID = nil
         runLogStart = log.count
         usageAtRunStart = usage
+        watchSpending()
+    }
+
+    /// How often a run's use is read while it goes on.
+    private static let spendingCheckEvery: Duration = .seconds(5)
+
+    /// A turn's use is read when it ends, but a long turn can spend a lot before then, and the reply it ends with is
+    /// passed on at once. So while a run goes on, its agents' use is read every few seconds as well, and a run past
+    /// its spending limit is stopped part-way through such a turn. The limit can be set while the run goes on.
+    private func watchSpending() {
+        spendingWatch?.cancel()
+        spendingWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.spendingCheckEvery)
+                guard let self, !Task.isCancelled, self.isRunning, self.currentRun != nil else { return }
+                if self.flow.spendingLimit != nil { await self.refreshUsage() }
+            }
+        }
     }
 
     private func finishRecord(_ output: RunOutput) {
@@ -611,6 +631,7 @@ final class FlowController: ToolHost {
         holds.removeAll()
         awaitingAnswer.removeAll()
         stallNotice?.cancel()
+        spendingWatch?.cancel()
         currentRun = nil
         isRunning = false
         // A Flow card waiting on this flow's run hears that it ended with nothing to pass on.
@@ -1647,8 +1668,9 @@ final class FlowController: ToolHost {
             return runInnerFlow(pending, inner)
         }
         if let wait = HoldTimeLimit.wait(for: card), pending.kind == .approval || pending.needsAllow {
-            pending.deadline = Date().addingTimeInterval(TimeInterval(wait.components.seconds))
-            answerIfUnanswered(pending.id, after: wait)
+            let lasts = TestHarness.holdWait(wait)
+            pending.deadline = Date().addingTimeInterval(Double(lasts.components.seconds) + Double(lasts.components.attoseconds) / 1e18)
+            answerIfUnanswered(pending.id, after: wait, lasting: lasts)
         }
         holds.append(pending)
         if pending.kind == .approval {
@@ -1663,10 +1685,11 @@ final class FlowController: ToolHost {
 
     /// A card with a time limit answers for the person once it is up, through the same path as their own answer. The
     /// timer goes when the hold is answered or the run ends; a device showing the hold changes nothing. The clock keeps
-    /// counting while the Mac sleeps, so a deadline that passed then is met when it wakes.
-    private func answerIfUnanswered(_ id: String, after wait: Duration) {
+    /// counting while the Mac sleeps, so a deadline that passed then is met when it wakes. `lasts` is how long it
+    /// really waits, which is `wait` everywhere but a test copy told to count minutes as seconds.
+    private func answerIfUnanswered(_ id: String, after wait: Duration, lasting lasts: Duration) {
         holdTasks[id] = Task {
-            try? await Task.sleep(for: wait, clock: .continuous)
+            try? await Task.sleep(for: lasts, clock: .continuous)
             guard !Task.isCancelled, let hold = self.holds.first(where: { $0.id == id }),
                   hold.kind == .approval || hold.needsAllow, var card = self.flow.card(hold.cardID) else { return }
             self.holdTasks[id] = nil
