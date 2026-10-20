@@ -100,7 +100,9 @@ final class BrowserPaneView: NSView, NSTextFieldDelegate {
     }
 
     private func updateStreaming() {
-        tab.setStreaming(isInView && window?.occlusionState.contains(.visible) == true)
+        // A test copy runs behind the person's own windows, so it streams whether or not its window can be seen.
+        let seen = TestHarness.isEnabled || window?.occlusionState.contains(.visible) == true
+        tab.setStreaming(isInView && seen)
     }
 
     /// The card's view is being thrown away. A newer view of the same card may already have taken the tab over.

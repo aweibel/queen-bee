@@ -579,7 +579,16 @@ final class AppServices {
     func needsInstructions(session id: String, instructions: String, afresh: Bool) -> Bool {
         let now = Self.stamp(instructions)
         var record = told[id] ?? Told()
-        guard record.born != now else { return false }
+        if record.born == now {
+            // Back to the instructions it began with. Those are in its prompt, but a conversation handed other ones
+            // since has been told they replace them, so it has to hear that they are back. A summary may still
+            // carry the other ones, so it is told again after one.
+            guard let delivered = record.delivered, afresh || delivered != now else { return false }
+            record.delivered = now
+            told[id] = record
+            saveTold()
+            return true
+        }
         guard afresh || record.delivered != now else { return false }
         record.delivered = now
         told[id] = record
