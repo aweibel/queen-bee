@@ -34,11 +34,14 @@ private func warning(for card: Card, in flow: Flow, circling: Bool) -> String? {
     case .loop:
         if nothing(on: "again") { return "Nothing on Again" }
         if blank(card.value) { return "Set its condition" }
+        // Without it, a run that gets the answer it was looping for stops there with nothing to show.
+        if nothing(on: "done") { return "Nothing on Done" }
     case .switchCard:
         if (card.branches ?? []).isEmpty { return "Add a branch" }
     case .and:
         // An And waits for one message per card that links in, so two links from one card are one input.
         if Set(incoming.map(\.from)).count < 2 { return "Link in 2 or more cards" }
+        if let split = branch(splitting: card, in: flow) { return "Its inputs are on different sides of \(split.name)" }
     case .approval:
         if nothing(on: "approved") { return "Nothing on Approved" }
     case .script:
@@ -56,6 +59,41 @@ private func warning(for card: Card, in flow: Flow, circling: Bool) -> String? {
     if incoming.isEmpty { return "Nothing is linked to it" }
     if circling { return "Goes round with no agent" }
     return nil
+}
+
+/// An If or Switch card that an And's inputs can only be reached through by different outputs. A message
+/// leaves such a card by one output, so the And never hears from every input and the run ends there. A card
+/// that a run can come back round to is left out: on the next time round it can go the other way.
+private func branch(splitting and: Card, in flow: Flow) -> Card? {
+    var sources: [String] = []
+    for link in flow.links(into: and.id) where !sources.contains(link.from) { sources.append(link.from) }
+    let starts = flow.cards.filter { $0.kind == .start }.map(\.id)
+    for branch in flow.cards where branch.kind == .ifElse || branch.kind == .switchCard {
+        guard !reachable(from: flow.links(from: branch.id).map(\.to), in: flow).contains(branch.id) else { continue }
+        // What a run can reach without passing this card.
+        let around = reachable(from: starts, in: flow, avoiding: branch.id)
+        var sides: Set<String> = []
+        var split = 0
+        for source in sources where source != branch.id && !around.contains(source) {
+            let ports = Set(flow.links(from: branch.id).filter { reachable(from: [$0.to], in: flow).contains(source) }.map(\.port))
+            guard ports.count == 1, let port = ports.first else { continue }
+            sides.insert(port)
+            split += 1
+        }
+        if sides.count >= 2, split >= 2 { return branch }
+    }
+    return nil
+}
+
+/// Every card a message can reach from `ids`, them included, never passing through `avoiding`.
+private func reachable(from ids: [String], in flow: Flow, avoiding: String? = nil) -> Set<String> {
+    var seen: Set<String> = []
+    var next = ids.filter { $0 != avoiding }
+    while let id = next.popLast() {
+        guard seen.insert(id).inserted else { continue }
+        next += flow.links(from: id).map(\.to).filter { $0 != avoiding }
+    }
+    return seen
 }
 
 /// Logic cards that can reach themselves without passing through an agent. A message entering such a circle
