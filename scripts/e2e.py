@@ -2858,7 +2858,8 @@ def scenario_terminals():
         check("zoomed in as far as it goes, a card's terminal is still drawn no more than twice as finely",
               s.get("canvas", {}).get("zoom", 1) > 2.9 and in_view(s, "Agent") and terminal(s).get("sharpness") == 2,
               f"sharpness {terminal(s).get('sharpness')} at zoom {s.get('canvas', {}).get('zoom')}")
-        s = play(3, "-qbZoomCard", "Start", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 1)
+        # Done, not Start: Start is close enough to Agent that on a big iPad the edge of Agent is still on screen beside the panel.
+        s = play(3, "-qbZoomCard", "Done", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 1)
         check("and one whose card is out of view is left at the screen's own fineness",
               s.get("canvas", {}).get("zoom", 1) > 2.9 and not in_view(s, "Agent") and terminal(s).get("sharpness") == 1,
               f"sharpness {terminal(s).get('sharpness')}, in view {in_view(s, 'Agent')}, seeing {s.get('canvas', {}).get('visible')}")
@@ -3331,7 +3332,7 @@ def scenario_editing():
     on = ("-qbControl", "1")
     away, gone = "Not connected to your Mac right now.", "That card is no longer in the flow."
     # The kinds of card in the Mac's order, with the made-up Mac's two saved roles under Agent, as its palette has them.
-    kinds = ["Agent", "Note writer", "Proof reader", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "Approval", "Script", "Flow", "End", "Note"]
+    kinds = ["Agent", "Note writer", "Proof reader", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "For each", "Approval", "Script", "Flow", "End", "Note"]
     bar = ["undo", "redo", "add", "select", "tidy", "done"]
 
     def edit(state):
@@ -3468,9 +3469,11 @@ def scenario_editing():
         check("if the link drops under the finger the drag ends, the card goes back, and editing turns itself off",
               edit(s).get("on") is False and edit(s).get("overlay") is None and edit(s).get("dragging") is None and at(s, "Style guide") == style
               and edit(s).get("bar") == [], f"{edit(s)} {at(s, 'Style guide')}")
-        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause;away", *on, "-qbSilent", "1", also=lambda s: did(s)[-1:] == [("move:Style guide:-117,20", away)])
-        check("if it drops while the last step is with the Mac, the card goes back and the person is told",
-              did(s)[-1:] == [("move:Style guide:-117,20", away)] and edit(s).get("overlay") is None and at(s, "Style guide") == style, f"{did(s)} {at(s, 'Style guide')}")
+        # The last step went, so the Mac may have taken it: the person is told to look, not that it didn't happen.
+        unsure = "Your Mac didn't answer. Check the flow on your Mac."
+        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause;away", *on, "-qbSilent", "1", also=lambda s: did(s)[-1:] == [("move:Style guide:-117,20", unsure)])
+        check("if it drops while the last step is with the Mac, the card goes back to where the Mac last had it and the person is told to look on the Mac",
+              did(s)[-1:] == [("move:Style guide:-117,20", unsure)] and edit(s).get("overlay") is None and at(s, "Style guide") == style, f"{did(s)} {at(s, 'Style guide')}")
         s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause", *on, "-qbSilent", "1", also=lambda s: (edit(s).get("overlay") or {}).get("settling"))
         check("until the Mac answers, the card stays where the finger left it and no other can be dragged",
               (edit(s).get("overlay") or {}).get("settling") is True and at(s, "Style guide") == (340, 432, 240, 120) and controls(s).get("waiting") == ["moveCards"],
@@ -3884,7 +3887,8 @@ def scenario_settings_edit():
         asks = "A command changed from here was not typed on your Mac, so the next run stops and asks before running it."
         s = play("edit:on;pick:Style guide;set:Style guide:command:cat docs/style.md | head -20", *on, also=lambda s: mac(s, "Style guide").get("command", "").endswith("head -20"))
         check("a Script card's command can be changed, and says the run will ask before running it",
-              named(s) == ["name", "command", "caution", "note"] and lines(s, "caution") == [asks] and row(s, "command").get("label") == "Command"
+              named(s) == ["name", "command", "caution", "waitMinutes", "note"] and lines(s, "caution") == [asks] and row(s, "command").get("label") == "Command"
+              and (row(s, "waitMinutes").get("label"), row(s, "waitMinutes").get("shown")) == ("Wait to be allowed", "As long as it takes")
               and mac(s, "Style guide").get("command") == "cat docs/style.md | head -20" and sent(s) == ["patchCard:command"], f"{named(s)} {lines(s, 'caution')} {sent(s)}")
         both("settings-04-script")
 
@@ -3940,9 +3944,10 @@ def scenario_settings_edit():
         # The flow's own settings.
         s = play("flowSettings", *on, also=lambda s: flows(s).get("sheet"))
         fs = flows(s).get("settings", [])
-        limit, notify = row(s, "subflowLimit", fs), row(s, "notify", fs)
-        check("the flow's settings are the Mac's: its name, how deep sub-flows can go, and telling the orchestrator",
-              [r.get("name") for r in fs] == ["flowName", "subflowLimit", "notify"] and row(s, "flowName", fs).get("value") == "Welcome note"
+        limit, notify, spend = row(s, "subflowLimit", fs), row(s, "notify", fs), row(s, "spendingLimit", fs)
+        check("the flow's settings are the Mac's: its name, how deep sub-flows can go, what a run may spend, and telling the orchestrator",
+              [r.get("name") for r in fs] == ["flowName", "subflowLimit", "spendingLimit", "notify"] and row(s, "flowName", fs).get("value") == "Welcome note"
+              and (spend.get("label"), spend.get("control"), spend.get("shown")) == ("Stop a run once it has spent ($)", "line", "") and "Leave it empty for no limit" in (spend.get("help") or "")
               and (limit.get("label"), limit.get("range"), limit.get("shown")) == ("Sub-flows can go", [0, 10], "3 levels deep")
               and (notify.get("label"), notify.get("shown")) == ("Tell the orchestrator when a run ends", "On") and "0 means no sub-flows" in limit.get("help", ""), str(fs))
         both("settings-10-flow-settings")
@@ -4068,8 +4073,12 @@ def scenario_parity():
         both("parity-03-pasted")
 
         # Snapping, and the map.
-        s = play("edit:on;snap:off;move:Sent:5,7", *on, also=lambda s: shown_card(s, "Sent").get("x") == 1805)
-        check("with snapping off a card goes exactly where the finger leaves it", (shown_card(s, "Sent").get("x"), shown_card(s, "Sent").get("y")) == (1805, 167)
+        # The finger is put on the screen and read back from it, so the canvas point it leaves at can be off by
+        # a trillionth from going through the zoom: "exactly" is to within a millionth of a point.
+        def lands(s, x, y):
+            return abs(shown_card(s, "Sent").get("x", 0) - x) < 1e-6 and abs(shown_card(s, "Sent").get("y", 0) - y) < 1e-6
+        s = play("edit:on;snap:off;move:Sent:5,7", *on, also=lambda s: lands(s, 1805, 167))
+        check("with snapping off a card goes exactly where the finger leaves it", lands(s, 1805, 167)
               and p(s).get("snaps") is False, str(shown_card(s, "Sent")))
         s = play("map:on", "-qbZoom", "1", also=lambda s: p(s).get("mapView"))
         before = (s.get("canvas") or {}).get("visible") or {}
@@ -5393,6 +5402,7 @@ def scenario_browser_remote(app):
     def sessions():
         return (app.op("app", "remote-state").get("browsers") or [{}])[0]
 
+    device_id = None
     try:
         paired = device.until("paired")
         device_id = paired["device"]
@@ -5617,6 +5627,9 @@ def scenario_browser_remote(app):
               "isn't on this device's screen" in ((ask(act="press", x=5, y=5) or {}).get("refusal") or ""))
     finally:
         device.stop()
+        # Unpaired again, so a scenario after this one starts with no devices, as a Mac that has never paired one.
+        if device_id:
+            app.op("app", "remote-remove", device=device_id)
         app.op("app", "remote-on", on=False)
 
 
