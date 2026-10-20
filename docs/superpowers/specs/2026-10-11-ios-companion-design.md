@@ -1,7 +1,7 @@
 # Queen Bee for iPad and iPhone: design
 
 Date: 2026-10-11
-Status: stage 1 of 3 is built. Stages 2 and 3 are not started.
+Status: all four stages are built and shipped in 0.5.0. "Where it stands" says what each delivered.
 
 ## Where it stands
 

@@ -1,5 +1,7 @@
 # iOS Companion, Stage 4: Everything the Mac Can Do — Implementation Plan
 
+**Status: done, shipped in 0.5.0.** The boxes below were the working list and were left unticked. The Result section at the end says what was built and how it was checked.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every interaction a person can make in the Mac app can be made from a paired iPad or iPhone that has "Can control", including the 0.4.0 browser in agent cards, apart from a short list the owner chose to keep on the Mac.

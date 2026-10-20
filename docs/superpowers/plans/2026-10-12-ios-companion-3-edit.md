@@ -1,5 +1,7 @@
 # iOS Companion, Stage 3: Edit — Implementation Plan
 
+**Status: done, shipped in 0.5.0.** The boxes below were the working list and were left unticked. The Result section at the end says what was built and how it was checked.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** From a paired iPad or iPhone that has been allowed to control the Mac, build and change a flow by touch: add, move, resize, link and delete cards, group them, change their settings, make, rename and delete flows, with undo shared with the Mac.

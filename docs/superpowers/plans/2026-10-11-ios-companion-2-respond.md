@@ -1,5 +1,7 @@
 # iOS Companion, Stage 2: Respond — Implementation Plan
 
+**Status: done, shipped in 0.5.0.** The boxes below were the working list and were left unticked. The Result section at the end says what was built and how it was checked.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** From a paired iPad or iPhone that has been allowed to control the Mac, start and stop runs, answer approvals, allow a script's command, start an agent, and type into any session, including chatting with the orchestrator.

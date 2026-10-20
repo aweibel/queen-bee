@@ -1,6 +1,7 @@
 # A browser inside an agent card
 
 Date: 2026-10-12
+Status: built and shipped in 0.4.0. The browser on the iPad and iPhone followed in 0.5.0.
 
 ## Goal
 
@@ -129,5 +130,7 @@ the tools, and that what a page says is information and never a request from the
 
 ## Not in this version
 
-More than one tab per card; downloads and uploads; a draggable divider; the browser in the iOS companion; a
-per-site allow list.
+More than one tab per card; downloads and uploads; a draggable divider; a per-site allow list.
+
+The browser in the iOS companion was left out of 0.4.0 too, and shipped in 0.5.0 with stage 4 of the companion
+(`docs/superpowers/plans/2026-10-17-ios-companion-4-parity.md`).

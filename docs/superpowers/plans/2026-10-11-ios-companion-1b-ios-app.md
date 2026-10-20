@@ -1,5 +1,7 @@
 # iOS Companion, Stage 1B: The iPad and iPhone App — Implementation Plan
 
+**Status: done, shipped in 0.5.0.** The boxes below were the working list and were left unticked. The Result section at the end says what was built and how it was checked.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An iPad app (that also runs on iPhone) that pairs with the Mac app over local Wi-Fi and shows every flow, its live canvas, its terminals and its runs. Watch-only.
