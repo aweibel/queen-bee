@@ -241,6 +241,92 @@ final class AppServices {
 
     /// The find panel is open.
     var showsFind = false
+    /// The command palette is open.
+    var showsPalette = false
+
+    // MARK: The window, and what needs the person
+
+    /// Opens the app's one window when it has been closed. Set by views that are always there, since only a
+    /// view can ask SwiftUI to open a window.
+    @ObservationIgnored var openWorkspace: (() -> Void)?
+
+    /// The app's one window, if it is open: on screen, behind others or in the Dock.
+    var workspaceWindow: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(Self.workspaceID) == true && ($0.isVisible || $0.isMiniaturized) }
+    }
+
+    static let workspaceID = "workspace"
+
+    /// Brings the app forward with its window, opening the window again if it was closed.
+    func showWorkspace() {
+        NSApp.activate()
+        if let window = workspaceWindow {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            openWorkspace?()
+        }
+    }
+
+    /// Brings the window forward on a flow and, when it is still there, one of its cards, zoomed to.
+    func reveal(flowID: String, cardID: String?) {
+        let wasShowing = workspaceWindow != nil
+        showWorkspace()
+        guard let controller = allFlows.first(where: { $0.flow.id == flowID }) else { return }
+        let switching = selectedFlowID != flowID
+        selectedFlowID = flowID
+        // The orchestrator isn't a card, and a card may have been deleted since.
+        guard let cardID, controller.flow.card(cardID) != nil else { return }
+        controller.select(.card(cardID))
+        Task {
+            // A window or a flow's canvas that wasn't on screen takes a moment to appear.
+            if switching || !wasShowing { try? await Task.sleep(for: .milliseconds(300)) }
+            if let group = controller.flow.group(containing: cardID), group.isFolded { controller.setFolded(false, group: group.id) }
+            controller.canvas?.zoom(toCard: cardID)
+        }
+    }
+
+    /// Every card waiting on the person, in every open project: agents asking a question or for permission, and
+    /// Approval and Script cards waiting for a go-ahead. The flow on screen comes first.
+    var needingYou: [(controller: FlowController, card: Card)] {
+        let flows = allFlows.filter { $0.flow.id == selectedFlowID } + allFlows.filter { $0.flow.id != selectedFlowID }
+        return flows.flatMap { controller in controller.cardsNeedingYou.map { (controller, $0) } }
+    }
+
+    /// Goes to the next card waiting on the person after the one selected, round and round.
+    func revealNextNeedingYou() {
+        let waiting = needingYou
+        guard !waiting.isEmpty else { return NSSound.beep() }
+        let here = current.flatMap { controller in
+            waiting.firstIndex { $0.controller === controller && controller.selection == .card($0.card.id) }
+        }
+        let next = waiting[here.map { ($0 + 1) % waiting.count } ?? 0]
+        reveal(flowID: next.controller.flow.id, cardID: next.card.id)
+    }
+
+    /// Keeps the Dock icon's badge at the number of cards waiting on the person.
+    private func watchNeedsYou() {
+        withObservationTracking {
+            // Sessions are added without telling anyone, so their count is read to hear of new ones.
+            _ = allFlows.map(\.sessionsRevision)
+            let count = needingYou.count
+            NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        } onChange: {
+            Task { @MainActor in AppServices.shared.watchNeedsYou() }
+        }
+    }
+
+    /// What quitting now would cut short: flows with a run going, and agents at work or waiting on the person.
+    var workInProgress: (runs: [String], agents: [String]) {
+        let runs = allFlows.filter(\.isRunning).map(\.flow.name)
+        let agents = allFlows.flatMap { controller in
+            controller.sessions.compactMap { id, session -> String? in
+                guard session.state == .working || session.state == .needsYou else { return nil }
+                return id == FlowController.orchestratorKey ? ClaudeLauncher.orchestratorName(for: controller.flow) : controller.flow.card(id)?.name
+            }
+        }
+        return (runs, agents.sorted())
+    }
     /// The first-run walk-through is on screen.
     var showsWelcome = false
     /// Blank flows whose pointer to the orchestrator has been closed.
@@ -305,6 +391,7 @@ final class AppServices {
             Task { @MainActor in AppServices.shared.projects.forEach { $0.rescan() } }
         }
         restoreProjects()
+        watchNeedsYou()
         RemoteHost.shared.start()
         // A test run isn't a first run, unless it asks to see the walk-through.
         showsWelcome = remembersProjects ? !UserDefaults.standard.bool(forKey: OnboardingView.seenKey) : LaunchArguments.welcome

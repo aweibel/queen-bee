@@ -12,7 +12,9 @@ struct QueenBeeApp: App {
     private var services: AppServices { AppServices.shared }
 
     var body: some Scene {
-        WindowGroup(id: "workspace") {
+        // One window, never two: every agent's terminal is a single view, which only one canvas can show. Closing
+        // it leaves the agents running, and the Dock icon, a notification or the menu bar item brings it back.
+        Window("Queen Bee", id: AppServices.workspaceID) {
             WorkspaceView()
         }
         .defaultSize(width: 1500, height: 950)
@@ -22,8 +24,9 @@ struct QueenBeeApp: App {
                 Button("Check for Updates…") { delegate.updater.checkForUpdates(nil) }
                     .disabled(!delegate.updateChecker.canCheck)
             }
-            CommandGroup(after: .newItem) {
-                Button("New Flow") { services.current?.project.newFlow() ?? services.projects.first?.newFlow() }
+            // In place of New Window: see the note on the window above.
+            CommandGroup(replacing: .newItem) {
+                Button("New Flow") { (services.current?.project ?? services.projects.first)?.newFlow() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(services.projects.isEmpty)
                 Button("Add Project Folder…") { WorkspaceView.pickProjectFolder() }
@@ -47,6 +50,10 @@ struct QueenBeeApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(services.current?.selectedGroup == nil)
                 Divider()
+                Button("Next Agent Needing You") { services.revealNextNeedingYou() }
+                    .keyboardShortcut("j")
+                    .disabled(services.needingYou.isEmpty)
+                Divider()
                 Button("Duplicate") { services.current?.duplicateSelection() }
                     .keyboardShortcut("d")
                     .disabled(services.current?.selection.cardIDs.isEmpty != false)
@@ -68,9 +75,18 @@ struct QueenBeeApp: App {
                     .disabled(services.current == nil)
             }
             CommandGroup(after: .textEditing) {
-                Button("Find a Card or Flow…") { services.showsFind.toggle() }
+                Button("Find a Card or Flow…") {
+                    services.showsPalette = false
+                    services.showsFind.toggle()
+                }
                     .keyboardShortcut("f")
                     .disabled(services.projects.isEmpty)
+                Button("Command Palette…") {
+                    services.showsFind = false
+                    services.showsPalette.toggle()
+                }
+                .keyboardShortcut("k")
+                .disabled(services.current == nil)
             }
             CommandGroup(replacing: .help) {
                 Button("Welcome to Queen Bee") { services.showsWelcome = true }
@@ -107,6 +123,12 @@ struct QueenBeeApp: App {
         Settings {
             SettingsView()
         }
+
+        MenuBarExtra {
+            MenuBarMenu()
+        } label: {
+            MenuBarLabel()
+        }
     }
 }
 
@@ -137,10 +159,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Theme.apply(Theme.mode)
         Notifier.start()
 
-        // `kill` and a logout send SIGTERM, which would skip applicationWillTerminate. Turn it into a normal quit.
+        // `kill` and a logout send SIGTERM, which would skip applicationWillTerminate. Turn it into a normal quit,
+        // without asking first: whoever sent it isn't at the window to answer.
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        source.setEventHandler { NSApp.terminate(nil) }
+        source.setEventHandler { [weak self] in
+            self?.quitsWithoutAsking = true
+            NSApp.terminate(nil)
+        }
         source.resume()
         termSignal = source
 
@@ -148,11 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if TestHarness.isEnabled {
             Task {
                 try? await Task.sleep(for: .seconds(1))
-                guard !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) else { return }
-                let file = NSApp.mainMenu?.items.compactMap(\.submenu).first { $0.items.contains { $0.keyEquivalent == "n" } }
-                if let item = file?.items.first(where: { $0.keyEquivalent == "n" && $0.keyEquivalentModifierMask == .command }), let action = item.action {
-                    NSApp.sendAction(action, to: item.target, from: item)
-                }
+                guard AppServices.shared.workspaceWindow == nil else { return }
+                AppServices.shared.showWorkspace()
             }
         }
     }
@@ -160,14 +183,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the updater is free to check, kept current for the menu.
     private(set) lazy var updateChecker = UpdateChecker(updater.updater)
 
+    /// Set when the app is told to quit by a signal, which nobody is at the window to confirm.
+    private var quitsWithoutAsking = false
+
+    /// Asks before a quit that would cut short a run or an agent at work: quitting stops every session.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let busy = AppServices.shared.workInProgress
+        guard !quitsWithoutAsking, !TestHarness.isEnabled, !busy.runs.isEmpty || !busy.agents.isEmpty else { return .terminateNow }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit Queen Bee?"
+        var lines: [String] = []
+        if !busy.runs.isEmpty { lines.append("Running now: \(Self.list(busy.runs)).") }
+        if !busy.agents.isEmpty { lines.append("Working or waiting for you: \(Self.list(busy.agents)).") }
+        lines.append("Quitting stops every agent and run. Their conversations are kept, and each agent picks up where it left off next time, but the work under way now is cut short.")
+        alert.informativeText = lines.joined(separator: "\n\n")
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    private static func list(_ names: [String]) -> String {
+        names.count < 2 ? names.joined() : names.dropLast().joined(separator: ", ") + " and " + names.last!
+    }
+
     /// Stops every session the app started, so no `claude` process outlives the app.
     func applicationWillTerminate(_ notification: Notification) {
+        AppServices.shared.current?.canvas?.savePlace()
         AppServices.shared.shutDown()
     }
 
     // Sessions belong to the app, not to a window: closing the window leaves them running,
     // and clicking the Dock icon brings the window back.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if AppServices.shared.workspaceWindow == nil { AppServices.shared.showWorkspace() }
+        return true
+    }
 }
 
 /// Follows Sparkle's "can check now" flag, which changes as the updater starts up and while a check runs.
