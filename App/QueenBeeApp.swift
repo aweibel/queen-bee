@@ -66,13 +66,18 @@ struct QueenBeeApp: App {
             }
             // The app's own Undo and Redo, so they reach the flow wherever the keyboard is:
             // after a click on the palette or a drag from a port, nothing on the canvas has it.
+            // Except in a terminal or a card's browser, where Command-Z is meant for what is typed there.
             CommandGroup(replacing: .undoRedo) {
-                Button(services.current?.undoTitle ?? "Undo") { services.current?.undo() }
-                    .keyboardShortcut("z")
-                    .disabled(services.current == nil)
-                Button(services.current?.redoTitle ?? "Redo") { services.current?.redo() }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(services.current == nil)
+                Button(services.current?.undoTitle ?? "Undo") {
+                    if !FlowController.keyboardIsInTerminalOrBrowser { services.current?.undo() }
+                }
+                .keyboardShortcut("z")
+                .disabled(services.current == nil)
+                Button(services.current?.redoTitle ?? "Redo") {
+                    if !FlowController.keyboardIsInTerminalOrBrowser { services.current?.redo() }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(services.current == nil)
             }
             CommandGroup(after: .textEditing) {
                 Button("Find a Card or Flow…") {

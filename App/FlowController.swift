@@ -644,7 +644,7 @@ final class FlowController: ToolHost {
     func undo() {
         if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canUndo == true {
             text.undoManager?.undo()
-        } else if !Self.keyboardIsInTerminalOrBrowser, undoManager.canUndo {
+        } else if undoManager.canUndo {
             asking { undoManager.undo() } putBack: { undoManager.redo() }
         }
     }
@@ -652,7 +652,7 @@ final class FlowController: ToolHost {
     func redo() {
         if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canRedo == true {
             text.undoManager?.redo()
-        } else if !Self.keyboardIsInTerminalOrBrowser, undoManager.canRedo {
+        } else if undoManager.canRedo {
             asking { undoManager.redo() } putBack: { undoManager.undo() }
         }
     }
