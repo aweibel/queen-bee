@@ -452,6 +452,17 @@ final class FlowController: ToolHost {
         for card in flow.cards where card.kind == .agent && (only == nil || only == card.id) { ids[card.id] = card.sessionID }
         let read = await Task.detached { ids.compactMapValues { UsageReader.usage(sessionID: $0) } }.value
         for (key, value) in read where usage[key] != value { usage[key] = value }
+        stopIfPastSpendingLimit()
+    }
+
+    /// Stops the run once its agents have spent more than the flow allows one run, the way Stop does: its agents
+    /// are interrupted, and the log and a notice say why. The orchestrator's use is not the run's.
+    private func stopIfPastSpendingLimit() {
+        guard isRunning, currentRun != nil, flow.spendingLimit != nil, let engine else { return }
+        let spent = usage.filter { $0.key != Self.orchestratorKey }
+            .reduce(Usage()) { $0 + $1.value.since(usageAtRunStart[$1.key] ?? Usage()) }
+        guard let line = SpendingLimit.passed(limit: flow.spendingLimit, spent: spent) else { return }
+        Task { self.absorb(await engine.stop(ending: .spentLimit, line: line), sender: nil) }
     }
 
     /// A moment after a run ends, once Claude Code has written its totals, the run is given its share. That is
@@ -1551,6 +1562,10 @@ final class FlowController: ToolHost {
             holds.append(pending)
             return runInnerFlow(pending, inner)
         }
+        if let wait = HoldTimeLimit.wait(for: card), pending.kind == .approval || pending.needsAllow {
+            pending.deadline = Date().addingTimeInterval(TimeInterval(wait.components.seconds))
+            answerIfUnanswered(pending.id, after: wait)
+        }
         holds.append(pending)
         if pending.kind == .approval {
             Notifier.post(title: "\(card.name) needs your approval", body: String(hold.text.prefix(200)), flowID: flow.id, cardID: card.id)
@@ -1559,6 +1574,28 @@ final class FlowController: ToolHost {
             Notifier.post(title: "\(card.name) needs you", body: "It wants to run a command you haven't seen: \(pending.command.prefix(160))", flowID: flow.id, cardID: card.id)
         } else {
             runScript(pending)
+        }
+    }
+
+    /// A card with a time limit answers for the person once it is up, through the same path as their own answer. The
+    /// timer goes when the hold is answered or the run ends; a device showing the hold changes nothing. The clock keeps
+    /// counting while the Mac sleeps, so a deadline that passed then is met when it wakes.
+    private func answerIfUnanswered(_ id: String, after wait: Duration) {
+        holdTasks[id] = Task {
+            try? await Task.sleep(for: wait, clock: .continuous)
+            guard !Task.isCancelled, let hold = self.holds.first(where: { $0.id == id }),
+                  hold.kind == .approval || hold.needsAllow, var card = self.flow.card(hold.cardID) else { return }
+            self.holdTasks[id] = nil
+            // The person may have taken the limit off while it waited. Otherwise the answer is the one the card gives
+            // now, after as long as it was given.
+            guard HoldTimeLimit.wait(for: card) != nil else {
+                if let index = self.holds.firstIndex(where: { $0.id == id }) { self.holds[index].deadline = nil }
+                return
+            }
+            card.waitMinutes = Int(wait.components.seconds / 60)
+            self.append("\(card.name): \(HoldTimeLimit.line(for: card))")
+            let port = HoldTimeLimit.port(for: card)
+            self.resolve(id, port: port, text: port == "fail" ? "Nobody let the command run in time, so it was skipped." : nil)
         }
     }
 
@@ -1599,6 +1636,15 @@ final class FlowController: ToolHost {
         let old = flow
         flow.subflowLimit = wanted == Nesting.usualLimit ? nil : wanted
         registerUndo(from: old, "Change Sub-flow Limit", key: "limit")
+    }
+
+    /// The most one run may spend, in dollars, or nil for no limit.
+    func setSpendingLimit(_ dollars: Double?) {
+        let wanted = SpendingLimit.clamped(dollars)
+        guard wanted != flow.spendingLimit else { return }
+        let old = flow
+        flow.spendingLimit = wanted
+        registerUndo(from: old, wanted == nil ? "Remove Spending Limit" : "Change Spending Limit", key: "spending")
     }
 
     func setNotifiesOrchestrator(_ on: Bool) {
@@ -1769,6 +1815,8 @@ final class FlowController: ToolHost {
     private func resolve(_ id: String, port: String, text: String?, byPerson: Bool = false) {
         guard holds.contains(where: { $0.id == id }), let engine else { return }
         holds.removeAll { $0.id == id }
+        // An answer in time stops the clock on it.
+        holdTasks.removeValue(forKey: id)?.cancel()
         let answered = Date()
         Task {
             self.absorb(await engine.holdResolved(flow: self.flow, holdID: id, port: port, text: text), sender: nil)
@@ -1804,6 +1852,9 @@ final class FlowController: ToolHost {
         }
         holds[index].allowOnMac = nil
         holds[index].needsAllow = false
+        // Allowed in time: the command runs, and nothing skips it now.
+        holdTasks.removeValue(forKey: id)?.cancel()
+        holds[index].deadline = nil
         runScript(holds[index])
     }
 

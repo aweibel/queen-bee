@@ -174,13 +174,16 @@ enum CardHelp {
              "“Summarise this in one line: {{message}}” turns a long report into a short brief for the next agent.")
         case .loop:
             ("Sends the work round again until a condition is met, or until it has tried enough times.",
-             "Again goes back to the Writer until the review approves, for at most 3 tries. Then Done.")
+             "Again goes back to the Writer until the review approves, for at most 3 tries. Then Done, or Gave up if it never did.")
         case .approval:
             ("Stops the run and waits for you. You read the message, change it if you like, then approve or reject it.",
              "Before an agent sends an email: Approved goes to the sender, Rejected goes back to the Writer.")
         case .script:
             ("Runs a command on your Mac and checks whether it worked. No AI is involved, so it is quick and certain.",
              "Run “npm test”. Pass goes to Done. Fail goes back to the Coder with the errors.")
+        case .forEach:
+            ("Splits a list into items and sends them on one at a time. What comes back for each is collected, and when every item is done they all go out Done together.",
+             "A list of ten links goes to a Reader one at a time, and the ten summaries go on to a Writer together.")
         case .flow:
             ("Runs another of the project's flows as a single step. Build a piece once, then use it wherever you need it.",
              "A “Review loop” flow of four cards becomes one card in three other flows.")

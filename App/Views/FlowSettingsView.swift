@@ -6,6 +6,7 @@ struct FlowSettingsView: View {
     let controller: FlowController
     @State private var name = ""
     @State private var limit = ""
+    @State private var spending = ""
     @State private var cleared = false
     private var services: AppServices { AppServices.shared }
 
@@ -90,6 +91,21 @@ struct FlowSettingsView: View {
                 .overlay(alignment: .top) { divider }
             }
 
+            line("Stop a run once it has spent") {
+                HStack(spacing: 4) {
+                    Text("$").font(.dsMono(Theme.Size.body, .medium))
+                    TextField("No limit", text: $spending)
+                        .textFieldStyle(.plain)
+                        .font(.dsMono(Theme.Size.body, .medium))
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 64)
+                        .fieldBox()
+                        .onSubmit(commitSpending)
+                        .help("In US dollars. Leave it empty for no limit.")
+                }
+            }
+            text("Queen Bee adds up what a run's agents have used, at API prices, each time one of them finishes a turn. A run that goes past this amount is stopped, its agents are interrupted, and you're told. A sub-flow keeps to its own limit.")
+
             line("Tell the orchestrator when a run ends") {
                 Toggle("", isOn: Binding(get: { controller.flow.notifyOrchestrator }, set: { controller.setNotifiesOrchestrator($0) }))
                     .labelsHidden()
@@ -117,7 +133,10 @@ struct FlowSettingsView: View {
         .onAppear {
             name = controller.flow.name
             limit = "\(controller.ownSubflowLimit)"
+            spending = Self.dollars(controller.flow.spendingLimit)
         }
+        .onDisappear(perform: commitSpending)
+        .onChange(of: controller.flow.spendingLimit) { spending = Self.dollars(controller.flow.spendingLimit) }
         .onChange(of: controller.flow.name) { name = controller.flow.name }
         .onChange(of: controller.ownSubflowLimit) { if Int(limit) != controller.ownSubflowLimit { limit = "\(controller.ownSubflowLimit)" } }
     }
@@ -127,6 +146,21 @@ struct FlowSettingsView: View {
         controller.setSubflowLimit(wanted)
         // A number out of range is brought back into it where you can see it.
         if wanted != controller.ownSubflowLimit { limit = "\(controller.ownSubflowLimit)" }
+    }
+
+    /// Takes what was typed as the limit: empty for none, and anything that isn't an amount puts back what was there.
+    private func commitSpending() {
+        let typed = spending.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: ".")
+        if typed.isEmpty { return controller.setSpendingLimit(nil) }
+        guard let amount = Double(typed) else { return spending = Self.dollars(controller.flow.spendingLimit) }
+        controller.setSpendingLimit(amount)
+        spending = Self.dollars(controller.flow.spendingLimit)
+    }
+
+    /// "5", "2.50", or empty for no limit.
+    static func dollars(_ amount: Double?) -> String {
+        guard let amount else { return "" }
+        return amount == amount.rounded() ? String(format: "%.0f", amount) : String(format: "%.2f", amount)
     }
 
     private var divider: some View { Rectangle().fill(Theme.hairline.ui).frame(height: 1) }

@@ -140,12 +140,26 @@ enum CardSummary {
         case .note: return card.text ?? ""
         case .approval:
             let ask = (card.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return ask.isEmpty ? "Waits for you to approve" : ask
+            return (ask.isEmpty ? "Waits for you to approve" : ask) + timeLimit(card)
+        case .forEach:
+            let most = card.maxItems ?? 20
+            return (card.split ?? .auto) == .lines ? "Each line in turn, up to \(most)" : "Each item in turn, up to \(most)"
         case .flow:
             return "Double-click to build what it does"
         case .script:
             let first = (card.command ?? "").split(separator: "\n").first.map(String.init) ?? ""
-            return first.isEmpty ? "Write the command" : first
+            return (first.isEmpty ? "Write the command" : first) + timeLimit(card)
+        }
+    }
+
+    /// A second line for a card that answers for the person when they don't, such as "Rejects after 8 hours".
+    private static func timeLimit(_ card: Card) -> String {
+        guard let minutes = card.waitMinutes, minutes > 0 else { return "" }
+        let after = HoldTimeLimit.describe(minutes: minutes)
+        switch HoldTimeLimit.port(for: card) {
+        case "approved": return "\nApproves after \(after)"
+        case "rejected": return "\nRejects after \(after)"
+        default: return "\nSkipped if not allowed in \(after)"
         }
     }
 

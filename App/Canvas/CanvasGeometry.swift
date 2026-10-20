@@ -68,6 +68,7 @@ enum CanvasGeometry {
         case .approval: "checkmark.seal"
         case .script: "chevron.left.forwardslash.chevron.right"
         case .flow: "point.3.connected.trianglepath.dotted"
+        case .forEach: "list.bullet"
         }
     }
 }

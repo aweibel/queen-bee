@@ -358,6 +358,8 @@ struct MadeUpEdits {
                 flow.subflowLimit = Nesting.clamped(levels)
             case .notifyOrchestrator(let on):
                 flow.notifyOrchestrator = on
+            case .spendingLimit(let dollars):
+                flow.spendingLimit = SpendingLimit.clamped(dollars)
             }
             return nil
 

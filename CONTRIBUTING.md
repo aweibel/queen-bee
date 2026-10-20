@@ -107,7 +107,7 @@ Bugs:
 - **Deleting a sub-flow leaves its Flow card pointing at nothing**, with no warning.
 - **Sessions sometimes stay at "starting"** when many start together. The end-to-end `fanout` scenario times out
   on this now and then and passes when run again by itself.
-- **Nothing notices a stalled run.** A scheduled run waiting on an Approval card waits for good.
+- **Nothing notices a stalled run.** A scheduled run waiting on an Approval card with no time limit waits for good.
 
 Security hardening:
 
