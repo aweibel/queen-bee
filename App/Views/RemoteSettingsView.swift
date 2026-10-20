@@ -4,7 +4,9 @@ import SwiftUI
 /// The Remote part of Settings: whether paired devices may connect, which are paired, and pairing another.
 struct RemoteSettingsSection: View {
     @AppStorage(RemoteHost.enabledKey) private var enabled = false
+    @AppStorage(RemoteHost.byAddressKey) private var byAddress = false
     @State private var showsPairing = false
+    @State private var addresses: [String] = []
     private var host: RemoteHost { RemoteHost.shared }
 
     var body: some View {
@@ -39,12 +41,35 @@ struct RemoteSettingsSection: View {
                     host.beginPairing()
                     showsPairing = true
                 }
+                .disabled(host.devices.macID == nil)
+                Toggle("Let devices connect by address too", isOn: $byAddress)
+                    .onChange(of: byAddress) { host.setByAddress(byAddress) }
+                    .help("For a paired device that isn't on the same Wi-Fi as this Mac, such as one on a private network like Tailscale.")
+                if byAddress {
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledContent("Port", value: String(RemoteHost.addressPort))
+                        LabeledContent("This Mac's addresses") {
+                            Text(addresses.isEmpty ? "None found" : addresses.joined(separator: "\n"))
+                                .multilineTextAlignment(.trailing)
+                                .textSelection(.enabled)
+                        }
+                        Text("On the device, open Settings, choose “Connect by address” and type one of these with the port. Each device still needs its own key from pairing, and nothing reaches this Mac from the internet unless your network lets it. Use an address only on a network you trust, such as Tailscale.")
+                            .font(.dsSans(Theme.Size.caption))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .onAppear { addresses = RemoteHost.addresses() }
+                }
                 if let problem = host.problem {
                     Text(problem)
                         .font(.dsSans(Theme.Size.caption))
                         .foregroundStyle(Theme.failInk.ui)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                }
+                if host.devices.macID == nil {
+                    Button("Start Afresh") { host.startAfresh() }
+                        .help("Gives this Mac a new name for devices to find it by. Every device will have to be paired again.")
                 }
             }
         } header: {

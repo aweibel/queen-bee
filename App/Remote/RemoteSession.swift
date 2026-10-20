@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import Observation
+import OSLog
 import UniformTypeIdentifiers
 import QueenBeeCore
 import QueenBeeLink
@@ -84,10 +85,19 @@ final class RemoteSession {
     func resetMostQueued() { mostQueued = queuedBytes }
     #endif
     private var turn = 0
+    /// The device's epoch, when it sends commands again after a drop and the Mac is to remember their answers.
+    /// See `CommandMemory`.
+    private let epoch: String?
+    /// Whether the device takes the earlier runs as changes: see `RemoteFeature.historyChanges`.
+    private let historyChanges: Bool
+    /// True while a fresh copy of the open flow is being sent in place of a message that couldn't be.
+    private var isResending = false
 
-    init(connection: LinkConnection, device: PairedDevice) {
+    init(connection: LinkConnection, device: PairedDevice, hello: RemoteHello) {
         self.connection = connection
         self.device = device
+        epoch = hello.epoch.flatMap { $0.isEmpty ? nil : String($0.prefix(64)) }
+        historyChanges = hello.has(RemoteFeature.historyChanges)
         let (stream, continuation) = AsyncStream.makeStream(of: Queued.self)
         outbox = continuation
         // One sender, so messages leave in the order they were queued.
@@ -106,7 +116,14 @@ final class RemoteSession {
     /// Encoded here, once, so what is waiting can be counted as it is queued. False if it wasn't queued.
     @discardableResult
     private func queue(_ message: HostMessage, terminalBytes: Int, pictureOf card: String? = nil) -> Bool {
-        guard !isClosed, let frame = try? Remote.encode(message) else { return false }
+        guard !isClosed else { return false }
+        let frame: Data
+        do {
+            frame = try Remote.encode(message)
+        } catch {
+            couldNotSend(message, error)
+            return false
+        }
         queuedBytes += frame.count
         guard queuedBytes <= Self.backlogLimit else {
             // Closing the connection ends `run`, and that tidies up. Doing it here would pull the flow out
@@ -123,6 +140,30 @@ final class RemoteSession {
         return true
     }
 
+    /// A message couldn't be put into words for the device, as when a number in it isn't one JSON can hold. It is
+    /// noted in the system log. A change to the open flow that is left out would leave the device showing a flow
+    /// that is no longer the Mac's, so the whole flow is sent afresh in its place, as when the device opened it.
+    private func couldNotSend(_ message: HostMessage, _ error: Error) {
+        Self.log.error("Couldn't send \(Self.kind(of: message), privacy: .public) to a device: \(String(describing: error), privacy: .public)")
+        switch message {
+        case .opened, .flow, .run, .edit, .log, .messages, .history, .historyChanged:
+            guard !isResending, let controller else { return }
+            isResending = true
+            defer { isResending = false }
+            let fresh = watchedSnapshot(of: controller)
+            last = fresh
+            // If even that can't be sent, the device keeps what it had until the next change that can.
+            queue(.opened(fresh), terminalBytes: 0)
+        default:
+            break
+        }
+    }
+
+    private static let log = Logger(subsystem: "dev.queenbee.app", category: "remote")
+
+    /// The name a message goes by, for the log. Never what it holds.
+    private static func kind(of message: HostMessage) -> String { Mirror(reflecting: message).children.first?.label ?? "a message" }
+
     /// Called after each message has gone.
     private func sent(_ queued: Queued) {
         queuedBytes -= queued.frame.count
@@ -138,8 +179,25 @@ final class RemoteSession {
 
     /// Reads what the device sends until the connection ends.
     func run() async {
-        while let message = try? await connection.receive(DeviceMessage.self) {
+        while let frame = try? await connection.receive() {
             received += 1
+            guard let message = try? Remote.decode(DeviceMessage.self, from: frame) else {
+                // From a newer device, as like as not. One message the Mac can't read is no reason to drop the
+                // connection, and a command among them is told so, so its button doesn't wait for ever.
+                if let id = Self.commandID(in: frame) { send(.answer(id: id, refusal: Self.unreadableRefusal)) }
+                continue
+            }
+            if case .command(let id, let command) = message, command.isAnswered, let epoch {
+                switch RemoteHost.shared.arrived(id, command, from: self, epoch: epoch) {
+                case .new: break
+                // Sent again after a drop while the first is still being done: told when it has been.
+                case .running: continue
+                // Done already: told what became of it, and not done again.
+                case .done(let refusal):
+                    send(.answer(id: id, refusal: refusal))
+                    continue
+                }
+            }
             switch message {
             // Asking again for the flow already open would send the whole of it and every screen again.
             case .open(let flowID) where flowID == controller?.flow.id: break
@@ -151,10 +209,10 @@ final class RemoteSession {
             // Copy asks the page, which can take a while or never answer. It is given a few seconds of its own, and
             // what the device sends meanwhile is read and obeyed in the order it was sent.
             case .command(let id, let command) where Self.isCopy(command):
-                let door = browserDoor, deviceID = device.id
+                let door = browserDoor, deviceID = device.id, epoch = epoch
                 Task { [weak self] in
                     let refusal = await RemoteCommands.obey(command, from: deviceID, browser: door)
-                    self?.answer(id, command, refusal)
+                    if let self { self.answer(id, command, refusal) } else { Self.remember(id, command, device: deviceID, epoch: epoch, refusal) }
                 }
             // A card's browser is used only while this device has it on screen, and Copy's text comes back here.
             case .command(let id, let command) where Self.isBrowser(command):
@@ -175,6 +233,28 @@ final class RemoteSession {
     /// there are twenty a second, and the last one says how the drag went.
     private func answer(_ id: Int, _ command: RemoteCommand, _ refusal: String?) {
         if command.isAnswered { send(.answer(id: id, refusal: refusal)) }
+        Self.remember(id, command, device: device.id, epoch: epoch, refusal)
+    }
+
+    /// Keeps what became of a command for when the device sends it again, and tells any connection already
+    /// waiting on it. Done even when the connection it came on has gone: that is when it is sent again.
+    private static func remember(_ id: Int, _ command: RemoteCommand, device: String, epoch: String?, _ refusal: String?) {
+        guard command.isAnswered, let epoch else { return }
+        RemoteHost.shared.finished(id, device: device, epoch: epoch, refusal: refusal)
+    }
+
+    /// Tells the device what became of a command it sent again while the first was being done.
+    func answerAgain(_ id: Int, _ command: RemoteCommand, _ refusal: String?) {
+        if command.isAnswered { send(.answer(id: id, refusal: refusal)) }
+    }
+
+    /// What the Mac answers a command it couldn't read.
+    static let unreadableRefusal = "Your Mac couldn't read this. Update Queen Bee on your Mac and on this device, so both are on the newest version."
+
+    /// The id of a command the Mac couldn't otherwise read, so that it can still be answered.
+    private static func commandID(in frame: Data) -> Int? {
+        let object = try? JSONSerialization.jsonObject(with: frame) as? [String: Any]
+        return ((object?["command"] as? [String: Any])?["id"] as? NSNumber)?.intValue
     }
 
     /// Starts or stops a run without making the device wait to be heard: starting can take as long as judging
@@ -198,10 +278,10 @@ final class RemoteSession {
         waiting[flowID, default: 0] += 1
         turn += 1
         let mine = turn
-        slow[flowID] = (mine, Task { [weak self, earlier = slow[flowID]?.task] in
+        slow[flowID] = (mine, Task { [weak self, earlier = slow[flowID]?.task, epoch] in
             await earlier?.value
             let refusal = await RemoteCommands.obey(command, from: deviceID, paced: paced)
-            guard let self else { return }
+            guard let self else { return Self.remember(id, command, device: deviceID, epoch: epoch, refusal) }
             self.waiting[flowID, default: 1] -= 1
             if self.waiting[flowID] == 0 { self.waiting[flowID] = nil }
             if self.slow[flowID]?.turn == mine { self.slow[flowID] = nil }
@@ -331,7 +411,7 @@ final class RemoteSession {
         guard let controller, let old = last else { return }
         let new = watchedSnapshot(of: controller)
         if new.flow != old.flow { revision += 1 }
-        RemoteSnapshot.updates(from: old, to: new, revision: revision).forEach(send)
+        RemoteSnapshot.updates(from: old, to: new, revision: revision, historyChanges: historyChanges).forEach(send)
         last = new
         followTerminals()
         // A card watched may have lost its browser, or gone, or gained one.
