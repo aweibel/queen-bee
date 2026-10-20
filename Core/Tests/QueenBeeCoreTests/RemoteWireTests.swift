@@ -203,6 +203,24 @@ enum WireSamples {
         let oldWelcome = try Remote.encode(OldWelcome(version: 5, macName: "Mac", canControl: false))
         let read = try Remote.decode(RemoteWelcome.self, from: oldWelcome)
         #expect(!read.has(RemoteFeature.commandMemory))
+        #expect(read.memoryID == nil)
+        let withMemory = try Remote.encode(RemoteWelcome(version: 5, macName: "Mac", canControl: true, memoryID: "m1"))
+        #expect(try Remote.decode(OldWelcome.self, from: withMemory) == OldWelcome(version: 5, macName: "Mac", canControl: true))
+        #expect(try Remote.decode(RemoteWelcome.self, from: withMemory).memoryID == "m1")
+    }
+
+    /// Commands that weren't answered are sent again only to the same run of the Mac app that they went to: one that
+    /// has started again since forgot them, and would do them twice.
+    @Test func commandsAreSentAgainOnlyToTheSameRunOfTheMac() {
+        let memory = [RemoteFeature.commandMemory]
+        #expect(RemoteWelcome(version: 5, macName: "Mac", canControl: true, features: memory, memoryID: "a").resends(sentUnder: "a"))
+        // The Mac app started again.
+        #expect(!RemoteWelcome(version: 5, macName: "Mac", canControl: true, features: memory, memoryID: "b").resends(sentUnder: "a"))
+        // A Mac that doesn't say which run it is, now or then, can't be trusted to remember.
+        #expect(!RemoteWelcome(version: 5, macName: "Mac", canControl: true, features: memory).resends(sentUnder: "a"))
+        #expect(!RemoteWelcome(version: 5, macName: "Mac", canControl: true, features: memory, memoryID: "a").resends(sentUnder: nil))
+        // Nor one that doesn't remember commands at all.
+        #expect(!RemoteWelcome(version: 5, macName: "Mac", canControl: true, memoryID: "a").resends(sentUnder: "a"))
     }
 
     /// A card of a kind this app doesn't know is a note saying to update, and the rest of the flow is all there.

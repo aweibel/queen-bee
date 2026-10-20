@@ -91,11 +91,14 @@ final class RemoteClient {
     /// what became of them isn't known: a Mac that remembers commands is sent them again once the device is back,
     /// with the same ids, and answers each with what became of it, never doing one twice.
     @ObservationIgnored private var unanswered: [Int: RemoteCommand] = [:]
-    /// The last command id given out. Ids only go up while the app runs, whatever connection a command goes on,
-    /// which with `DeviceIdentity.epoch` names each command for good.
-    @ObservationIgnored private var lastCommandID = 0
     /// Whether the Mac this device is connected to remembers commands: see `RemoteFeature.commandMemory`.
     @ObservationIgnored private var macRemembers = false
+    /// The `RemoteWelcome.memoryID` of the Mac's last welcome: what the commands in `unanswered` went to. One sent
+    /// again to a Mac app that has started since would be done twice.
+    @ObservationIgnored private var macMemoryID: String?
+    /// How many times running the Mac turned this device's key down. Kept across connections for as long as the
+    /// app runs, so going to the background and back doesn't forget "can't connect", until the Mac lets it in.
+    @ObservationIgnored private var doubt = KeyDoubt()
     /// The time iOS gives the app after it goes to the background, and what ends it.
     @ObservationIgnored private var grace: (task: UIBackgroundTaskIdentifier, timer: Task<Void, Never>)?
     #if DEBUG
@@ -283,7 +286,6 @@ final class RemoteClient {
         var attempt = 0
         /// How many times running the Mac's listener was found and didn't answer.
         var misses = 0
-        var doubt = KeyDoubt()
         while turn == mine, let mac {
             let key: Data
             switch DeviceIdentity.storedKey {
@@ -432,6 +434,7 @@ final class RemoteClient {
                     outcome.gotIn = true
                     since = Date()
                     state = .connected
+                    doubt = KeyDoubt()
                     keyInDoubt = false
                     noteMac(notFound: false)
                     DeviceIdentity.goodService = place.name
@@ -442,7 +445,7 @@ final class RemoteClient {
                     // Asked for again without clearing what is on screen, so the flow that was open stays
                     // there until its fresh copy arrives.
                     if let flowID = mirror.openFlowID { link.send(.open(flowID: flowID)) }
-                    sendAgain(remembered: welcome.has(RemoteFeature.commandMemory), on: link)
+                    sendAgain(welcome, on: link)
                     notifier.connected()
                 default:
                     break
@@ -540,8 +543,7 @@ final class RemoteClient {
         let outbox: ((Int, RemoteCommand) -> Void)? = nil
         #endif
         guard link != nil || outbox != nil else { return Self.notConnected }
-        lastCommandID += 1
-        let id = lastCommandID
+        let id = DeviceIdentity.nextCommandID()
         mirror.willSend(command, id: id)
         #if DEBUG
         debugSent.append(command)
@@ -585,8 +587,7 @@ final class RemoteClient {
         let outbox: ((Int, RemoteCommand) -> Void)? = nil
         #endif
         guard link != nil || outbox != nil else { return }
-        lastCommandID += 1
-        let id = lastCommandID
+        let id = DeviceIdentity.nextCommandID()
         mirror.willSend(command, id: id)
         #if DEBUG
         debugSent.append(command)
@@ -603,11 +604,14 @@ final class RemoteClient {
     }
 
     /// The Mac has let the device in again. What went out before and wasn't answered goes again, with the same
-    /// ids, to a Mac that remembers commands. Any other Mac can't say whether it did them, so they are given up.
-    private func sendAgain(remembered: Bool, on link: Link) {
-        macRemembers = remembered
+    /// ids, to a Mac that remembers commands and hasn't started again since they went. Any other Mac can't say
+    /// whether it did them, so they are given up.
+    private func sendAgain(_ welcome: RemoteWelcome, on link: Link) {
+        macRemembers = welcome.has(RemoteFeature.commandMemory)
+        let resends = welcome.resends(sentUnder: macMemoryID)
+        macMemoryID = welcome.memoryID
         let pending = unanswered.sorted { $0.key < $1.key }
-        guard remembered else {
+        guard resends else {
             for (id, command) in pending { settle(id, Self.noAnswer(to: command)) }
             return
         }
@@ -810,6 +814,10 @@ final class RemoteClient {
         #endif
         mac = DeviceIdentity.pairedMac
         failWaiting()
+        // A new key, and perhaps a new Mac: nothing from before counts against it, or is sent to it again.
+        doubt = KeyDoubt()
+        keyInDoubt = false
+        macMemoryID = nil
         mirror = RemoteMirror()
         terminals.reset()
         noteMac(notFound: false)
@@ -839,8 +847,10 @@ final class RemoteClient {
         noteMac(notFound: false)
         localNetworkBlocked = false
         keyInDoubt = false
+        doubt = KeyDoubt()
         keyUnreadable = false
         macRemembers = false
+        macMemoryID = nil
         macAddress = nil
         notifier.forget()
         pairingProblem = nil

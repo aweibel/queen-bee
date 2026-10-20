@@ -32,6 +32,16 @@ enum DeviceIdentity {
     /// the two together name a command for good. See `RemoteHello.epoch`.
     static let epoch = UUID().uuidString.lowercased()
 
+    /// The last command id given out under `epoch`. Kept beside it, and not by whatever sends the commands, so ids
+    /// never start again while the epoch stays the same.
+    private static var lastCommandID = 0
+
+    /// A command id never given out before under `epoch`.
+    static func nextCommandID() -> Int {
+        lastCommandID += 1
+        return lastCommandID
+    }
+
     /// What the Mac lists this device as.
     static var deviceName: String { UIDevice.current.name }
 
@@ -75,8 +85,7 @@ enum DeviceIdentity {
         let wanted = keyQuery.merging([kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]) { $1 }
         let status = SecItemCopyMatching(wanted as CFDictionary, &found)
         // A key of the wrong length can never be used, which is as good as gone.
-        if status == errSecSuccess, let key = found as? Data, key.count != 32 { return .missing }
-        return StoredKey(status: status, data: found as? Data)
+        return StoredKey(status: status, data: found as? Data).checked
     }
 
     static var key: Data? { storedKey.key }
@@ -84,7 +93,7 @@ enum DeviceIdentity {
     /// Keeps what the Mac handed over when it agreed to pair. False if the key couldn't be kept, and then no
     /// Mac is remembered: one remembered without its key could never be connected to.
     static func save(_ grant: PairGrant) -> Bool {
-        guard grant.key.count == 32, let mac = try? JSONEncoder().encode(PairedMac(macID: grant.macID, macName: grant.macName)) else { return false }
+        guard LinkSecurity.isUsable(grant.key), let mac = try? JSONEncoder().encode(PairedMac(macID: grant.macID, macName: grant.macName)) else { return false }
         // Replaced, not updated, so the new key is kept under the rule below whatever the old one was kept under.
         // The old key is no loss: the Mac stopped taking it the moment it handed out this one.
         SecItemDelete(keyQuery as CFDictionary)

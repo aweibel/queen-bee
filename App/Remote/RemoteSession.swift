@@ -93,9 +93,13 @@ final class RemoteSession {
     /// True while a fresh copy of the open flow is being sent in place of a message that couldn't be.
     private var isResending = false
 
-    init(connection: LinkConnection, device: PairedDevice, hello: RemoteHello) {
+    /// True when the device came in by the Mac's address, so the session ends when connecting by address is turned off.
+    let viaAddress: Bool
+
+    init(connection: LinkConnection, device: PairedDevice, hello: RemoteHello, viaAddress: Bool = false) {
         self.connection = connection
         self.device = device
+        self.viaAddress = viaAddress
         epoch = hello.epoch.flatMap { $0.isEmpty ? nil : String($0.prefix(64)) }
         historyChanges = hello.has(RemoteFeature.historyChanges)
         let (stream, continuation) = AsyncStream.makeStream(of: Queued.self)

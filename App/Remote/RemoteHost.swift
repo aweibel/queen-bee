@@ -40,6 +40,9 @@ final class RemoteHost {
     static let byAddressKey = "remoteByAddress"
     /// The port devices connect to by address. Fixed, so it can be typed into a device once and for all.
     static let addressPort = Remote.addressPort
+    /// Made up afresh each time the app starts, and told to every device, so a device knows whether the commands
+    /// it sent before are still remembered here: see `RemoteWelcome.memoryID`.
+    static let memoryID = UUID().uuidString.lowercased()
 
     let devices = RemoteDevices()
     private(set) var isOn = false
@@ -59,6 +62,12 @@ final class RemoteHost {
     /// The answer to each command devices sent lately: see `CommandMemory`.
     @ObservationIgnored private var memory = CommandMemory<CommandWaiter>()
     @ObservationIgnored private var addressListener: LinkListener?
+    /// The last address listener stopped, which a new one waits for to let go of the port.
+    @ObservationIgnored private var retiringAddressListener: LinkListener?
+    /// The keys the address listener holds, or is about to: it isn't made afresh for the same ones.
+    @ObservationIgnored private var addressKeys: [String: Data]?
+    /// Quick tries since the address listener last worked, while its port was still held: see `ListenRetry`.
+    @ObservationIgnored private var addressQuickTries = 0
     /// Goes up whenever the address listener is to be made afresh, so one from before knows it has been replaced.
     @ObservationIgnored private var addressTurn = 0
 
@@ -329,13 +338,13 @@ final class RemoteHost {
     }
 
     /// Lets a device in, and follows it until it goes.
-    private func welcome(_ device: PairedDevice, hello: RemoteHello, on connection: LinkConnection) async {
+    private func welcome(_ device: PairedDevice, hello: RemoteHello, on connection: LinkConnection, viaAddress: Bool = false) async {
         // A device that connects again has given up on its old connection, even if the Mac hasn't noticed yet.
         closeSessions(of: device.id)
-        let session = RemoteSession(connection: connection, device: device, hello: hello)
+        let session = RemoteSession(connection: connection, device: device, hello: hello, viaAddress: viaAddress)
         sessions.append(session)
         session.send(.welcome(RemoteWelcome(version: Remote.version, macName: macName, canControl: device.canControl,
-                                            features: [RemoteFeature.commandMemory])))
+                                            features: [RemoteFeature.commandMemory], memoryID: Self.memoryID)))
         session.send(.library(library()))
         await session.run()
         sessions.removeAll { $0 === session }
@@ -373,39 +382,47 @@ final class RemoteHost {
     func setByAddress(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Self.byAddressKey)
         listenByAddress()
+        // Devices that came in by address go too: nothing reaches the Mac that way any more. Only here, and not
+        // when the listener is only made afresh, as when another device is paired: those connections carry on.
+        guard !on else { return }
+        for session in sessions where session.viaAddress { session.close() }
+        sessions.removeAll { $0.viaAddress }
     }
 
     /// Listens on `addressPort` with every paired device's key, if connecting by address is on, or stops. Made
-    /// afresh whenever a device is paired, paired again or removed, so it holds exactly the keys of the devices
-    /// paired now. A test copy never listens by address: it would take the port from the copy you use.
+    /// afresh whenever the keys of the devices paired change, as when one is paired, paired again or removed, so it
+    /// holds exactly those. A test copy never listens by address: it would take the port from the copy you use.
     private func listenByAddress() {
-        stopListeningByAddress()
-        guard isOn, !TestHarness.isEnabled, UserDefaults.standard.bool(forKey: Self.byAddressKey) else { return }
+        guard isOn, !TestHarness.isEnabled, UserDefaults.standard.bool(forKey: Self.byAddressKey) else { return stopListeningByAddress() }
         var keys: [String: Data] = [:]
         for device in devices.devices { if let key = devices.storedKey(for: device.id).key { keys[device.id] = key } }
+        // The listener has these keys already, or is about to: making it afresh would only drop the port a moment.
+        guard keys != addressKeys else { return }
+        stopListeningByAddress()
         // A listener with no key would turn everyone away, so there is none until a device is paired.
         guard !keys.isEmpty else { return }
-        addressTurn += 1
+        addressKeys = keys
         let turn = addressTurn
-        do {
-            let listener = try LinkListener(keys: keys, service: nil, localOnly: false, largestInbound: Self.largestFromDevice, port: Self.addressPort)
-            addressListener = listener
-            Task {
-                do {
-                    _ = try await listener.start(onFailure: { error in
-                        Task { @MainActor in RemoteHost.shared.addressListenerEnded(turn, error: error) }
-                    }) { connection in
-                        Task { @MainActor in await RemoteHost.shared.serveByAddress(connection, from: listener) }
-                    }
-                    guard addressTurn == turn else { return }
-                    isListeningByAddress = true
-                    addressProblem = nil
-                } catch {
-                    addressListenerEnded(turn, error: error)
+        let retiring = retiringAddressListener
+        Task {
+            // The port is fixed, so the listener before has to have let go of it first.
+            await retiring?.whenCancelled()
+            guard addressTurn == turn else { return }
+            do {
+                let listener = try LinkListener(keys: keys, service: nil, localOnly: false, largestInbound: Self.largestFromDevice, port: Self.addressPort)
+                addressListener = listener
+                _ = try await listener.start(onFailure: { error in
+                    Task { @MainActor in RemoteHost.shared.addressListenerEnded(turn, error: error) }
+                }) { connection in
+                    Task { @MainActor in await RemoteHost.shared.serveByAddress(connection, from: listener) }
                 }
+                guard addressTurn == turn else { return }
+                isListeningByAddress = true
+                addressProblem = nil
+                addressQuickTries = 0
+            } catch {
+                addressListenerEnded(turn, error: error)
             }
-        } catch {
-            addressListenerEnded(turn, error: error)
         }
     }
 
@@ -423,10 +440,18 @@ final class RemoteHost {
     private func addressListenerEnded(_ turn: Int, error: Error) {
         guard addressTurn == turn else { return }
         stopListeningByAddress()
-        addressProblem = "Queen Bee couldn't listen on port \(Self.addressPort) for devices connecting by address, and will try again. Another app may be using the port: \(error)"
+        // A port still held is most often the listener before letting go of it, so it is tried again in a moment,
+        // a few times, before anyone is told.
+        let wait = ListenRetry.wait(after: error, quickSoFar: addressQuickTries)
+        if wait < ListenRetry.slow {
+            addressQuickTries += 1
+        } else {
+            addressQuickTries = 0
+            addressProblem = "Queen Bee couldn't listen on port \(Self.addressPort) for devices connecting by address, and will try again. Another app may be using the port: \(error)"
+        }
         let retry = addressTurn
         Task {
-            try? await Task.sleep(for: .seconds(Self.listenRetry * 6))
+            try? await Task.sleep(for: .seconds(wait))
             // Not if it has been turned off, or made afresh, since.
             if addressTurn == retry { listenByAddress() }
         }
@@ -434,8 +459,12 @@ final class RemoteHost {
 
     private func stopListeningByAddress() {
         addressTurn += 1
-        addressListener?.stop()
+        if let addressListener {
+            addressListener.stop()
+            retiringAddressListener = addressListener
+        }
         addressListener = nil
+        addressKeys = nil
         isListeningByAddress = false
         if !UserDefaults.standard.bool(forKey: Self.byAddressKey) || !isOn { addressProblem = nil }
         for waiting in unannounced where waiting.deviceID == Self.byAddressMark { waiting.connection.close() }
@@ -462,7 +491,7 @@ final class RemoteHost {
                 connection.close()
                 return
             }
-            await welcome(device, hello: hello, on: connection)
+            await welcome(device, hello: hello, on: connection, viaAddress: true)
         } catch {
             connection.close()
         }

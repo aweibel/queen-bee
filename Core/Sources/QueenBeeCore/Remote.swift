@@ -145,12 +145,25 @@ public struct RemoteWelcome: Codable, Equatable, Sendable {
     public var canControl: Bool
     /// See `RemoteFeature`. Nil from a Mac that has none.
     public var features: [String]?
+    /// Made up afresh each time the Mac app starts. The commands it remembers are forgotten when it quits, so a
+    /// device sends a command again only to the same `memoryID` it went to: see `resends(sentUnder:)`. Nil from a
+    /// Mac that doesn't say.
+    public var memoryID: String?
 
-    public init(version: Int, macName: String, canControl: Bool, features: [String]? = nil) {
+    public init(version: Int, macName: String, canControl: Bool, features: [String]? = nil, memoryID: String? = nil) {
         self.version = version; self.macName = macName; self.canControl = canControl; self.features = features
+        self.memoryID = memoryID
     }
 
     public func has(_ feature: String) -> Bool { features?.contains(feature) == true }
+
+    /// Whether commands that went out under the welcome with `previous` as its `memoryID`, and weren't answered, may
+    /// be sent again now. Only to a Mac that remembers commands and is still the same run of the app: one that has
+    /// started again since has forgotten them, and would do them a second time.
+    public func resends(sentUnder previous: String?) -> Bool {
+        guard has(RemoteFeature.commandMemory), let memoryID, let previous else { return false }
+        return memoryID == previous
+    }
 }
 
 public struct RemoteFlowSummary: Codable, Equatable, Sendable, Identifiable {
