@@ -61,6 +61,30 @@ public enum Checks {
             .joined(separator: "\n\n")
     }
 
+    /// The items a For each card goes through, none of them blank. With `.auto`, a message that is a JSON array,
+    /// alone or in a code fence, gives its elements: text as it is, anything else as JSON. Otherwise each line is one.
+    public static func items(in message: String, split: ItemSplit) -> [String] {
+        func blank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if split == .auto, let array = jsonArray(in: message) {
+            return array.map { $0.stringValue ?? $0.text() }.filter { !blank($0) }
+        }
+        return message.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func jsonArray(in message: String) -> [JSONValue]? {
+        var text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Agents often put JSON in a fence, with or without a language after the opening backticks.
+        if text.hasPrefix("```"), text.hasSuffix("```"), text.count >= 6 {
+            text = String(text.dropFirst(3).dropLast(3))
+            if !text.hasPrefix("["), let newline = text.firstIndex(of: "\n") { text = String(text[text.index(after: newline)...]) }
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard text.hasPrefix("[") else { return nil }
+        return (try? JSONValue.parse(Data(text.utf8)))?.arrayValue
+    }
+
     public static func judgePrompt(statement: String, message: String) -> String {
         """
         Decide whether the STATEMENT is true of the MESSAGE. Answer yes or no.

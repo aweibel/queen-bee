@@ -244,6 +244,7 @@ extension Flow {
             }
         case .start, .script:
             if let command = patch.command { card.command = command }
+            if card.kind == .script, let minutes = patch.waitMinutes { card.waitMinutes = Self.waitOrCleared(minutes) }
         case .ifElse, .loop:
             if let check = patch.check { card.check = check }
             if let value = patch.value { card.value = value }
@@ -261,6 +262,18 @@ extension Flow {
             }
         case .note, .approval:
             if let text = patch.text { card.text = text }
+            guard card.kind == .approval else { break }
+            if let minutes = patch.waitMinutes { card.waitMinutes = Self.waitOrCleared(minutes) }
+            if let answer = patch.whenNoAnswer {
+                let chosen = answer.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard chosen.isEmpty || chosen == "approved" || chosen == "rejected" else {
+                    throw FlowError.invalid("Unknown answer \"\(answer)\". Use approved or rejected")
+                }
+                card.whenNoAnswer = chosen.isEmpty ? nil : chosen
+            }
+        case .forEach:
+            if let split = patch.split { card.split = split }
+            if let items = patch.maxItems { card.maxItems = min(max(items, 1), Engine.mostItems) }
         case .flow:
             if let flowRef = patch.flowRef { card.flowRef = Self.setOrCleared(flowRef) }
         case .and, .or:
@@ -270,6 +283,11 @@ extension Flow {
         card.width = max(card.width, Card.minimumWidth(for: card))
         card.height = max(card.height, Card.minimumHeight(for: card))
         return card
+    }
+
+    /// A time limit as it is kept: 0 or less for none, and never longer than a week.
+    private static func waitOrCleared(_ minutes: Int) -> Int? {
+        minutes > 0 ? min(minutes, HoldTimeLimit.longestMinutes) : nil
     }
 
     private static func setOrCleared(_ value: String) -> String? {

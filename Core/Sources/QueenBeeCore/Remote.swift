@@ -456,6 +456,14 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
     public var saveTo: String?
     // Note, Approval
     public var text: String?
+    // Approval, Script
+    /// Minutes to wait for the person before the card answers for them, 0 for as long as it takes.
+    public var waitMinutes: Int?
+    /// Approval: "approved" or "rejected", the answer it gives when nobody answered in time.
+    public var whenNoAnswer: String?
+    // For each
+    public var split: ItemSplit?
+    public var maxItems: Int?
     // Flow
     /// The id of a flow in the same project for a Flow card to run, or "" for none.
     public var flowRef: String?
@@ -483,6 +491,10 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
         patch.saveTo = saveTo
         patch.text = text
         patch.flowRef = flowRef
+        patch.waitMinutes = waitMinutes
+        patch.whenNoAnswer = whenNoAnswer
+        patch.split = split
+        patch.maxItems = maxItems
         return patch
     }
 
@@ -503,6 +515,7 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
         patch.saveTo = saveTo.map(Remote.plainLine)
         patch.text = text.map(Remote.plainText)
         patch.flowRef = flowRef.map(Remote.plainLine)
+        patch.whenNoAnswer = whenNoAnswer.map(Remote.plainLine)
         if var trigger {
             trigger.minutes = min(max(trigger.minutes, 1), 7 * 24 * 60)
             trigger.hour = min(max(trigger.hour, 0), 23)
@@ -517,7 +530,7 @@ public struct RemoteCardPatch: Codable, Equatable, Sendable {
     /// Why this patch can't be made whatever card it is for. Nil when it is fine.
     public var problem: String? {
         if isEmpty { return "There is nothing to change." }
-        for short in [name, model, effort, permissionMode, role, flowRef] + (branches ?? []) {
+        for short in [name, model, effort, permissionMode, role, flowRef, whenNoAnswer] + (branches ?? []) {
             if let short, !Remote.fitsName(short) { return RemoteCommand.nameTooLong }
         }
         for long in [instructions, command, value, template, text] {
@@ -546,6 +559,8 @@ public enum RemoteFlowOption: Codable, Equatable, Sendable {
     case subflowLimit(levels: Int)
     /// Whether the orchestrator is told when a run ends.
     case notifyOrchestrator(on: Bool)
+    /// The most one run may spend, in dollars, or nil for no limit. A Mac from before spending limits can't read it.
+    case spendingLimit(dollars: Double?)
 }
 
 /// The two drags a device sends step by step.

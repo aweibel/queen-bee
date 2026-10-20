@@ -171,12 +171,24 @@ public actor Engine {
     /// round for as long as their links allow.
     static let maxArrivalsPerEvent = 200
     static let defaultMaxTries = 3
+    /// The most items a For each card sends on in one go, and how many it sends unless set.
+    public static let mostItems = 50
+    static let defaultItems = 20
 
     private struct Message {
         var text: String
         /// The agent whose reply this is. It survives logic cards so the receiver knows who it is hearing from.
         var fromName: String
         var fromStart: Bool
+    }
+
+    /// The items a For each card is going through, one at a time.
+    private struct Round {
+        var items: [String]
+        /// The item out now, counting from 0.
+        var current = 0
+        /// What came back for each item so far, in order.
+        var results: [(from: String, text: String)] = []
     }
 
     private struct Run {
@@ -203,6 +215,8 @@ public actor Engine {
         var answered = false
         /// A Loop card ran out of tries.
         var gaveUp = false
+        /// For each card id to the items it is going through.
+        var rounds: [String: Round] = [:]
     }
 
     private let judge: any Judge
@@ -397,9 +411,10 @@ public actor Engine {
 
     /// Ends the run straight away, without waiting for an event that is being worked out. Such an event is
     /// still going, most likely waiting on the judge: it is told to give up, and what it decides is dropped.
-    public func stop() async -> RunOutput {
+    /// `ending` and `line` say why, for a run the app stops itself, as it does one that has spent its limit.
+    public func stop(ending: RunEnding = .stopped, line: String = "Run stopped") async -> RunOutput {
         guard let id = live else { return RunOutput() }
-        var output = RunOutput(log: ["Run stopped"], finished: true, runID: id, ending: .stopped)
+        var output = RunOutput(log: [line], finished: true, runID: id, ending: ending)
         // Nil while the run's first event is still being worked out: nothing has been handed to anyone yet.
         if let run, run.id == id { output.leftWaiting = Self.agents(in: run.pending) }
         end()
@@ -454,6 +469,11 @@ public actor Engine {
                 let missing = Set(flow.links(into: andID).map(\.from)).subtracting(have.keys)
                 let names = flow.cards.filter { missing.contains($0.id) }.map(\.name).joined(separator: ", ")
                 output.log.append("\(Self.title(card)) was still waiting for \(names.isEmpty ? "a message" : names) when the run ended")
+            }
+            // So is a For each whose item never found its way back.
+            for (id, round) in state.rounds.sorted(by: { $0.key < $1.key }) {
+                guard let card = flow.card(id) else { continue }
+                output.log.append("\(Self.title(card)) was still waiting for what came back for item \(round.current + 1) of \(round.items.count) when the run ended")
             }
         } else {
             var state = state
@@ -604,6 +624,12 @@ public actor Engine {
             if case .answer(true) = judged {
                 output.log.append("\(title) → Done")
             } else if tries >= limit {
+                state.tries[card.id] = nil
+                // A flow that says what to do when the tries run out has dealt with it, and the run goes on as usual.
+                if !flow.links(from: card.id, port: "gave-up").isEmpty {
+                    output.log.append("\(title) → Gave up after \(tries) tries")
+                    return ("gave-up", message)
+                }
                 output.log.append("\(title) → Done after \(tries) tries")
                 state.gaveUp = true
             } else {
@@ -641,10 +667,65 @@ public actor Engine {
                               : card.kind == .script ? "\(title) is running its command" : "\(title) is running its flow")
             return nil
 
+        case .forEach:
+            return forEach(card, message, by: link, in: flow, state: &state, output: &output)
+
         case .note, .start:
             output.log.append("Dropped a message linked into \(title), which takes no input")
             return nil
         }
+    }
+
+    /// A For each card. A message that comes back to it along its body is what came back for the item that is out,
+    /// and the next item goes; any other message is a new list to go through. Each item is a fresh pass through
+    /// the body: its links count their passes again and its Or cards pass on a first message again.
+    private func forEach(_ card: Card, _ message: Message, by link: Link, in flow: Flow,
+                         state: inout Run, output: inout RunOutput) -> (port: String, message: Message)? {
+        let title = Self.title(card)
+        let body = body(of: card, in: flow)
+        func goOn(_ round: Round) -> (port: String, message: Message) {
+            state.rounds[card.id] = round
+            for id in body.links { state.passes[id] = nil }
+            state.fired.subtract(body.cards)
+            output.log.append("\(title) → Each (item \(round.current + 1) of \(round.items.count))")
+            return ("each", Message(text: round.items[round.current], fromName: card.name, fromStart: false))
+        }
+
+        if var round = state.rounds[card.id] {
+            guard body.links.contains(link.id) else {
+                output.log.append("\(title) is still going through its items, so it dropped a message from \(message.fromName)")
+                return nil
+            }
+            let item = round.items[round.current]
+            let short = item.count > 60 ? String(item.prefix(60)) + "…" : item
+            round.results.append((from: "item \(round.current + 1): \(short)", text: message.text))
+            round.current += 1
+            if round.current < round.items.count { return goOn(round) }
+            state.rounds[card.id] = nil
+            output.log.append("\(title) → Done, with what came back for \(round.items.count == 1 ? "its item" : "all \(round.items.count) items")")
+            return ("done", Message(text: Checks.combine(round.results), fromName: card.name, fromStart: false))
+        }
+
+        let all = Checks.items(in: message.text, split: card.split ?? .auto)
+        guard !all.isEmpty else {
+            output.log.append("\(title) found no items in the message from \(message.fromName), so it went straight to Done")
+            return ("done", message)
+        }
+        let most = min(max(card.maxItems ?? Self.defaultItems, 1), Self.mostItems)
+        if all.count > most { output.log.append("\(title) found \(all.count) items and sends on the first \(most), its most") }
+        return goOn(Round(items: Array(all.prefix(most))))
+    }
+
+    /// The links a For each card's items travel, from its Each output until they come back into it, and the cards
+    /// on the way. A link back into the card from one of those cards is how an item's result comes back.
+    private func body(of card: Card, in flow: Flow) -> (links: Set<String>, cards: Set<String>) {
+        var links: Set<String> = [], cards: Set<String> = []
+        var next = flow.links(from: card.id, port: "each")
+        while let link = next.popLast() {
+            guard links.insert(link.id).inserted, link.to != card.id else { continue }
+            if cards.insert(link.to).inserted { next += flow.links(from: link.to) }
+        }
+        return (links, cards)
     }
 
     /// An If or Loop card's check. An answer of nil when a judge check has no statement or the judge could not answer.

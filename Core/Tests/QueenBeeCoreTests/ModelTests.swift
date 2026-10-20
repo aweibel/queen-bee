@@ -6,7 +6,8 @@ import Testing
     @Test func portsFollowTheCardKind() {
         #expect(ports(of: .make(kind: .agent, name: "A", x: 0, y: 0)) == ["out"])
         #expect(ports(of: .make(kind: .ifElse, name: "If", x: 0, y: 0)) == ["yes", "no"])
-        #expect(ports(of: .make(kind: .loop, name: "Loop", x: 0, y: 0)) == ["done", "again"])
+        #expect(ports(of: .make(kind: .loop, name: "Loop", x: 0, y: 0)) == ["done", "again", "gave-up"])
+        #expect(ports(of: .make(kind: .forEach, name: "Each", x: 0, y: 0)) == ["each", "done"])
         #expect(ports(of: .make(kind: .end, name: "End", x: 0, y: 0)).isEmpty)
         var sw = Card.make(kind: .switchCard, name: "Switch", x: 0, y: 0)
         sw.branches = ["bug", "feature"]
