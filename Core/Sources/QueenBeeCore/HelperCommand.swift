@@ -4,7 +4,8 @@ import Foundation
 /// and guard messages, and the orchestrator runs it as its tool server. Every mode forwards to the app.
 public enum HelperCommand {
     static let usage = """
-    usage: qb <hook|route|sent|may-send|mcp|browser-mcp|capabilities>
+    usage: qb <run|hook|route|sent|may-send|mcp|browser-mcp|capabilities>
+      run       start a flow and wait for its answer: qb run <project folder> <flow> [message] [--no-wait]
       hook      forward a Claude Code hook's JSON (stdin) to Queen Bee
       route     send a finished turn's reply (stdin) and print the deliveries to make
       sent      report how a delivery went (stdin)
@@ -40,6 +41,24 @@ public enum HelperCommand {
         // which it sends in the shape Claude Code reads.
         if kind == "hook", reply["hookSpecificOutput"] != nil { return (Data((reply.text() + "\n").utf8), 0) }
         return (output(reply.text()), 0)
+    }
+
+    /// `qb run`, for a person at a terminal or a script: starts a flow and, unless told not to, waits for the run to
+    /// end. Unlike the other subcommands this one says plainly when the app can't be reached, and exits non-zero.
+    public static func runFlow(arguments: [String], currentDirectory: String,
+                               send: (WireRequest) throws -> JSONValue) -> (stdout: Data, stderr: Data, exitCode: Int32) {
+        guard let request = OutsideRun.parse(arguments, currentDirectory: currentDirectory) else {
+            return (Data(), Data(OutsideRun.usage.utf8), OutsideRun.Exit.usage)
+        }
+        let reply: JSONValue
+        do {
+            reply = try send(WireRequest(kind: "run", session: "", payload: request.payload))
+        } catch {
+            let why = (error as? WireError)?.description ?? String(describing: error)
+            return (Data(), Data("Couldn't reach Queen Bee. Is it open? (\(why))\n".utf8), OutsideRun.Exit.notStarted)
+        }
+        let outcome = OutsideRun.outcome(of: reply)
+        return (Data(outcome.stdout.utf8), Data(outcome.stderr.utf8), outcome.exitCode)
     }
 
     /// Relays a tool server's traffic: one JSON-RPC message per line in, one reply per line out. `kind` is "mcp"
@@ -79,6 +98,19 @@ public enum HelperCommand {
         }
         // FileHandle writes straight through, so each reply reaches Claude Code without waiting in a buffer.
         func print(_ data: Data) { try? FileHandle.standardOutput.write(contentsOf: data) }
+
+        if arguments.first == "run" {
+            let path = OutsideRun.socketPath(environment: environment, home: NSHomeDirectory()) { FileManager.default.fileExists(atPath: $0) }
+            let waits = !arguments.contains("--no-wait")
+            let result = runFlow(arguments: Array(arguments.dropFirst()), currentDirectory: FileManager.default.currentDirectoryPath) { request in
+                guard let path else { throw WireError("Queen Bee's socket isn't there") }
+                // A run can wait on an Approval card for hours, so waiting for its end has no time limit.
+                return try Wire.send(request, socketPath: path, timeout: waits ? 0 : 30)
+            }
+            print(result.stdout)
+            try? FileHandle.standardError.write(contentsOf: result.stderr)
+            exit(result.exitCode)
+        }
 
         // The build writes CAPABILITIES.md from this, so the file is never edited by hand.
         if arguments.first == "capabilities" {

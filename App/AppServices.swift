@@ -298,6 +298,7 @@ final class AppServices {
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: supportDirectory.path)
         installPlugin()
         startServer()
+        listenForLinks()
         loadRoles()
         loadTold()
         // Also a backstop for flow files the watcher missed while the app was in the background.
@@ -567,6 +568,9 @@ final class AppServices {
             guard let owner = credentialOwners[request.session] else { return fallback(for: request) }
             parts = owner.split(separator: "/", maxSplits: 1).map(String.init)
         }
+        // `qb run` is typed by the person, or a script of theirs, with no session behind it. Only this Mac's own
+        // account can reach the socket, whose folder no one else may open.
+        if request.kind == "run" { return await runFromCommandLine(request.payload) }
         if request.kind == "test" {
             guard TestHarness.isEnabled else { return ["error": "testing is off"] }
             if let reply = await TestHarness.handleRemote(request.payload) { return reply }
@@ -607,6 +611,89 @@ final class AppServices {
         }
     }
 
+    // MARK: Runs started from outside the app
+
+    /// `qb run`: starts a flow of a project with a message, as if it were typed into the flow's Start card, and unless
+    /// told not to, answers once the run has ended. The folder must be one the person has opened in the app, so a
+    /// folder they never said they trust can't be run this way: an open one is used, and one they trusted before
+    /// is opened again.
+    func runFromCommandLine(_ payload: JSONValue) async -> JSONValue {
+        guard let request = OutsideRun.Request(payload: payload) else { return OutsideRun.refusal("Say which project folder and which flow to run.") }
+        let root = URL(fileURLWithPath: request.project).standardizedFileURL
+        var project = projects.first { $0.root == root }
+        if project == nil {
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder), isFolder.boolValue else {
+                return OutsideRun.refusal("There is no folder at \(root.path).")
+            }
+            guard isTrusted(root) else {
+                return OutsideRun.refusal("Queen Bee hasn't opened \(root.lastPathComponent) before. Add it in Queen Bee first, so you can say whether you trust the flows in it.")
+            }
+            project = addProject(root, select: false)
+        }
+        guard let project else { return OutsideRun.refusal("Queen Bee couldn't open \(root.path).") }
+        let wanted = request.flow.trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = project.controllers.filter { $0.flow.name.caseInsensitiveCompare(wanted) == .orderedSame }
+        guard let controller = project.controller(wanted) ?? (named.count == 1 ? named.first : nil) else {
+            return OutsideRun.refusal(named.count > 1 ? "More than one flow in \(project.name) is called \(wanted). Use its id."
+                                      : "\(project.name) has no flow called \(wanted).")
+        }
+        let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : request.message
+        let started = await controller.start(command: message, note: "Started from the command line")
+        guard started.began, let id = started.runID else { return OutsideRun.refusal(started.status) }
+        guard request.wait else { return OutsideRun.started(runID: id, flow: controller.flow.name) }
+        let record = await controller.runEnded(id)
+        return OutsideRun.ended(runID: id, flow: controller.flow.name, record: record, answers: record.map(controller.answers) ?? [])
+    }
+
+    /// Whether the person has said they trust the flows in this folder, or it had none when they added it.
+    private func isTrusted(_ root: URL) -> Bool {
+        TestHarness.isEnabled || (UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? []).contains(root.standardizedFileURL.path)
+    }
+
+    @ObservationIgnored private let linkOpener = LinkOpener()
+
+    /// Takes `queenbee://` links from here on, in place of the window that would otherwise open for them.
+    private func listenForLinks() {
+        NSAppleEventManager.shared().setEventHandler(linkOpener, andSelector: #selector(LinkOpener.open(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    /// A `queenbee://run` link. Any web page or app can open one, so the run starts only after the person says yes
+    /// here, with the flow and its message in front of them. The flow must be in a folder open in the app.
+    func open(link url: URL) {
+        NSApp.activate()
+        guard let link = OutsideRun.link(url) else {
+            return Self.tell("Queen Bee can't open this link", "It isn't a link to run a flow, or its message is longer than \(Remote.promptLimit) characters.")
+        }
+        let named = allFlows.filter { $0.flow.name.caseInsensitiveCompare(link.flow) == .orderedSame }
+        guard let controller = deviceFlow(link.flow) ?? (named.count == 1 ? named.first : nil) else {
+            return Self.tell("Queen Bee can't find that flow", "No flow called \(link.flow), or with that id, is in a folder open in Queen Bee. If two open folders have it, open only one of them.")
+        }
+        selectedFlowID = controller.flow.id
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Run “\(controller.flow.name)”?"
+        let what = link.message.isEmpty ? "with its Start card's own command." : "with this message:\n\n\(link.message.prefix(1_000))\(link.message.count > 1_000 ? "…" : "")"
+        alert.informativeText = "A link opened from a web page or another app is asking to start a run of \(controller.flow.name) in \(controller.project.name) \(what)\n\nThe flow's agents will work with the permissions they have. Only run it if you opened this link yourself."
+        // Don't Run is first, so Return turns the run down.
+        alert.addButton(withTitle: "Don't Run")
+        alert.addButton(withTitle: "Run")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : link.message
+        Task {
+            let started = await controller.start(command: message, note: "Started from a link, once you said yes")
+            if !started.began { controller.banner = started.status }
+        }
+    }
+
+    private static func tell(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
     /// What to say when the flow a session belongs to isn't open.
     private func fallback(for request: WireRequest) -> JSONValue {
         switch request.kind {
@@ -627,6 +714,15 @@ final class AppServices {
 nonisolated struct CanvasObstruction: Equatable, Sendable {
     var left: CGFloat
     var right: CGFloat
+}
+
+/// Hands `queenbee://` links the system opens the app with to the app. An Apple event handler has to be an object.
+private final class LinkOpener: NSObject {
+    @objc func open(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue, let url = URL(string: text) else { return }
+        // After the event is answered, so the alert never sits inside the system's call.
+        Task { @MainActor in AppServices.shared.open(link: url) }
+    }
 }
 
 private struct WeakController {

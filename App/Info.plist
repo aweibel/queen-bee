@@ -17,5 +17,17 @@
 		<string>_queenbee._tcp</string>
 		<string>_queenbee-pair._tcp</string>
 	</array>
+	<!-- queenbee://run?flow=…&message=… starts a run, once the person says yes to it in the app. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Queen Bee run link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>queenbee</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

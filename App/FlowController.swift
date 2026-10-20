@@ -1747,9 +1747,14 @@ final class FlowController: ToolHost {
     }
 
     /// The record of a run of this flow, once it has ended. Nil if the flow is closed first.
-    private func runEnded(_ id: String) async -> RunRecord? {
+    func runEnded(_ id: String) async -> RunRecord? {
         guard currentRun?.id == id else { return runs.last { $0.id == id } }
         return await withCheckedContinuation { endWaiters[id, default: []].append($0) }
+    }
+
+    /// What reached the flow's End cards in a run, in canvas order.
+    func answers(in record: RunRecord) -> [String] {
+        flow.cards.filter { $0.kind == .end }.compactMap { record.results[$0.id] }
     }
 
     /// Lays the flow out left to right in the order its links run, then shows all of it.
