@@ -5,12 +5,28 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repository. The secrets check reads the history and nothing more.
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes an older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions are pinned to a commit, with the release it is in the comment beside it, so a moved tag
+# can't change what runs here.
 jobs:
   core:
     name: Core unit tests
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Core/.build
+          key: core-${{ runner.os }}-${{ hashFiles('Core/Package.swift', 'Core/Package.resolved') }}
+          restore-keys: core-${{ runner.os }}-
       - name: swift test
         working-directory: Core
         run: swift test
@@ -18,13 +34,50 @@ jobs:
         working-directory: Core
         run: xcodebuild -scheme QueenBeeCore-Package -destination 'generic/platform=iOS Simulator' build
 
+  mac:
+    name: Mac app build
+    # macos-26 is the newest macOS runner GitHub offers as this is written. The app needs Xcode 27, which the
+    # image may carry beside an older default, so the step below picks it when it is there.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Use Xcode 27
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; else echo "::warning::No Xcode 27 on this runner; building with the default."; fi
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: spm-mac-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-mac-${{ runner.os }}-
+      # Signed with "-", as project.yml sets for every build but a release, so no certificate is needed.
+      - name: Debug build
+        run: ./scripts/build.sh
+      # A release build must have no test harness: the strings it would carry are in the debug build and
+      # nowhere in the release one. Checking the debug build first shows the search would find them.
+      - name: Release build, without the test harness
+        run: |
+          hooks() { find "$1/Contents/MacOS" -type f -exec strings -a {} + | grep -c -e '--testing' -e 'QB_SUPPORT_DIR' || true; }
+          [ "$(hooks build/Build/Products/Debug/QueenBee.app)" -gt 0 ] || { echo "The debug build has no test harness strings to look for."; exit 1; }
+          ./scripts/build.sh Release
+          FOUND=$(hooks build/Build/Products/Release/QueenBee.app)
+          [ "$FOUND" -eq 0 ] || { echo "The release build carries the test harness ($FOUND matches)."; exit 1; }
+
   mobile:
     name: iPad and iPhone app builds
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install XcodeGen
         run: brew install xcodegen
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: spm-mobile-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-mobile-${{ runner.os }}-
       # For the Simulator, so no Apple account or signing details are needed.
       - name: Build for the Simulator
         run: ./scripts/build-mobile.sh
@@ -32,13 +85,17 @@ jobs:
   clean:
     name: Nothing private in the repository
     runs-on: ubuntu-latest
+    # The secrets check lists a pull request's commits to know what to scan.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Signing details, keys and home paths
         run: ./scripts/check-clean.sh
       - name: Secrets
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
