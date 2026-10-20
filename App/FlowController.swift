@@ -1071,9 +1071,16 @@ final class FlowController: ToolHost {
         heldBack.remove(id)
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
+        let folder = ClaudeLauncher.folder(for: flow.cards[index], projectRoot: project.root)
+        let start = ClaudeLauncher.transcriptStart(for: flow.cards[index].sessionID!, in: folder)
+        if start == .freshWithNewID {
+            // Its conversation was had in another folder, and Claude Code only carries one on in the folder it began in.
+            flow.cards[index].sessionID = UUID().uuidString.lowercased()
+            append("\(flow.cards[index].name) now works in a different folder, so it starts a new conversation there")
+        }
         let card = flow.cards[index]
         // A session with no transcript yet starts with today's instructions, and keeps them for good.
-        if !ClaudeLauncher.transcriptExists(for: card.sessionID!) {
+        if start != .resume {
             services.noteBorn(session: card.sessionID!, instructions: ClaudeLauncher.agentPrompt(flow: flow, card: card))
         }
         guard let spec = ClaudeLauncher.agent(flow: flow, card: card, sessionID: card.sessionID!, projectRoot: project.root,
@@ -1087,7 +1094,13 @@ final class FlowController: ToolHost {
     func startOrchestrator() {
         guard let environment = services.environment else { return }
         if flow.orchestratorSessionID.flatMap(UUID.init(uuidString:)) == nil { flow.orchestratorSessionID = UUID().uuidString.lowercased() }
-        if !ClaudeLauncher.transcriptExists(for: flow.orchestratorSessionID!) {
+        let start = ClaudeLauncher.transcriptStart(for: flow.orchestratorSessionID!, in: project.root.path)
+        if start == .freshWithNewID {
+            // The project folder moved since the orchestrator's conversation began, so it begins a new one here.
+            flow.orchestratorSessionID = UUID().uuidString.lowercased()
+            append("The orchestrator's earlier conversation was in another folder, so it starts a new one")
+        }
+        if start != .resume {
             services.noteBorn(session: flow.orchestratorSessionID!, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
         }
         guard let spec = ClaudeLauncher.orchestrator(flow: flow, sessionID: flow.orchestratorSessionID!, projectRoot: project.root,
@@ -1172,7 +1185,7 @@ final class FlowController: ToolHost {
         let type = payload["notification_type"]?.stringValue
             ?? ((payload["message"]?.stringValue ?? "").localizedCaseInsensitiveContains("permission") ? "permission_prompt" : nil)
         let wasWaiting = session.state == .needsYou
-        session.apply(hook: event, notificationType: type)
+        session.apply(hook: event, notificationType: type, source: payload["source"]?.stringValue, trigger: payload["trigger"]?.stringValue)
         if session.state == .needsYou, !wasWaiting {
             let name = who == Self.orchestratorKey ? "The orchestrator" : flow.card(who)?.name ?? "An agent"
             Notifier.post(title: "\(name) needs you", body: "In \(flow.name). It is waiting for your answer or your go-ahead.",
@@ -1189,7 +1202,8 @@ final class FlowController: ToolHost {
         guard who != Self.orchestratorKey else { return }
         switch event {
         case "SessionStart":
-            pluginSpoke.remove(who)
+            // A summary made mid-conversation keeps the same process, and the plugin it had loaded.
+            if payload["source"]?.stringValue != "compact" { pluginSpoke.remove(who) }
         case "Stop":
             let reply = payload["last_assistant_message"]?.stringValue ?? ""
             session.lastReply = reply

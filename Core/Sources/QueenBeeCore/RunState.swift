@@ -15,6 +15,18 @@ public enum SessionState: String, Codable, Sendable, CaseIterable {
         case .exited: "Exited"
         }
     }
+
+    /// The state after Claude Code's SessionStart hook, from the hook's `source`. `compactedByPerson` is true when
+    /// the summary was asked for with /compact, as the PreCompact hook before it says.
+    ///
+    /// A session starts afresh at its prompt after a launch ("startup"), a /resume or a launch with --resume
+    /// ("resume") and a /clear ("clear"), so it is idle. Claude Code summarising a conversation that has grown too
+    /// long ("compact") is different: it does that in the middle of a turn, and the turn carries on afterwards. A
+    /// session at work is still at work then, and anything waiting to be typed must keep waiting.
+    public func afterSessionStart(source: String?, compactedByPerson: Bool = false) -> SessionState {
+        guard source == "compact", !compactedByPerson else { return .idle }
+        return self == .starting || self == .notStarted ? .idle : self
+    }
 }
 
 /// Where the run on show has been, for one card.

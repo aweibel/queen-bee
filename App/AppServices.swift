@@ -314,6 +314,10 @@ final class AppServices {
             self.environment = resolved
             if resolved.claude == nil {
                 self.problem = "Queen Bee can't find Claude Code. Install it from claude.com/claude-code, then reopen Queen Bee."
+                    + (resolved.shellTimedOut ? " Your shell's startup files took too long to load, which can hide where it is installed." : "")
+            } else if resolved.shellTimedOut {
+                let seconds = Int(ResolvedEnvironment.shellTimeout)
+                self.problem = "Your shell's startup files (such as ~/.zshrc) took more than \(seconds) seconds to load, so Queen Bee went on without them. If an agent can't find a command you use, look there for something slow or waiting for input, then reopen Queen Bee."
             }
         }
     }

@@ -611,6 +611,8 @@ struct CardContext: Equatable {
     /// What a card holding a message is waiting on, in a few words.
     var waiting: String?
     var sessionState: SessionState = .notStarted
+    /// The session was started a while ago and hasn't said it is ready.
+    var isSlowToStart = false
     /// The card's settings have changed since its session started.
     var needsRestart = false
     /// A run is under way. Marks left by a run that has ended say where it went, not what is live.

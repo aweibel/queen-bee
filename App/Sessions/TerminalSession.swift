@@ -29,7 +29,18 @@ final class TerminalSession: NSObject {
     @ObservationIgnored let view: SessionTerminalView
     /// What the terminal shows, for a paired device. Nothing runs for it until it is first asked for.
     @ObservationIgnored private(set) lazy var feed: TerminalFeed = makeFeed()
-    private(set) var state: SessionState = .notStarted
+    private(set) var state: SessionState = .notStarted {
+        didSet {
+            guard state != oldValue else { return }
+            if state != .starting { isSlowToStart = false }
+            KeepAwake.note(self, live: isLive, working: state == .working)
+        }
+    }
+    /// Claude Code was started a while ago and hasn't said it is ready. It may be asking something in the terminal,
+    /// such as whether to trust the folder, or it may be stuck. Nothing is typed into it meanwhile.
+    private(set) var isSlowToStart = false
+    /// How long a session may take to say it is ready before its card says so.
+    static let slowToStartAfter: Duration = .seconds(20)
     /// The session's last finished reply, as its turn-end reported it.
     var lastReply: String?
     /// The card settings this session was started with. A running session keeps these until
@@ -46,6 +57,10 @@ final class TerminalSession: NSObject {
     @ObservationIgnored private var waiting: [String] = []
     @ObservationIgnored private var readyAt: Date = .distantFuture
     @ObservationIgnored private var appearanceObservation: NSKeyValueObservation?
+    /// The PreCompact hook said the next summary was asked for with /compact, not made in the middle of a turn.
+    @ObservationIgnored private var compactedByPerson = false
+    /// Counts launches, so the check on a slow start only looks at the launch that set it going.
+    @ObservationIgnored private var launches = 0
 
     init(key: String) {
         self.key = key
@@ -84,8 +99,15 @@ final class TerminalSession: NSObject {
         launchedInstructions = instructions
         claudeSessionID = spec.sessionID
         state = .starting
+        launches += 1
+        let launch = launches
         view.startProcess(executable: spec.executable, args: spec.arguments, environment: spec.environment,
                           currentDirectory: spec.workingDirectory)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.slowToStartAfter)
+            guard let self, self.launches == launch, self.state == .starting else { return }
+            self.isSlowToStart = true
+        }
     }
 
     func terminate() {
@@ -96,13 +118,20 @@ final class TerminalSession: NSObject {
 
     /// Applies a hook event to the state. Returns false for events that change nothing.
     @discardableResult
-    func apply(hook event: String, notificationType: String?) -> Bool {
+    func apply(hook event: String, notificationType: String?, source: String? = nil, trigger: String? = nil) -> Bool {
         switch event {
         case "SessionStart":
+            let next = state.afterSessionStart(source: source, compactedByPerson: compactedByPerson)
+            compactedByPerson = false
+            // A summary made mid-turn: the turn goes on, and what is waiting to be typed waits for it to end.
+            guard next == .idle else { return false }
             // The prompt box takes a moment to accept input after the hook fires.
             readyAt = Date().addingTimeInterval(1.5)
             state = .idle
             flushSoon()
+        case "PreCompact":
+            compactedByPerson = trigger == "manual"
+            return false
         case "UserPromptSubmit": state = .working
         case "PostToolUse":
             // A tool ran, so whatever the session was waiting on you for has been answered.
