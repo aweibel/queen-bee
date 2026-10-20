@@ -60,12 +60,19 @@ SUPPORT_PREFIX = os.path.expanduser("~/Library/Application Support/QBTest-")
 SUPPORT = SUPPORT_PREFIX + str(os.getpid())
 
 results = []
+# Scenarios that couldn't run here, with why. They are neither passes nor failures, and the summary counts them.
+skipped = []
 
 
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(("  PASS  " if ok else "  FAIL  ") + name + (f"  ({detail})" if detail and not ok else ""), flush=True)
     return ok
+
+
+def skip(scenario, reason):
+    skipped.append((scenario, reason))
+    print("  SKIP  " + reason, flush=True)
 
 
 # ---- talking to the app ----
@@ -2082,11 +2089,11 @@ def shown_card(state, name):
 def scenario_mobile(app):
     print("mobile: the iPad app pairs with the Mac, connects, comes back by itself, and learns when it is removed", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("mobile", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("mobile", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     app.open_flow(GUARD)
     # Printed before the app has ever connected, so the app can only have it from the Mac's kept output.
@@ -2767,11 +2774,11 @@ def scenario_mobile(app):
 def scenario_terminals():
     print("terminals: the iPad app's terminals, fed output made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("terminals", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("terminals", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -2902,11 +2909,11 @@ def scenario_terminals():
 def scenario_panels():
     print("panels: the iPad app's panels, fed a run made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("panels", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("panels", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3125,11 +3132,11 @@ def scenario_panels():
 def scenario_controls():
     print("controls: the iPad app's run bar and the buttons that answer a run, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("controls", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("controls", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3309,11 +3316,11 @@ def scenario_controls():
 def scenario_editing():
     print("editing: the iPad app's canvas edited by touch, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("editing", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("editing", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3625,11 +3632,11 @@ def scenario_editing():
 def scenario_settings_edit():
     print("settings-edit: the iPad app's details and its list of flows changed from the device, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("settings-edit", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("settings-edit", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3950,11 +3957,11 @@ def scenario_settings_edit():
 def scenario_parity():
     print("parity: stage 4's controls in the iPad app, each in both control states, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("parity", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("parity", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -4231,11 +4238,11 @@ def scenario_parity():
 def scenario_typing():
     print("typing: the iPad app's message box and keys under a terminal, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("typing", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("typing", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -5614,11 +5621,11 @@ def scenario_browser_remote(app):
 def scenario_browser_mobile(app):
     print("browser-mobile: a card's browser on the iPad, from the real Mac: the picture, the address, a tap and typing", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("browser-mobile", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("browser-mobile", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     site = serve_pages()
     fid = BROWSER["id"]
@@ -5683,11 +5690,11 @@ def scenario_browser_mobile(app):
 def scenario_browser_canned():
     print("browser-canned: a card's browser on the iPad in each of its states, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("browser-canned", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("browser-canned", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -5907,10 +5914,19 @@ def main():
             check("noclaude ran to the end", False, f"{type(e).__name__}: {e}"[:500])
 
     failed = [r for r in results if not r[1]]
-    print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed")
+    passed = len(results) - len(failed)
+    print(f"\n{passed} passed, {len(failed)} failed, {len(skipped)} skipped")
     for name, _, detail in failed:
         print(f"  FAIL {name}: {detail}")
-    sys.exit(1 if failed else 0)
+    for name, reason in skipped:
+        print(f"  SKIP {name}: {reason}")
+    # A scenario asked for by name that couldn't run hasn't been checked, and neither has a run where nothing passed.
+    named = bool(sys.argv[1:])
+    if named and skipped:
+        print(f"\n{len(skipped)} scenario{'s' if len(skipped) != 1 else ''} you named didn't run, so this run checked less than you asked.")
+    if not passed:
+        print("\nNothing passed, so nothing was checked.")
+    sys.exit(1 if failed or (named and skipped) or not passed else 0)
 
 
 if __name__ == "__main__":
