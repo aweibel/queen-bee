@@ -157,6 +157,62 @@ import Testing
         #expect(throws: (any Error).self) { try store.delete(url) }
     }
 
+    // MARK: Surviving a crash
+
+    @Test func savingOverAFlowKeepsTheVersionBeforeBesideIt() throws {
+        let project = try Project()
+        let store = FlowStore(root: project.root)
+        var flow = Flow(name: "Review")
+        let url = try store.save(flow, to: nil)
+        // A new file has nothing to keep.
+        #expect(!FileManager.default.fileExists(atPath: FlowStore.backupURL(for: url).path))
+        flow.name = "Second"
+        try store.save(flow, to: url)
+        let kept = try JSONDecoder().decode(Flow.self, from: Data(contentsOf: FlowStore.backupURL(for: url)))
+        #expect(kept.name == "Review")
+        #expect(FlowStore.backupURL(for: url).lastPathComponent.hasPrefix("."))
+    }
+
+    @Test func aFlowFileLeftEmptyOrGarbledLoadsFromTheVersionBefore() throws {
+        let project = try Project()
+        let store = FlowStore(root: project.root)
+        var flow = Flow(id: "aaaa1111", name: "Review")
+        let url = try store.save(flow, to: nil)
+        flow.name = "Second"
+        try store.save(flow, to: url)
+        for damage in ["", "{\"cards\": [{\"id\""] {
+            try Data(damage.utf8).write(to: url)
+            let loaded = store.loadAll()
+            #expect(loaded.unreadable.isEmpty)
+            #expect(loaded.flows.map(\.flow.name) == ["Review"])
+            // It is loaded as the flow in the damaged file, so the next save puts that file right.
+            #expect(loaded.flows.first?.url.path == url.path)
+        }
+    }
+
+    @Test func aFlowFromANewerVersionIsNeverSwappedForTheVersionBefore() throws {
+        let project = try Project()
+        let store = FlowStore(root: project.root)
+        var flow = Flow(id: "aaaa1111", name: "Review")
+        let url = try store.save(flow, to: nil)
+        try store.save(flow, to: url)
+        flow.version = Flow.currentVersion + 1
+        try JSONEncoder().encode(flow).write(to: url)
+        let loaded = store.loadAll()
+        #expect(loaded.flows.isEmpty)
+        #expect(loaded.unreadable.map(\.path) == [url.path])
+    }
+
+    @Test func deletingAFlowDeletesTheVersionBeforeToo() throws {
+        let project = try Project()
+        let store = FlowStore(root: project.root)
+        let flow = Flow(name: "Gone")
+        let url = try store.save(flow, to: nil)
+        try store.save(flow, to: url)
+        try store.delete(url)
+        #expect(!FileManager.default.fileExists(atPath: FlowStore.backupURL(for: url).path))
+    }
+
     @Test func aProjectWithNoFlowsLoadsEmpty() throws {
         let project = try Project()
         let loaded = FlowStore(root: project.root).loadAll()

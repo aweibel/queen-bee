@@ -102,19 +102,71 @@ public struct RunOutput: Equatable, Sendable {
     public var asking: [String]?
     /// Whether the run hangs on those agents alone. Only meaningful alongside `asking`.
     public var isStalled = false
+    /// How the run ended. Set only when `finished` is.
+    public var ending: RunEnding?
+    /// Agents the run was still waiting on when it ended. They may be in the middle of a turn that
+    /// nothing will use now, so the app interrupts them.
+    public var leftWaiting: [String] = []
 
     public init(deliveries: [Delivery] = [], log: [String] = [], results: [EndResult] = [],
-                visits: [CardVisit] = [], holds: [Hold] = [], finished: Bool = false, runID: String? = nil) {
+                visits: [CardVisit] = [], holds: [Hold] = [], finished: Bool = false, runID: String? = nil,
+                ending: RunEnding? = nil) {
         self.deliveries = deliveries; self.log = log; self.results = results
-        self.visits = visits; self.holds = holds; self.finished = finished; self.runID = runID
+        self.visits = visits; self.holds = holds; self.finished = finished; self.runID = runID; self.ending = ending
+    }
+}
+
+/// What came of asking the judge.
+private enum Judged<T: Sendable>: Sendable {
+    /// Its answer, nil when it couldn't give one.
+    case answer(T?)
+    /// It took longer than the engine waits.
+    case timedOut
+    /// The run was stopped while it was thinking.
+    case stopped
+}
+
+/// The first of several racing answers, for whoever waits on it. Later answers are dropped.
+private final class FirstAnswer<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var given: T?
+    private var isGiven = false
+    private var waiter: CheckedContinuation<T, Never>?
+
+    func give(_ answer: T) {
+        lock.lock()
+        guard !isGiven else { return lock.unlock() }
+        isGiven = true
+        given = answer
+        let waiter = self.waiter
+        self.waiter = nil
+        lock.unlock()
+        waiter?.resume(returning: answer)
+    }
+
+    var answer: T {
+        get async {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if isGiven, let given {
+                    lock.unlock()
+                    continuation.resume(returning: given)
+                } else {
+                    waiter = continuation
+                    lock.unlock()
+                }
+            }
+        }
     }
 }
 
 /// Runs a flow: takes events (a run started, an agent replied) and answers with what to deliver, record and log.
 /// It starts no processes and reads no terminals. One run at a time.
 public actor Engine {
-    /// A run stops once this many messages have been handed to agents.
+    /// The most messages one run hands to agents. A run that would hand over one more stops instead.
     public static let maxDeliveries = 50
+    /// How long an If, Loop or Switch card's question is given before it counts as unanswered.
+    public static let judgeTimeout: Duration = .seconds(60)
     /// Only an agent's turn ends an event, so logic cards wired in a circle would otherwise pass one message
     /// round for as long as their links allow.
     static let maxArrivalsPerEvent = 200
@@ -147,20 +199,42 @@ public actor Engine {
         /// Messages waiting at Approval and Script cards, by hold id.
         var held: [String: (cardID: String, message: Message)] = [:]
         var hitLimit = false
+        /// A message reached an End card.
+        var answered = false
+        /// A Loop card ran out of tries.
+        var gaveUp = false
     }
 
     private let judge: any Judge
+    private let judgeTimeout: Duration
     private var run: Run?
+    /// The run that is starting or going. Set as soon as a run begins to start, so Stop can end a run whose
+    /// first event is still being worked out, and cleared the moment it ends. An event that finds it changed
+    /// when it is done belongs to a run that is over, and what it decided is dropped.
+    private var live: String?
+    /// Gives up on the judge call under way, if there is one.
+    private var abandonJudging: (@Sendable () -> Void)?
 
     // Judge calls suspend, and an actor lets other calls in while one is suspended. Each event has to see the
-    // run as the one before left it, so calls take turns in the order they arrived.
+    // run as the one before left it, so calls take turns in the order they arrived. Stop doesn't wait its turn.
     private var busy = false
     private var queue: [CheckedContinuation<Void, Never>] = []
 
-    public init(judge: any Judge) { self.judge = judge }
+    public init(judge: any Judge, judgeTimeout: Duration = Engine.judgeTimeout) {
+        self.judge = judge
+        self.judgeTimeout = judgeTimeout
+    }
 
-    public var isRunning: Bool { run != nil }
-    public var runID: String? { run?.id }
+    public var isRunning: Bool { live != nil }
+    public var runID: String? { live }
+
+    /// The run a hand-off's text says it belongs to, or nil for text that isn't a hand-off.
+    public static func runID(inHandOff text: String) -> String? {
+        let prefix = "[Queen Bee · run "
+        guard let start = text.range(of: prefix) else { return nil }
+        let id = text[start.upperBound...].prefix { $0.isLetter || $0.isNumber || $0 == "-" }
+        return id.isEmpty ? nil : String(id)
+    }
 
     // MARK: Events
 
@@ -168,8 +242,8 @@ public actor Engine {
         await takeTurn()
         defer { endTurn() }
 
-        if let run {
-            return RunOutput(log: ["A run is already going. Stop it before starting another."], runID: run.id)
+        if let live {
+            return RunOutput(log: ["A run is already going. Stop it before starting another."], runID: live)
         }
         let given = startCardID.flatMap { flow.card($0) }.flatMap { $0.kind == .start ? $0 : nil }
         guard let card = given ?? flow.cards.first(where: { $0.kind == .start }) else {
@@ -182,10 +256,11 @@ public actor Engine {
         }
 
         var state = Run(id: Flow.newID())
+        live = state.id
         var output = RunOutput(runID: state.id)
         output.visits.append(CardVisit(cardID: card.id, viaLinkID: nil, port: "out"))
         await send(Message(text: text, fromName: "Start", fromStart: true), from: card, in: flow, state: &state, output: &output)
-        settle(state, &output)
+        settle(state, in: flow, &output)
         return output
     }
 
@@ -195,8 +270,8 @@ public actor Engine {
         await takeTurn()
         defer { endTurn() }
 
-        if let run {
-            return RunOutput(log: ["A run is already going. Stop it before starting another."], runID: run.id)
+        if let live {
+            return RunOutput(log: ["A run is already going. Stop it before starting another."], runID: live)
         }
         guard let card = flow.card(cardID), acceptsInput(card) else {
             return RunOutput(log: ["Nothing to run: that card takes no input"], finished: true)
@@ -205,6 +280,7 @@ public actor Engine {
             return RunOutput(log: ["Nothing to run: there is no message to give \(card.name)"], finished: true)
         }
         var state = Run(id: Flow.newID())
+        live = state.id
         var output = RunOutput(runID: state.id)
         output.log.append("Run started at \(card.name)")
         // No link brought this message, so it has none to count against.
@@ -219,7 +295,7 @@ public actor Engine {
         if let next, !state.hitLimit {
             await send(next.message, from: card, port: next.port, in: flow, state: &state, output: &output)
         }
-        settle(state, &output)
+        settle(state, in: flow, &output)
         return output
     }
 
@@ -227,17 +303,25 @@ public actor Engine {
     /// `waitingOnAnswer` is for a turn in which the agent asked someone a question: the answer
     /// can only reach it as a new turn, so what it said on the way out is not its reply. Nothing
     /// is passed on and the card stays owed, until the turn after the answer.
-    public func agentReplied(flow: Flow, cardID: String, text: String, waitingOnAnswer: Bool = false) async -> RunOutput {
+    /// `forRun` is the run the hand-off that began the turn belonged to, when the app knows it. A turn
+    /// working on a run that has ended is not this run's reply, even from an agent this run is owed one by.
+    public func agentReplied(flow: Flow, cardID: String, text: String, waitingOnAnswer: Bool = false,
+                             forRun: String? = nil) async -> RunOutput {
         await takeTurn()
         defer { endTurn() }
 
         guard var state = run else { return RunOutput() }
         var output = RunOutput(runID: state.id)
+        if let forRun, forRun != state.id {
+            output.log.append("\(flow.card(cardID)?.name ?? "An agent") finished work for a run that has ended, so its reply was not passed on")
+            settle(state, in: flow, &output)
+            return output
+        }
         if waitingOnAnswer {
             if state.pending.contains(cardID), state.asking.insert(cardID).inserted {
                 output.log.append("\(flow.card(cardID)?.name ?? "An agent") asked a question and is waiting for the answer")
             }
-            settle(state, &output)
+            settle(state, in: flow, &output)
             return output
         }
         let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,7 +332,7 @@ public actor Engine {
             if !reply.isEmpty, let card = flow.card(cardID) {
                 output.log.append("\(card.name) finished a turn, but nothing in this run was waiting on it, so its reply was not passed on")
             }
-            settle(state, &output)
+            settle(state, in: flow, &output)
             return output
         }
         state.owed[cardID] = owed - 1
@@ -264,7 +348,7 @@ public actor Engine {
         } else {
             output.log.append("A reply came from a card that is no longer in the flow")
         }
-        settle(state, &output)
+        settle(state, in: flow, &output)
         return output
     }
 
@@ -288,30 +372,50 @@ public actor Engine {
         } else {
             output.log.append("A card that was holding a message is no longer in the flow")
         }
-        settle(state, &output)
+        settle(state, in: flow, &output)
         return output
     }
 
     private static func holdKey(_ id: String) -> String { "hold:" + id }
 
-    public func agentFailed(flow: Flow, cardID: String, reason: String) async -> RunOutput {
+    /// An agent's session ended or its turn failed. That stops the run only when the run is waiting on the
+    /// agent: any other agent, one the run hasn't reached or has already heard from, can come and go.
+    /// `name` is the card's name for one that has just been taken out of `flow`.
+    public func agentFailed(flow: Flow, cardID: String, name: String? = nil, reason: String) async -> RunOutput {
         await takeTurn()
         defer { endTurn() }
 
         guard let state = run else { return RunOutput() }
-        run = nil
-        let name = flow.card(cardID)?.name ?? "An agent"
+        guard state.pending.contains(cardID) || state.owed[cardID, default: 0] > 0 else { return RunOutput(runID: state.id) }
+        let name = flow.card(cardID)?.name ?? name ?? "An agent"
         let why = Self.isBlank(reason) ? "" : ": \(reason.trimmingCharacters(in: .whitespacesAndNewlines))"
-        return RunOutput(log: ["Run stopped because \(name) failed\(why)"], finished: true, runID: state.id)
+        var output = RunOutput(log: ["Run stopped because \(name) failed\(why)"], finished: true, runID: state.id, ending: .failed)
+        output.leftWaiting = Self.agents(in: state.pending).filter { $0 != cardID }
+        end()
+        return output
     }
 
+    /// Ends the run straight away, without waiting for an event that is being worked out. Such an event is
+    /// still going, most likely waiting on the judge: it is told to give up, and what it decides is dropped.
     public func stop() async -> RunOutput {
-        await takeTurn()
-        defer { endTurn() }
+        guard let id = live else { return RunOutput() }
+        var output = RunOutput(log: ["Run stopped"], finished: true, runID: id, ending: .stopped)
+        // Nil while the run's first event is still being worked out: nothing has been handed to anyone yet.
+        if let run, run.id == id { output.leftWaiting = Self.agents(in: run.pending) }
+        end()
+        abandonJudging?()
+        abandonJudging = nil
+        return output
+    }
 
-        guard let state = run else { return RunOutput() }
+    private func end() {
         run = nil
-        return RunOutput(log: ["Run stopped"], finished: true, runID: state.id)
+        live = nil
+    }
+
+    /// The agents among what a run is waiting on: everything but the messages held at cards.
+    private static func agents(in pending: Set<String>) -> [String] {
+        pending.filter { !$0.hasPrefix(holdKey("")) }.sorted()
     }
 
     // MARK: Taking turns
@@ -332,11 +436,25 @@ public actor Engine {
     // MARK: Routing
 
     /// The run ends when nobody is left to hear from.
-    private func settle(_ state: Run, _ output: inout RunOutput) {
+    private func settle(_ state: Run, in flow: Flow, _ output: inout RunOutput) {
+        // Stopped while this event was being worked out. The run is over, and nothing it decided happens.
+        guard live == state.id else {
+            output = RunOutput()
+            return
+        }
         if state.hitLimit || state.pending.isEmpty {
-            run = nil
+            end()
             output.finished = true
             output.asking = []
+            output.leftWaiting = Self.agents(in: state.pending)
+            output.ending = state.hitLimit ? .hitLimit : state.gaveUp ? .gaveUp : state.answered ? .finishedWithAnswer : .endedWithoutAnswer
+            // An And that never heard from every card linked into it is why a run ends with nothing to show.
+            for (andID, have) in state.waiting.sorted(by: { $0.key < $1.key }) where !have.isEmpty {
+                guard let card = flow.card(andID) else { continue }
+                let missing = Set(flow.links(into: andID).map(\.from)).subtracting(have.keys)
+                let names = flow.cards.filter { missing.contains($0.id) }.map(\.name).joined(separator: ", ")
+                output.log.append("\(Self.title(card)) was still waiting for \(names.isEmpty ? "a message" : names) when the run ended")
+            }
         } else {
             var state = state
             // A held message is owed too, under its own key, so a run with one is not stalled.
@@ -356,6 +474,8 @@ public actor Engine {
         var travelling = leaving(card, port: port, message, in: flow, output: &output)
         var arrivals = 0
         while !travelling.isEmpty {
+            // Stopped meanwhile: nothing more is judged for a run that is over.
+            guard live == state.id else { return }
             let (link, message) = travelling.removeFirst()
             guard let target = flow.card(link.to) else { continue }
 
@@ -403,6 +523,13 @@ public actor Engine {
         let title = Self.title(card)
         switch card.kind {
         case .agent:
+            if state.deliveries >= Self.maxDeliveries {
+                // The run ends here, so the hand-offs this event has already made would be work nobody uses.
+                output.deliveries.removeAll()
+                output.log.append("Run stopped: agents had been handed \(Self.maxDeliveries) messages, which is the most one run allows. Nothing more was sent.")
+                state.hitLimit = true
+                return nil
+            }
             state.deliveries += 1
             let tag = message.fromStart
                 ? "[Queen Bee · run \(state.id) · start]"
@@ -411,22 +538,28 @@ public actor Engine {
             output.log.append("\(message.fromName) → \(card.name)")
             state.pending.insert(card.id)
             state.owed[card.id, default: 0] += 1
-            if state.deliveries >= Self.maxDeliveries {
-                output.log.append("Run stopped: agents had passed \(Self.maxDeliveries) messages, which is the most one run allows")
-                state.hitLimit = true
-            }
             return nil
 
         case .ifElse:
-            let verdict = await check(card, message)
-            if verdict == nil { output.log.append("\(title) could not be judged, so it counts as No") }
-            let port = verdict == true ? "yes" : "no"
+            let judged = await check(card, message)
+            if case .timedOut = judged { output.log.append("\(title) took too long to judge, so it counts as No") }
+            if case .answer(nil) = judged { output.log.append("\(title) could not be judged, so it counts as No") }
+            let port = if case .answer(true) = judged { "yes" } else { "no" }
             output.log.append("\(title) → \(portLabel(port))")
             return (port, message)
 
         case .switchCard:
             let branches = card.branches ?? []
-            let picked = branches.isEmpty ? nil : await judge.pick(branches: branches, message: message.text)
+            var picked: String?
+            if !branches.isEmpty {
+                let judge = judge
+                let message = message.text
+                switch await ask({ await judge.pick(branches: branches, message: message) }) {
+                case .answer(let answer): picked = answer
+                case .timedOut: output.log.append("\(title) took too long to judge, so it counts as Other")
+                case .stopped: break
+                }
+            }
             let branch = picked.flatMap { Checks.parseBranch($0, branches: branches) }
             output.log.append("\(title) → \(branch ?? "Other")")
             return (branch ?? "other", message)
@@ -449,6 +582,7 @@ public actor Engine {
             return ("out", Message(text: text, fromName: card.name, fromStart: false))
 
         case .or:
+            // Once per run, or once per round of a loop it sits in: see `orCards(after:)`.
             if !state.fired.insert(card.id).inserted {
                 output.log.append("\(title) dropped a later reply from \(message.fromName)")
                 return nil
@@ -464,14 +598,18 @@ public actor Engine {
         case .loop:
             let tries = state.tries[card.id, default: 0] + 1
             let limit = max(card.maxTries ?? Self.defaultMaxTries, 1)
-            let verdict = await check(card, message)
-            if verdict == nil { output.log.append("\(title) could not be judged, so it counts as a failed try") }
-            if verdict == true {
+            let judged = await check(card, message)
+            if case .timedOut = judged { output.log.append("\(title) took too long to judge, so it counts as a failed try") }
+            if case .answer(nil) = judged { output.log.append("\(title) could not be judged, so it counts as a failed try") }
+            if case .answer(true) = judged {
                 output.log.append("\(title) → Done")
             } else if tries >= limit {
                 output.log.append("\(title) → Done after \(tries) tries")
+                state.gaveUp = true
             } else {
                 state.tries[card.id] = tries
+                // A new round: each Or it leads back to passes on the first reply of this round, as it did the last.
+                state.fired.subtract(orCards(after: card, port: "again", in: flow))
                 output.log.append("\(title) → Again (try \(tries) of \(limit))")
                 return ("again", message)
             }
@@ -483,6 +621,7 @@ public actor Engine {
             let saveTo = card.saveTo.flatMap { Self.isBlank($0) ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             output.results.append(EndResult(cardID: card.id, cardName: card.name, text: message.text, saveTo: saveTo))
             output.log.append("\(title) got the final answer from \(message.fromName)")
+            state.answered = true
             return nil
 
         case .approval, .script, .flow:
@@ -508,12 +647,45 @@ public actor Engine {
         }
     }
 
-    /// An If or Loop card's check. Nil when a judge check has no statement or the judge could not answer.
-    private func check(_ card: Card, _ message: Message) async -> Bool? {
+    /// An If or Loop card's check. An answer of nil when a judge check has no statement or the judge could not answer.
+    private func check(_ card: Card, _ message: Message) async -> Judged<Bool> {
         let value = card.value ?? ""
-        if let answer = Checks.textCheck(card.check ?? .judge, value: value, message: message.text) { return answer }
-        if Self.isBlank(value) { return nil }
-        return await judge.holds(statement: value.trimmingCharacters(in: .whitespacesAndNewlines), message: message.text)
+        if let answer = Checks.textCheck(card.check ?? .judge, value: value, message: message.text) { return .answer(answer) }
+        if Self.isBlank(value) { return .answer(nil) }
+        let judge = judge
+        let statement = value.trimmingCharacters(in: .whitespacesAndNewlines), text = message.text
+        return await ask { await judge.holds(statement: statement, message: text) }
+    }
+
+    /// Asks the judge, for no longer than the timeout and no longer than the run lasts. A call that is given
+    /// up on is cancelled, which stops the process behind it.
+    private func ask<T: Sendable>(_ question: @escaping @Sendable () async -> T?) async -> Judged<T> {
+        let first = FirstAnswer<Judged<T>>()
+        let work = Task { first.give(.answer(await question())) }
+        let timeout = judgeTimeout
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            first.give(.timedOut)
+        }
+        abandonJudging = { first.give(.stopped) }
+        let answer = await first.answer
+        abandonJudging = nil
+        work.cancel()
+        timer.cancel()
+        return answer
+    }
+
+    /// The Or cards a message leaving `card` by `port` can reach, however far on.
+    private func orCards(after card: Card, port: String, in flow: Flow) -> Set<String> {
+        var seen: Set<String> = []
+        var found: Set<String> = []
+        var next = flow.links(from: card.id, port: port).map(\.to)
+        while let id = next.popLast() {
+            guard seen.insert(id).inserted, let reached = flow.card(id) else { continue }
+            if reached.kind == .or { found.insert(id) }
+            next += flow.links(from: id).map(\.to)
+        }
+        return found
     }
 
     /// How a logic card is named in the log, for example `If "Approved?"`.

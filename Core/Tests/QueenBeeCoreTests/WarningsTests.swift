@@ -57,6 +57,61 @@ import Testing
         #expect(warnings(for: flow)[loop.id] == "Set its condition")
     }
 
+    @Test func aLoopNeedsSomethingOnDone() throws {
+        var flow = Flow(name: "F")
+        try flow.addCard(kind: .agent, name: "Writer")
+        var patch = CardPatch()
+        patch.value = "It is finished"
+        let loop = try flow.addCard(kind: .loop, name: "Polish", patch: patch)
+        try flow.addCard(kind: .end, name: "End")
+        try flow.addLink(from: "Writer", to: "Polish")
+        try flow.addLink(from: "Polish", port: "again", to: "Writer")
+        #expect(warnings(for: flow)[loop.id] == "Nothing on Done")
+        try flow.addLink(from: "Polish", port: "done", to: "End")
+        #expect(warnings(for: flow)[loop.id] == nil)
+    }
+
+    /// Start → Writer → Check; Yes → A → Both; No → B → Both; Both → End.
+    private func andAcrossAnIf() throws -> Flow {
+        var flow = Flow(name: "F")
+        var patch = CardPatch()
+        patch.command = "Go"
+        try flow.addCard(kind: .start, name: "Start", patch: patch)
+        patch = CardPatch()
+        patch.check = .contains; patch.value = "yes"
+        try flow.addCard(kind: .ifElse, name: "Check", patch: patch)
+        for name in ["Writer", "A", "B"] { try flow.addCard(kind: .agent, name: name) }
+        try flow.addCard(kind: .and, name: "Both")
+        try flow.addCard(kind: .end, name: "End")
+        try flow.addLink(from: "Start", to: "Writer")
+        try flow.addLink(from: "Writer", to: "Check")
+        try flow.addLink(from: "Check", port: "yes", to: "A")
+        try flow.addLink(from: "Check", port: "no", to: "B")
+        try flow.addLink(from: "A", to: "Both")
+        try flow.addLink(from: "B", to: "Both")
+        try flow.addLink(from: "Both", to: "End")
+        return flow
+    }
+
+    @Test func anAndFedFromDifferentOutputsOfOneIfCanNeverFire() throws {
+        let flow = try andAcrossAnIf()
+        let both = try #require(flow.resolveCard("Both"))
+        #expect(warnings(for: flow) == [both.id: "Its inputs are on different sides of Check"])
+    }
+
+    @Test func anAndAcrossAnIfIsFineWhenOneInputCanComeAnotherWay() throws {
+        var flow = try andAcrossAnIf()
+        try flow.addLink(from: "Start", to: "B")
+        #expect(warnings(for: flow).isEmpty)
+    }
+
+    @Test func anAndAcrossAnIfInALoopIsFine() throws {
+        // Round the loop, the If can go one way and then the other, so the And can hear from both.
+        var flow = try andAcrossAnIf()
+        try flow.addLink(from: "B", to: "Writer")
+        #expect(warnings(for: flow).isEmpty)
+    }
+
     @Test func aSwitchNeedsBranches() throws {
         var flow = Flow(name: "F")
         try flow.addCard(kind: .agent, name: "Writer")

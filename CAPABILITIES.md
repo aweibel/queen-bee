@@ -34,6 +34,7 @@ Checks the message and sends it out yes or no.
 - Size when added: 240 by 120 points
 - Setting `check` (judge | contains | not-contains | regex): How value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value.
 - Setting `value` (text): The statement, text or pattern the check tests.
+- A judge check that takes longer than 60 seconds counts as no.
 
 ### Switch (`switch`)
 Claude picks the one branch that fits the message.
@@ -42,18 +43,21 @@ Claude picks the one branch that fits the message.
 - Size when added: 240 by 144 points
 - Setting `branches` (list of text): The branch names. Each one becomes an output.
 - Changing the branches removes links from branches that no longer exist.
+- A judge check that takes longer than 60 seconds counts as other.
 
 ### And (`and`)
 Waits for a message from every card linked into it, then passes them on together.
 - Outputs: out
 - Input: yes
 - Size when added: 240 by 96 points
+- Don't feed it from different outputs of one If or Switch card: a message leaves by one output, so it would wait for ever and the run would end with no answer.
 
 ### Or (`or`)
-Passes on the first message that reaches it in a run and drops later ones.
+Passes on the first message that reaches it and drops later ones.
 - Outputs: out
 - Input: yes
 - Size when added: 240 by 96 points
+- It passes on one message per run. Inside a loop, it passes on one per round: each time a Loop card goes out again, every Or that again leads to passes on the next first message.
 
 ### Prompt (`prompt`)
 Rewrites the message from a template.
@@ -70,6 +74,8 @@ Checks the message. It goes out done when the check holds or max_tries is used u
 - Setting `check` (judge | contains | not-contains | regex): How value is tested. judge: Claude decides whether value, a plain-English statement, is true of the message. contains and not-contains: the message has or lacks the text in value, ignoring case. regex: the message matches the pattern in value.
 - Setting `value` (text): The statement, text or pattern the check tests.
 - Setting `max_tries` (whole number, 1 to 50): Tries before it gives up and takes done. Defaults to 3.
+- A judge check that takes longer than 60 seconds counts as a failed try.
+- Link something to done, or a run that passes its check stops there with no answer. A run whose Loop gave up is recorded as having given up, even if an answer reaches an End card after it.
 
 ### End (`end`)
 Records the final answer, and saves it to a file if save_to is set.
@@ -100,6 +106,8 @@ Runs a shell command in the project folder, with the message on its standard inp
 - Size when added: 240 by 120 points
 - Setting `command` (text): The shell command to run.
 - The person is asked to allow a command they did not type themselves the first time a run reaches it.
+- A command that hasn't finished after 10 minutes is stopped and goes out fail.
+- Only the last 20,000 characters of what it printed are passed on.
 
 ### Flow (`flow`)
 Runs another flow in this project as one step, giving it the message as its command. It goes out done with that flow's final answer, or fail.
@@ -110,11 +118,18 @@ Runs another flow in this project as one step, giving it the message as its comm
 - To make a new sub-flow, use create_subflow, which also adds this card. To reuse a flow that exists, set flow to one of the other_flows that get_flow lists. Never write flow files yourself.
 - Sub-flows only nest as deep as the person allows on the flow at the top. get_flow gives sub_flow_levels_left: at 0 this flow can't have a Flow card. An edit that would go deeper is refused; don't try to work round it.
 - A flow that isn't below yours can only be linked in by the person: ask them.
+- A flow has one run at a time. A Flow card that reaches a flow which is already running, from another Flow card or because the person started it, waits for that run to end and then runs it. A Flow card that would run a flow this run is already inside goes out fail.
 
 ## Links
 
 - A link joins one card's output to another card's input. A card can't link to itself.
 - Each link has max passes, from 1 to 50 and 3 unless set: how many times it may fire in one run. That is what makes a loop between cards end.
+
+## Runs
+
+- A run hands agents at most 50 messages. When the next hand-off would pass that, the run stops there and nothing more is sent. Keep a flow's loops short enough to finish inside it.
+- A run ends when nothing is left to do. The person sees how it ended: finished with an answer, ended without an answer, gave up (a Loop ran out of tries), stopped at the hand-off limit, failed, or stopped.
+- An agent the run isn't waiting on can be restarted, or stop, without stopping the run. If the run is waiting on it, the run stops.
 
 ## Every agent
 

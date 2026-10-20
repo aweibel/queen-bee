@@ -566,14 +566,39 @@ actor ScriptedJudge: Judge {
             deliveries += last.deliveries
             turn += 1
         }
+        // Fifty were handed over and answered. The fifty-first, which would be past the limit, never goes.
         #expect(deliveries.count == 50)
         #expect(deliveries.last?.text.contains("hand-off 50 ") == true)
-        #expect(last.finished)
+        #expect(last.deliveries.isEmpty)
+        #expect(last.finished && last.ending == .hitLimit)
         #expect(last.log.last?.contains("50") == true)
         #expect(await !engine.isRunning)
-        // The run is over, so the fiftieth agent's reply goes nowhere.
         let after = await engine.agentReplied(flow: flow, cardID: reviewer, text: "too late")
         #expect(after == RunOutput())
+    }
+
+    @Test func handOffsMadeAlongsideTheOneThatPassesTheLimitAreNotSentEither() async throws {
+        // Start → Writer → Reviewer and Editor; Reviewer → Writer. Each of the Writer's replies makes two hand-offs.
+        let flow = try flow {
+            try $0.addCard(kind: .start, name: "Start", patch: patch { $0.command = "Go" })
+            for name in ["Writer", "Reviewer", "Editor"] { try $0.addCard(kind: .agent, name: name) }
+            try $0.addLink(from: "Start", to: "Writer")
+            try $0.addLink(from: "Writer", to: "Reviewer", maxPasses: 50)
+            try $0.addLink(from: "Writer", to: "Editor", maxPasses: 50)
+            try $0.addLink(from: "Reviewer", to: "Writer", maxPasses: 50)
+        }
+        let engine = Engine(judge: ScriptedJudge())
+        var owed = await engine.start(flow: flow, startCardID: nil, command: nil).deliveries.map(\.toCardID)
+        var handed = owed.count
+        var last = RunOutput()
+        while !owed.isEmpty, !last.finished {
+            last = await engine.agentReplied(flow: flow, cardID: owed.removeFirst(), text: "reply")
+            handed += last.deliveries.count
+            owed += last.deliveries.map(\.toCardID)
+        }
+        // The Writer's last reply would have made the 50th and the 51st. Neither went.
+        #expect(handed == 49)
+        #expect(last.finished && last.ending == .hitLimit && last.deliveries.isEmpty)
     }
 
     @Test func logicCardsInACircleAreCutOff() async throws {
