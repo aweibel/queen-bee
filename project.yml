@@ -145,7 +145,16 @@ schemes:
         qb-remote-check: all
     run:
       config: Debug
+  # What Xcode's Run installs on your own iPad or iPhone: a Release build, which has none of the test harness in it.
+  # scripts/build-mobile.sh and scripts/e2e.py build Debug themselves, by name, because the harness is what they drive.
   QueenBeeMobile:
+    build:
+      targets:
+        QueenBeeMobile: all
+    run:
+      config: Release
+  # For debugging the app from Xcode.
+  QueenBeeMobile Debug:
     build:
       targets:
         QueenBeeMobile: all

@@ -84,9 +84,24 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
   title, because a page there can be one you are signed in to. Its card shows a line saying so in their place. Pairing takes a
   one-time code shown on this Mac, which works once and for two minutes. Each paired device has its own key, kept
   in the Keychain on both sides and never in a file, and every connection is encrypted with it; a device without a
-  key is told nothing. Removing a device in Settings deletes its key and closes its connection at once. Queen
-  Bee does not connect to any server for this, and nothing is reachable from outside your network unless your
-  network makes it so.
+  key is told nothing. On the Mac the keys are kept in the data protection keychain, tied to the app, and keys an
+  earlier version kept in the login keychain are moved there the first time each is read, and deleted from the
+  login keychain only once they have been read back from the new place. A copy of the app built from source without
+  the entitlement that keychain needs goes on using the login keychain. Removing a device in Settings deletes its
+  key and closes its connection at once. Queen Bee does not connect to any server for this, and nothing is reachable
+  from outside your network unless your network makes it so. The Mac holds at most 24 connections at once that
+  haven't yet shown a key, and 6 from any one address, and closes any more the moment they arrive.
+- **Connecting by address is off until you turn it on.** With "Let devices connect by address too" on, the Mac also
+  listens on port 51720, on every network it is on, for a device that reaches it by address, as over Tailscale. That
+  listener holds the keys of the devices paired now, each under its device's id, and is made afresh whenever a device
+  is paired, paired again or removed. A connection there is encrypted with the device's own key just as on the Wi-Fi,
+  and the device must then prove, on that very connection, that it holds the key of the device it says it is, so no
+  paired device can pass itself off as another. Turn it on only if you use it, and don't make the port reachable from
+  the internet.
+- **The list of paired devices is kept safe from a damaged file.** If the file that lists them can't be read, it is
+  copied aside before anything is written over it, the devices are listed again from their keys with "Can control"
+  off, and the Mac keeps the id devices find it by. If that id can't be found either, Settings says so and offers
+  Start Afresh rather than making up a new one.
 - **"Can control" lets a device act, and is off until you turn it on.** Each paired device has a "Can control"
   switch in Settings, under Remote. It is off when a device is paired, and off again if the device is paired a
   second time. The Mac checks it for every single thing a device asks, at the moment it asks, so a device
@@ -197,19 +212,33 @@ whatever Claude Code can do under the permission mode its card has, so treat a f
 The companion app shows what a paired Mac sends it, and sends the Mac what you press and type there. It has no
 account and talks to no server.
 
-- **What it stores.** In its own settings: an id for the device, and the name and id of the Mac it is paired with.
+- **What it stores.** In its own settings: an id for the device, the name and id of the Mac it is paired with, the
+  name on the network of the listener it last connected through, the Mac's address if you typed one under "Connect
+  by address", and whether notifications are on.
   In the device's Keychain: the key it shares with that Mac. The key is kept so that it can be read only on that
   device: it is not copied to another device by a backup, a transfer or iCloud Keychain. Flows, logs, messages and terminal output
   are held in memory while the app is open and are not written to the device.
 - **What it sends the Mac.** When pairing: the device's id and its name, which is what the Mac lists it as. On
-  each connection: its id, its name and the version of the link it speaks. After that, which flow it has open, and
+  each connection: its id, its name, the version of the link it speaks, what it can take, a random number made
+  afresh each time the app starts that the Mac tells its commands apart by, and, when it connects by address, its
+  proof that it holds its key. After that, which flow it has open, and
   each thing you ask of the Mac from it: a button you pressed, such as Run or Approve, a message you wrote for a
   session, keys you pressed for a session's terminal, a change you made to a flow with Edit on, cards you pasted,
   and what you did in a card's browser, text you typed or pasted into the page included. It also tells the Mac
   which agent cards with a browser it has on its screen, so the Mac sends pictures of those and no others. The Mac
   refuses every one of these but the last unless "Can control" is on for the device, and the app shows no buttons,
   no Edit and no place to type while it is off. A button press, a message or a key that can't go now is given up, and so is a change
-  made on the canvas.
+  made on the canvas. One that went and wasn't answered before the connection dropped is sent once more, with the
+  same id, as soon as the device is back: the Mac remembers what became of the commands each device sent lately, and
+  answers one it has seen with what became of it the first time, without doing it again. A Mac that doesn't remember
+  isn't sent it again, and the device says it doesn't know whether it was done.
+- **Notifications.** While the app is connected, and for about 25 seconds after you leave it, it can show a
+  notification when a message is held for approval, a script is waiting, a session asks something or a run ends. It
+  makes them itself from what the Mac sends, with no server. Like any notification, its text can show on the lock
+  screen: the card's name, the flow's, and the start of the held message or the script's command. On a device with
+  "Can control", Approve, Reject, Allow and Don't Allow are on the notification, and iOS asks for the device to be
+  unlocked before any of them is sent. The Mac checks them like any other command. Turn notifications off in the
+  app's settings.
 - **What it keeps to send later.** One thing: what you wrote in a card's setting, when the Mac could not be reached
   or turned it down. It is kept in memory on the device, shown where you wrote it with a line saying it has not
   been sent, until you send it or discard it or close the app. It is never written to the device's storage, and it
@@ -228,7 +257,12 @@ account and talks to no server.
   but with its key gone the device can no longer connect. Deleting the app also deletes its settings; to be
   sure the key is gone too, use Forget this Mac first.
 - **The camera and the local network.** The camera is used only on the pairing screen, to read the code on the
-  Mac's screen, and no picture is kept. The local network is used only to find and reach Queen Bee on your Mac.
+  Mac's screen, and no picture is kept. The local network is used only to find and reach Queen Bee on your Mac,
+  and an address you typed only to reach it there.
+- **A key turned down is not forgotten.** Something else on the network can copy the record the Mac advertises, and
+  a connection cut off part-way fails much as a wrong key does. So the device tries every listener that says it is
+  the Mac, the one that let it in before first, and a key turned down never makes it forget anything by itself: after
+  several times running it says it can't connect, keeps trying, and offers Pair Again beside that.
 
 ## Known limits
 
@@ -259,10 +293,13 @@ account and talks to no server.
   settings if it is lost.
 - Text a device sends for a session is entered there as one paste, with anything a terminal would act on taken out
   of it first. Keys are different: they are sent as they are, because Esc and Ctrl-C are what they are for.
-- A build of the iPad and iPhone app from source in the Debug configuration, which is what Run in Xcode makes,
-  includes launch arguments for tests that can point the app at a made-up Mac. In the Simulator that build also
-  writes what it is showing to a file in the app's own folder, for the tests to read. None of this is in a Release
-  build, and the file is never written on a real device.
+- A build of the iPad and iPhone app from source in the Debug configuration, which is what the **QueenBeeMobile
+  Debug** scheme and `scripts/build-mobile.sh` make, includes launch arguments for tests that can point the app at a
+  made-up Mac. In the Simulator that build also writes what it is showing to a file in the app's own folder, for the
+  tests to read. None of this is in a Release build, which is what Run in Xcode installs with the **QueenBeeMobile**
+  scheme, and the file is never written on a real device.
+- Notifications reach the device only while the app runs. A message held for approval while the app has been
+  stopped in the background isn't told about until the app is opened again.
 - The rule that an agent may only message the agents it is linked to is there to keep a flow tidy, not to
   contain an agent. The app answers it, and a session that can't reach the app is allowed to send, so that
   sessions keep working when Queen Bee is closed.
