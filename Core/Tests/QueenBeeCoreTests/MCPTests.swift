@@ -13,7 +13,25 @@ import Testing
         #expect(reply["error"] == nil)
         #expect(reply["result"]?["protocolVersion"] == "2025-03-26")
         #expect(reply["result"]?["capabilities"] == ["tools": [:]])
-        #expect(reply["result"]?["serverInfo"] == ["name": "queenbee", "version": "0.5.0"])
+        #expect(reply["result"]?["serverInfo"] == ["name": "queenbee", "version": .string(MCPServer.version)])
+    }
+
+    /// The version is typed in three places: project.yml, which the app's bundle takes it from, `MCPServer.version`
+    /// and the plugin's manifest. The release script checks the same, so a release can't go out with them apart.
+    @Test func theVersionIsTheSameEverywhere() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
+        let marketing = project.split(separator: "\n").compactMap { line -> String? in
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "MARKETING_VERSION" else { return nil }
+            return parts[1].trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        }
+        #expect(marketing == [MCPServer.version], "MARKETING_VERSION in project.yml and MCPServer.version in MCP.swift must match")
+        let manifest = try Data(contentsOf: root.appendingPathComponent("Plugin/qb-link/.claude-plugin/plugin.json"))
+        let plugin = try JSONSerialization.jsonObject(with: manifest) as? [String: Any]
+        #expect(plugin?["version"] as? String == MCPServer.version,
+                "the version in Plugin/qb-link/.claude-plugin/plugin.json must match MCPServer.version")
     }
 
     @Test func initializeDefaultsTheProtocolVersion() async throws {

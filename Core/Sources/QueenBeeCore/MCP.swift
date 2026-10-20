@@ -5,6 +5,9 @@ import Foundation
 /// They keep no state, so `tools/list` and `tools/call` work for a client that never sent `initialize`.
 public enum MCPServer {
     static let defaultProtocolVersion = "2025-06-18"
+    /// The app's version, the same as `MARKETING_VERSION` in project.yml and the plugin's manifest.
+    /// `MCPTests` and `./scripts/release.sh` fail when the three disagree.
+    public static let version = "0.5.0"
 
     /// The orchestrator's reply to one message, or nil when it was a notification and expects none.
     public static func handle(_ message: JSONValue, host: any ToolHost) async -> JSONValue? {
@@ -30,7 +33,7 @@ public enum MCPServer {
             return result(id, [
                 "protocolVersion": .string(params?["protocolVersion"]?.stringValue ?? defaultProtocolVersion),
                 "capabilities": ["tools": [:]],
-                "serverInfo": ["name": .string(server), "version": "0.5.0"],
+                "serverInfo": ["name": .string(server), "version": .string(version)],
             ])
 
         case "tools/list":
