@@ -48,7 +48,7 @@ enum BrowserFinder {
     private static let listing = URL(string: "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json")!
 
     /// Downloads Chrome for Testing into the app's support folder. `progress` gets a fraction from 0 to 1.
-    static func download(into support: URL, progress: @escaping @MainActor (Double) -> Void) async throws -> Found {
+    static func download(into support: URL, progress: @escaping @MainActor @Sendable (Double) -> Void) async throws -> Found {
         let (listed, _) = try await URLSession.shared.data(from: listing)
         let builds = try JSONValue.parse(listed)["channels"]?["Stable"]?["downloads"]?["chrome"]?.arrayValue ?? []
         guard let address = builds.first(where: { $0["platform"]?.stringValue == "mac-arm64" })?["url"]?.stringValue,
@@ -57,30 +57,15 @@ enum BrowserFinder {
               let host = url.host, host == "storage.googleapis.com" || host.hasSuffix(".googleapis.com") || host.hasSuffix(".google.com")
         else { throw BrowserError("Queen Bee couldn't find a browser to download") }
 
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BrowserError("The browser download was refused") }
-        let total = Double(max(response.expectedContentLength, 1))
         let fm = FileManager.default
         let folder = downloadFolder(in: support)
         try? fm.removeItem(at: folder)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let archive = folder.appendingPathComponent("chrome.zip")
-        fm.createFile(atPath: archive.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: archive)
-        var block = Data()
-        block.reserveCapacity(1 << 20)
-        var written = 0.0
-        for try await byte in bytes {
-            block.append(byte)
-            if block.count >= 1 << 20 {
-                try handle.write(contentsOf: block)
-                written += Double(block.count)
-                block.removeAll(keepingCapacity: true)
-                await progress(min(written / total, 1))
-            }
-        }
-        try handle.write(contentsOf: block)
-        try handle.close()
+        // The system writes the file itself, off the main thread, and says how far it has got.
+        try await ArchiveDownload(to: archive) { fraction in
+            Task { @MainActor in progress(fraction) }
+        }.run(url)
 
         let unpacked = try await run(.path("/usr/bin/ditto"), arguments: ["-x", "-k", archive.path, folder.path],
                                      output: .discarded, error: .discarded)
@@ -90,5 +75,77 @@ enum BrowserFinder {
             throw BrowserError("The downloaded browser couldn't be unpacked")
         }
         return Found(path: executable, isDownloaded: true)
+    }
+}
+
+/// One file fetched by the system into `destination`, with its progress reported as it goes. The bytes never pass
+/// through the app: the download is written to a temporary file and moved into place when it is whole.
+private nonisolated final class ArchiveDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let destination: URL
+    private let progress: @Sendable (Double) -> Void
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    /// Why the finished file wasn't taken, when it wasn't.
+    private var problem: Error?
+    private var reported = -1.0
+
+    init(to destination: URL, progress: @escaping @Sendable (Double) -> Void) {
+        self.destination = destination
+        self.progress = progress
+    }
+
+    func run(_ url: URL) async throws {
+        let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                lock.withLock { self.continuation = continuation }
+                session.downloadTask(with: url).resume()
+            }
+        } onCancel: {
+            session.invalidateAndCancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let fraction = min(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 1)
+        // Once a percent is plenty for a progress bar.
+        let due = lock.withLock {
+            guard fraction - reported >= 0.01 else { return false }
+            reported = fraction
+            return true
+        }
+        if due { progress(fraction) }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // The temporary file is gone once this returns, so it is moved now or never.
+        let taken: Error?
+        if (downloadTask.response as? HTTPURLResponse)?.statusCode != 200 {
+            taken = BrowserError("The browser download was refused")
+        } else {
+            do {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: location, to: destination)
+                taken = nil
+            } catch {
+                taken = error
+            }
+        }
+        lock.withLock { problem = taken }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let waiting = lock.withLock {
+            defer { continuation = nil }
+            return (continuation, problem)
+        }
+        if let error = error ?? waiting.1 {
+            waiting.0?.resume(throwing: error)
+        } else {
+            waiting.0?.resume()
+        }
     }
 }
