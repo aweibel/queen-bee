@@ -146,7 +146,7 @@ enum ClaudeLauncher {
         }
         let holding = folders.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("\(id).jsonl").path) }
         // Claude Code names the folder after the directory with its links followed, as the process sees it.
-        let names = Set([directory, realpath(directory, nil).map { defer { free($0) }; return String(cString: $0) } ?? directory])
+        let names = Set([directory, realpath(directory, nil).map { resolved in defer { free(resolved) }; return String(cString: resolved) } ?? directory])
         let inFolder = holding.contains { folder in names.contains { Transcripts.isFolder(folder.lastPathComponent, for: $0) } }
         return Transcripts.start(inFolder: inFolder, elsewhere: !holding.isEmpty)
     }
