@@ -4,7 +4,7 @@ import Testing
 
 @Suite struct TranscriptsTests {
     @Test func aFolderIsNamedAsClaudeCodeNamesIt() {
-        #expect(Transcripts.folderName(for: "/Users/ana/my project.v2") == "-Users-ana-my-project-v2")
+        #expect(Transcripts.folderName(for: "/Volumes/Work/my project.v2") == "-Volumes-Work-my-project-v2")
         // Each UTF-16 unit is one character, so an emoji is two.
         #expect(Transcripts.folderName(for: "/a/é😀") == "-a----")
     }

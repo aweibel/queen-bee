@@ -67,9 +67,9 @@ import Testing
     }
 
     @Test func theSocketIsTheNamedOneOrTheFirstAppsThatIsOpen() {
-        let home = "/Users/me"
-        let installed = "/Users/me/Library/Application Support/QueenBee/qb.sock"
-        let dev = "/Users/me/Library/Application Support/QueenBee-Dev/qb.sock"
+        let home = "/Volumes/Home"
+        let installed = "/Volumes/Home/Library/Application Support/QueenBee/qb.sock"
+        let dev = "/Volumes/Home/Library/Application Support/QueenBee-Dev/qb.sock"
         #expect(OutsideRun.socketPath(environment: ["QB_SOCKET": "/s"], home: home) { _ in false } == "/s")
         #expect(OutsideRun.socketPath(environment: [:], home: home) { $0 == dev } == dev)
         #expect(OutsideRun.socketPath(environment: [:], home: home) { _ in true } == installed)
