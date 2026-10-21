@@ -42,10 +42,12 @@ public struct RemoteNotices: Equatable, Sendable {
 
     /// The longest a notification's text gets.
     static let longest = 180
+    /// How recently a run's record must have ended to be the run whose end is being told about.
+    static let justEnded: TimeInterval = 120
 
     /// Takes the device's copy of what the Mac sent, as it is now. Returns what is new since the last look, and
     /// the ids of notices about things that have since gone, such as a message approved at the Mac.
-    public mutating func update(from mirror: RemoteMirror) -> (new: [RemoteNotice], gone: [String]) {
+    public mutating func update(from mirror: RemoteMirror, now: Date = Date()) -> (new: [RemoteNotice], gone: [String]) {
         var new: [RemoteNotice] = []
         var gone: [String] = []
         let names = Dictionary((mirror.library?.projects ?? []).flatMap(\.flows).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
@@ -91,7 +93,13 @@ public struct RemoteNotices: Equatable, Sendable {
             guard let before, before != flow.activity else { continue }
             switch flow.activity {
             case .quiet where before == .running:
-                new.append(RemoteNotice(id: "done-\(flow.id)", title: "\(flow.name) finished", body: "The run has ended.", flowID: flow.id))
+                // A run stopped by the person or at a limit goes quiet too, so only the run's own record says it
+                // finished. That is known for the open flow once its history has come, as a run that has just
+                // ended; an older record is an earlier run's, and then how it ended isn't said.
+                let latest = mirror.snapshot.flatMap { $0.flow.id == flow.id ? $0.runs.max { $0.started < $1.started } : nil }
+                    .flatMap { now.timeIntervalSince($0.ended) < Self.justEnded ? $0 : nil }
+                let title = latest.map { "\(flow.name): \($0.summary)" } ?? "\(flow.name)'s run has ended"
+                new.append(RemoteNotice(id: "done-\(flow.id)", title: title, body: "Open it to see what the run did.", flowID: flow.id))
             case .failed:
                 new.append(RemoteNotice(id: "done-\(flow.id)", title: "\(flow.name) stopped", body: "The run didn't finish. Open it to see why.", flowID: flow.id))
             // The open flow's held messages and questions say more than this.

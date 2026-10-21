@@ -204,6 +204,9 @@ public actor Engine {
         var saidStalled = false
         var passes: [String: Int] = [:]
         var deliveries = 0
+        /// For each hand-off the current event has made so far, the agent it went to and whether that agent was
+        /// already waited on, so hand-offs that are never sent can be taken back. One entry per delivery.
+        var handedThisEvent: [(cardID: String, wasPending: Bool)] = []
         /// And card id, then source card id, to the message waiting there.
         var waiting: [String: [String: Message]] = [:]
         var fired: Set<String> = []
@@ -544,8 +547,16 @@ public actor Engine {
         switch card.kind {
         case .agent:
             if state.deliveries >= Self.maxDeliveries {
-                // The run ends here, so the hand-offs this event has already made would be work nobody uses.
+                // The run ends here, so the hand-offs this event has already made would be work nobody uses. They
+                // are never sent, so nothing waits on a reply to them: an agent left waiting on one would be
+                // interrupted when the run ends, in the middle of work that has nothing to do with it.
                 output.deliveries.removeAll()
+                for handed in state.handedThisEvent.reversed() {
+                    let owed = state.owed[handed.cardID, default: 0] - 1
+                    state.owed[handed.cardID] = owed > 0 ? owed : nil
+                    if !handed.wasPending { state.pending.remove(handed.cardID) }
+                }
+                state.handedThisEvent.removeAll()
                 output.log.append("Run stopped: agents had been handed \(Self.maxDeliveries) messages, which is the most one run allows. Nothing more was sent.")
                 state.hitLimit = true
                 return nil
@@ -554,6 +565,8 @@ public actor Engine {
             let tag = message.fromStart
                 ? "[Queen Bee · run \(state.id) · start]"
                 : "[Queen Bee · run \(state.id) · hand-off \(state.deliveries) · from \(message.fromName)]"
+            if output.deliveries.isEmpty { state.handedThisEvent.removeAll() }
+            state.handedThisEvent.append((card.id, state.pending.contains(card.id)))
             output.deliveries.append(Delivery(toCardID: card.id, text: tag + "\n" + message.text, fromName: message.fromName))
             output.log.append("\(message.fromName) → \(card.name)")
             state.pending.insert(card.id)

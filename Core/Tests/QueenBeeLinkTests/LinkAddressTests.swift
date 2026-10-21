@@ -212,6 +212,17 @@ import Testing
         #expect(store.lookUp("device-a") == .found(old))
     }
 
+    /// When neither place takes the new key, the older one is kept, not deleted on the way.
+    @Test func aWriteNeitherPlaceTakesKeepsTheOlderKey() {
+        let old = Data(repeating: 1, count: 32)
+        let modern = MemoryKeyStore(["device-a": old]), legacy = MemoryKeyStore()
+        modern.writeFails = errSecInteractionNotAllowed
+        legacy.writeFails = errSecInteractionNotAllowed
+        let store = MigratingKeyStore(modern: modern, legacy: legacy)
+        #expect(store.write(key, "device-a") == errSecInteractionNotAllowed)
+        #expect(store.lookUp("device-a") == .found(old))
+    }
+
     @Test func aDeleteThatFailsSaysSo() {
         let modern = MemoryKeyStore(["device-a": key]), legacy = MemoryKeyStore()
         modern.deleteFails = errSecInteractionNotAllowed

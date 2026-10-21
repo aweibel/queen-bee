@@ -52,6 +52,7 @@ final class FlowController: ToolHost {
             guard flow != oldValue else { return }
             scheduleSave()
             if flow.cards.map(\.trigger) != oldValue.cards.map(\.trigger) || flow.cards.count != oldValue.cards.count { reschedule() }
+            if !holds.isEmpty, flow.cards.map(\.waitMinutes) != oldValue.cards.map(\.waitMinutes) { retimeHolds() }
         }
     }
     @ObservationIgnored let fileURL: URL
@@ -122,6 +123,8 @@ final class FlowController: ToolHost {
     private(set) var holds: [PendingHold] = []
     /// The work behind each hold that runs by itself: a script's command, or a Flow card's inner run.
     @ObservationIgnored private var holdTasks: [String: Task<Void, Never>] = [:]
+    /// When each hold with a time limit began waiting, and the limit its clock was set for.
+    @ObservationIgnored private var holdClocks: [String: (began: Date, wait: Duration)] = [:]
     /// The canvas's zoom, published by the canvas for the zoom pill.
     var zoom: Double = 1
     /// The part of the canvas the window is showing, published by the canvas for the minimap.
@@ -628,6 +631,7 @@ final class FlowController: ToolHost {
         // The run, if there is one, ends here: nothing is waited on and nothing more is routed.
         holdTasks.values.forEach { $0.cancel() }
         holdTasks.removeAll()
+        holdClocks.removeAll()
         holds.removeAll()
         awaitingAnswer.removeAll()
         stallNotice?.cancel()
@@ -1632,6 +1636,7 @@ final class FlowController: ToolHost {
             // Whatever was waiting belonged to the run that has ended.
             holdTasks.values.forEach { $0.cancel() }
             holdTasks.removeAll()
+            holdClocks.removeAll()
             holds.removeAll()
             lastRunEnded = Date()
             finishRecord(output)
@@ -1669,7 +1674,8 @@ final class FlowController: ToolHost {
         }
         if let wait = HoldTimeLimit.wait(for: card), pending.kind == .approval || pending.needsAllow {
             let lasts = TestHarness.holdWait(wait)
-            pending.deadline = Date().addingTimeInterval(Double(lasts.components.seconds) + Double(lasts.components.attoseconds) / 1e18)
+            pending.deadline = Date().addingTimeInterval(Self.seconds(lasts))
+            holdClocks[pending.id] = (Date(), wait)
             answerIfUnanswered(pending.id, after: wait, lasting: lasts)
         }
         holds.append(pending)
@@ -1693,6 +1699,7 @@ final class FlowController: ToolHost {
             guard !Task.isCancelled, let hold = self.holds.first(where: { $0.id == id }),
                   hold.kind == .approval || hold.needsAllow, var card = self.flow.card(hold.cardID) else { return }
             self.holdTasks[id] = nil
+            self.holdClocks[id] = nil
             // The person may have taken the limit off while it waited. Otherwise the answer is the one the card gives
             // now, after as long as it was given.
             guard HoldTimeLimit.wait(for: card) != nil else {
@@ -1703,6 +1710,33 @@ final class FlowController: ToolHost {
             self.append("\(card.name): \(HoldTimeLimit.line(for: card))")
             let port = HoldTimeLimit.port(for: card)
             self.resolve(id, port: port, text: port == "fail" ? "Nobody let the command run in time, so it was skipped." : nil)
+        }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    }
+
+    /// A waiting card's time limit was changed: its clock now runs to the new limit, counted from when it began
+    /// waiting, and one past it already answers. A limit taken off stops the clock, and one put on starts it now.
+    private func retimeHolds() {
+        for hold in holds where hold.kind == .approval || hold.needsAllow {
+            guard let card = flow.card(hold.cardID) else { continue }
+            let wait = HoldTimeLimit.wait(for: card)
+            let clock = holdClocks[hold.id]
+            guard wait != clock?.wait else { continue }
+            holdTasks.removeValue(forKey: hold.id)?.cancel()
+            guard let index = holds.firstIndex(where: { $0.id == hold.id }) else { continue }
+            guard let wait else {
+                holdClocks[hold.id] = nil
+                holds[index].deadline = nil
+                continue
+            }
+            let began = clock?.began ?? Date()
+            let deadline = began.addingTimeInterval(Self.seconds(TestHarness.holdWait(wait)))
+            holdClocks[hold.id] = (began, wait)
+            holds[index].deadline = deadline
+            answerIfUnanswered(hold.id, after: wait, lasting: .milliseconds(Int(max(deadline.timeIntervalSinceNow, 0) * 1000)))
         }
     }
 
@@ -1929,6 +1963,7 @@ final class FlowController: ToolHost {
         holds.removeAll { $0.id == id }
         // An answer in time stops the clock on it.
         holdTasks.removeValue(forKey: id)?.cancel()
+        holdClocks[id] = nil
         let answered = Date()
         Task {
             self.absorb(await engine.holdResolved(flow: self.flow, holdID: id, port: port, text: text), sender: nil)
@@ -1966,6 +2001,7 @@ final class FlowController: ToolHost {
         holds[index].needsAllow = false
         // Allowed in time: the command runs, and nothing skips it now.
         holdTasks.removeValue(forKey: id)?.cancel()
+        holdClocks[id] = nil
         holds[index].deadline = nil
         runScript(holds[index])
     }

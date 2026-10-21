@@ -637,6 +637,8 @@ actor ScriptedJudge: Judge {
         // The Writer's last reply would have made the 50th and the 51st. Neither went.
         #expect(handed == 49)
         #expect(last.finished && last.ending == .hitLimit && last.deliveries.isEmpty)
+        // Nothing went to the Reviewer or the Editor, so neither is left waited on and interrupted.
+        #expect(last.leftWaiting.isEmpty)
     }
 
     @Test func logicCardsInACircleAreCutOff() async throws {

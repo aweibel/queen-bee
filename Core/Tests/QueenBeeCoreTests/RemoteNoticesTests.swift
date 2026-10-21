@@ -83,12 +83,40 @@ import Testing
         #expect(notices.update(from: mirror).new.map(\.title) == ["Writer needs you"])
     }
 
+    /// A run stopped by the person, or at a limit, goes quiet like one that finished: its record says which.
+    @Test func aRunEndingSaysHowItEndedWhenTheOpenFlowsRecordHasCome() {
+        var notices = RemoteNotices()
+        var mirror = mirror(canControl: true)
+        _ = notices.update(from: mirror)
+        let now = Date()
+        let stopped = RunRecord(id: "r9", started: now.addingTimeInterval(-30), ended: now.addingTimeInterval(-1), outcome: .stopped,
+                                command: "Go", log: [], results: [:], marks: [:], linkPasses: [:], messages: [:], handOffs: 0,
+                                ending: .spentLimit)
+        _ = mirror.apply(.history(id: "f1", runs: [stopped]))
+        _ = mirror.apply(.library(library(.quiet)))
+        #expect(notices.update(from: mirror, now: now).new.map(\.title) == ["Demo: \(RunEnding.spentLimit.label)"])
+    }
+
+    /// The record of a run that ended long ago is an earlier run's, which says nothing about this one.
+    @Test func anOldRecordDoesNotSayHowTheLatestRunEnded() {
+        var notices = RemoteNotices()
+        var mirror = mirror(canControl: true)
+        _ = notices.update(from: mirror)
+        let now = Date()
+        let earlier = RunRecord(id: "r8", started: now.addingTimeInterval(-4000), ended: now.addingTimeInterval(-3600), outcome: .finished,
+                                command: "Go", log: [], results: [:], marks: [:], linkPasses: [:], messages: [:], handOffs: 0,
+                                ending: .finishedWithAnswer)
+        _ = mirror.apply(.history(id: "f1", runs: [earlier]))
+        _ = mirror.apply(.library(library(.quiet)))
+        #expect(notices.update(from: mirror, now: now).new.map(\.title) == ["Demo's run has ended"])
+    }
+
     @Test func aRunEndingIsNewsOnlyOnce() {
         var notices = RemoteNotices()
         var mirror = mirror(canControl: true)
         _ = notices.update(from: mirror)
         _ = mirror.apply(.library(library(.quiet)))
-        #expect(notices.update(from: mirror).new.map(\.title) == ["Demo finished"])
+        #expect(notices.update(from: mirror).new.map(\.title) == ["Demo's run has ended"])
         #expect(notices.update(from: mirror).new.isEmpty)
         _ = mirror.apply(.library(library(.failed)))
         #expect(notices.update(from: mirror).new.map(\.title) == ["Demo stopped"])

@@ -49,12 +49,19 @@ public struct MigratingKeyStore: KeyStore {
         let status = modern.write(data, account)
         guard status == errSecSuccess else {
             // `modern` is read first, so an older key left there would be found in place of the new one kept in
-            // `legacy`. It goes first, and if it can't be seen to have gone, the write fails and nothing changes.
+            // `legacy`. The new key is kept in `legacy` before the older one goes, so a failure on the way never
+            // leaves no key at all; if the older one can't be seen to have gone, the write fails and it still works.
+            let held = modern.lookUp(account)
+            if case .unreadable(let why) = held, why != errSecMissingEntitlement { return status }
+            let kept = legacy.write(data, account)
+            guard kept == errSecSuccess else { return kept }
+            guard case .found = held else { return kept }
             modern.delete(account)
-            switch modern.lookUp(account) {
-            case .missing, .unreadable(errSecMissingEntitlement): return legacy.write(data, account)
-            default: return status
+            if case .found = modern.lookUp(account) {
+                legacy.delete(account)
+                return status
             }
+            return kept
         }
         // An older copy of the key would otherwise be found again if `modern` ever couldn't be read.
         legacy.delete(account)
