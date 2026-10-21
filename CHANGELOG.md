@@ -6,6 +6,8 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-21
+
 ### Added
 
 - A spending limit for a flow's runs, in the flow's settings, on a paired device and for the orchestrator. A run whose agents have used more than it, at API prices, is stopped as Stop would stop it, and the log, the run's history and a notice say so. Their use is read every few seconds while the run goes on, so a long turn is stopped part-way through, before its reply is passed on.
@@ -256,7 +258,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.3...v0.3.4
