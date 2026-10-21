@@ -7,6 +7,11 @@ import System
 struct ResolvedEnvironment: Sendable {
     var path: String
     var claude: String?
+    /// The login shell didn't answer in time, so the PATH is the app's own plus the usual places.
+    var shellTimedOut = false
+
+    /// How long the login shell gets to read its startup files and answer.
+    nonisolated static let shellTimeout: TimeInterval = 10
 
     /// Asks the person's login shell, since an app started from the Dock gets a bare PATH.
     nonisolated static func resolve() async -> ResolvedEnvironment {
@@ -15,18 +20,52 @@ struct ResolvedEnvironment: Sendable {
         let script = #"print -r -- "__QB_PATH__$PATH"; print -r -- "__QB_CLAUDE__$(command -v claude)""#
         var path = fallback
         var claude: String?
-        if let out = try? await run(.path("/bin/zsh"), arguments: ["-lic", script], input: .none,
-                                    output: .string(limit: 200_000), error: .discarded).standardOutput {
+        let out = await askShell(script, timeout: shellTimeout)
+        if let out {
             for line in out.split(separator: "\n") {
                 if line.hasPrefix("__QB_PATH__") { path = String(line.dropFirst(11)) + ":" + fallback }
                 if line.hasPrefix("__QB_CLAUDE__"), line.count > 13 { claude = String(line.dropFirst(13)) }
             }
+        } else if let own = ProcessInfo.processInfo.environment["PATH"], !own.isEmpty {
+            path = own + ":" + fallback
         }
         if claude == nil || !(claude!.hasPrefix("/")) {
             claude = ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
                 .first { FileManager.default.isExecutableFile(atPath: $0) }
         }
-        return ResolvedEnvironment(path: path, claude: claude)
+        return ResolvedEnvironment(path: path, claude: claude, shellTimedOut: out == nil)
+    }
+
+    /// Runs `script` in an interactive login zsh and returns what it printed, or nil when the shell didn't finish
+    /// within `timeout` or couldn't be started. A startup file that waits for input or hangs on the network would
+    /// otherwise hold up every session for good, so the shell is stopped then and the app goes on without it.
+    private nonisolated static func askShell(_ script: String, timeout: TimeInterval) async -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lic", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let answer = FirstAnswer<String?>()
+        return await withCheckedContinuation { continuation in
+            answer.continuation = continuation
+            do {
+                try process.run()
+            } catch {
+                answer.give(nil)
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                answer.give(String(decoding: data.prefix(200_000), as: UTF8.self))
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                guard answer.give(nil) else { return }
+                if process.isRunning { process.terminate() }
+            }
+        }
     }
 
     /// The oldest Claude Code the session plugin works with.
@@ -58,22 +97,58 @@ struct ResolvedEnvironment: Sendable {
     }
 }
 
+/// A continuation resumed by whichever of several racers gets there first.
+private nonisolated final class FirstAnswer<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    var continuation: CheckedContinuation<Value, Never>? {
+        get { lock.withLock { waiting } }
+        set { lock.withLock { waiting = newValue } }
+    }
+    private var waiting: CheckedContinuation<Value, Never>?
+
+    /// Resumes with `value` unless something already has. Returns whether this was first.
+    @discardableResult
+    func give(_ value: Value) -> Bool {
+        let taken = lock.withLock {
+            defer { waiting = nil }
+            return waiting
+        }
+        taken?.resume(returning: value)
+        return taken != nil
+    }
+}
+
 /// Builds the command line for a flow's sessions.
 enum ClaudeLauncher {
-    static let hookEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "StopFailure", "Notification", "SessionEnd"]
+    /// PreCompact is only listened to so a summary the person asked for can be told from one made mid-turn.
+    static let hookEvents = ["SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "Stop", "StopFailure", "Notification", "SessionEnd"]
 
     static func orchestratorName(for flow: Flow) -> String { "\(flow.name) orchestrator" }
 
-    /// The session behind a card or orchestrator: resumed when Claude Code still has its
-    /// transcript, started fresh under the same id when it doesn't.
-    private static func sessionArguments(id: String) -> [String] {
-        transcriptExists(for: id) ? ["--resume", id] : ["--session-id", id]
+    /// The folder an agent card's session runs in: its own, or else the project's.
+    static func folder(for card: Card, projectRoot: URL) -> String {
+        card.cwd?.isEmpty == false ? card.cwd! : projectRoot.path
     }
 
-    static func transcriptExists(for id: String) -> Bool {
+    /// The session behind a card or orchestrator: resumed when Claude Code has its transcript for the folder it
+    /// starts in, started fresh under the same id when it doesn't. The caller gives a session whose transcript is
+    /// only in another folder a new id first: see `transcriptStart`.
+    private static func sessionArguments(id: String, directory: String) -> [String] {
+        transcriptStart(for: id, in: directory) == .resume ? ["--resume", id] : ["--session-id", id]
+    }
+
+    /// Whether the session `id` can be resumed in `directory`, and if not, whether its id is taken by a
+    /// transcript somewhere else.
+    static func transcriptStart(for id: String, in directory: String) -> Transcripts.Start {
         let projects = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/projects")
-        guard let folders = try? FileManager.default.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil) else { return false }
-        return folders.contains { FileManager.default.fileExists(atPath: $0.appendingPathComponent("\(id).jsonl").path) }
+        guard let folders = try? FileManager.default.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil) else {
+            return .fresh
+        }
+        let holding = folders.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("\(id).jsonl").path) }
+        // Claude Code names the folder after the directory with its links followed, as the process sees it.
+        let names = Set([directory, realpath(directory, nil).map { resolved in defer { free(resolved) }; return String(cString: resolved) } ?? directory])
+        let inFolder = holding.contains { folder in names.contains { Transcripts.isFolder(folder.lastPathComponent, for: $0) } }
+        return Transcripts.start(inFolder: inFolder, elsewhere: !holding.isEmpty)
     }
 
     private static func settingsJSON(helper: String) -> String {
@@ -89,8 +164,8 @@ enum ClaudeLauncher {
         return settings.text()
     }
 
-    private static func common(sessionID: String, name: String, systemPrompt: String, services: AppServices) -> [String] {
-        sessionArguments(id: sessionID) + [
+    private static func common(sessionID: String, directory: String, name: String, systemPrompt: String, services: AppServices) -> [String] {
+        sessionArguments(id: sessionID, directory: directory) + [
             "--settings", settingsJSON(helper: services.helperPath),
             "--plugin-dir", services.pluginDirectory.path,
             "--append-system-prompt", systemPrompt,
@@ -101,7 +176,8 @@ enum ClaudeLauncher {
     static func agent(flow: Flow, card: Card, sessionID: String, projectRoot: URL, services: AppServices,
                       environment: ResolvedEnvironment) -> LaunchSpec? {
         guard let claude = environment.claude else { return nil }
-        var args = common(sessionID: sessionID, name: card.name,
+        let cwd = folder(for: card, projectRoot: projectRoot)
+        var args = common(sessionID: sessionID, directory: cwd, name: card.name,
                           systemPrompt: agentPrompt(flow: flow, card: card), services: services)
         // These come from a flow file, which may not be one this app wrote. Anything that could be read
         // as another flag, or that isn't a setting the app offers, is left out.
@@ -118,7 +194,6 @@ enum ClaudeLauncher {
             // or follow the card's permission mode, like anything else the agent does.
             args += ["--mcp-config", server.text(), "--allowedTools", BrowserTools.allowedWithoutAsking.joined(separator: ",")]
         }
-        let cwd = (card.cwd?.isEmpty == false ? card.cwd! : projectRoot.path)
         return spec(claude: claude, args: args, cwd: cwd, key: "\(flow.id)/\(card.id)", sessionID: sessionID,
                     services: services, environment: environment)
     }
@@ -133,7 +208,7 @@ enum ClaudeLauncher {
             "command": .string(services.helperPath), "args": ["mcp"],
             "env": ["QB_SOCKET": "${QB_SOCKET}", "QB_SESSION": "${QB_SESSION}"],
         ]]]
-        let args = common(sessionID: sessionID, name: orchestratorName(for: flow),
+        let args = common(sessionID: sessionID, directory: projectRoot.path, name: orchestratorName(for: flow),
                           systemPrompt: orchestratorPrompt(flow: flow), services: services)
             + ["--mcp-config", server.text(), "--allowedTools", "mcp__queenbee"]
         return spec(claude: claude, args: args, cwd: projectRoot.path, key: key, sessionID: sessionID,

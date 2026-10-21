@@ -264,6 +264,8 @@ class CardView: NSView, NSGestureRecognizerDelegate {
         let said = overviewText.caseInsensitiveCompare(new.name) == .orderedSame ? nil : overviewText
         let count = runCount > 0 ? (runCount > 1 ? "✓ \(runCount)" : "✓") : nil
         overviewDetail.stringValue = [said, count].compactMap { $0 }.joined(separator: " · ")
+        // What the card is doing, read after its name: an agent's state, a result, a warning.
+        setAccessibilityValue([said, context.warning, mark.failed ? "failed" : nil].compactMap { $0 }.joined(separator: ", "))
         needsLayout = true
         needsDisplay = true
     }
@@ -291,6 +293,9 @@ class CardView: NSView, NSGestureRecognizerDelegate {
         nameLabel.stringValue = card.name
         iconView.image = NSImage(systemSymbolName: CanvasGeometry.icon(for: card.kind), accessibilityDescription: card.kind.label)?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        // One element for VoiceOver, named for the card, with what is inside it (a terminal, a browser) still reachable.
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
         setAccessibilityLabel("\(card.kind.label) card \(card.name)")
         setAccessibilityIdentifier("card-\(card.id)")
     }
@@ -611,6 +616,8 @@ struct CardContext: Equatable {
     /// What a card holding a message is waiting on, in a few words.
     var waiting: String?
     var sessionState: SessionState = .notStarted
+    /// The session was started a while ago and hasn't said it is ready.
+    var isSlowToStart = false
     /// The card's settings have changed since its session started.
     var needsRestart = false
     /// A run is under way. Marks left by a run that has ended say where it went, not what is live.

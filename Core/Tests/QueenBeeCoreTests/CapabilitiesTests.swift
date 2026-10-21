@@ -26,6 +26,7 @@ import Testing
             "instructions": "Be brief", "model": "opus", "effort": "high", "permission_mode": "plan", "cwd": "/tmp/x", "browser": true,
             "command": "echo hi", "check": "contains", "value": "DONE", "max_tries": 4, "branches": ["x", "y"],
             "template": "{{message}}", "save_to": "out.md", "text": "Check this", "flow": "",
+            "wait_minutes": 30, "when_no_answer": "approved", "split": "lines", "max_items": 5,
         ]
         for card in Capabilities.cards {
             for setting in card.settings {
@@ -71,6 +72,17 @@ import Testing
         // The browser tools that act are the ones that ask.
         #expect(reference.contains("- `click` (asks the person first"))
         #expect(reference.contains("- `read` (never asks the person)"))
+    }
+
+    @Test func theReferenceStatesTheLimitsTheEngineAndScriptCardsKeep() {
+        let reference = Capabilities.reference
+        #expect(reference.contains("at most \(Engine.maxDeliveries) messages"))
+        #expect(reference.contains(Capabilities.runLimit))
+        #expect(reference.contains("hasn't finished after \(Int(Capabilities.scriptTimeout.components.seconds / 60)) minutes"))
+        #expect(Capabilities.scriptOutputLimit == 20_000 && reference.contains("the last 20,000 characters"))
+        #expect(reference.contains("takes longer than \(Int(Engine.judgeTimeout.components.seconds)) seconds counts as no"))
+        #expect(reference.contains("A flow has one run at a time"))
+        #expect(reference.contains("Inside a loop, it passes on one per round"))
     }
 
     @Test func theSavedFileIsWhatTheCodeSaysNow() throws {

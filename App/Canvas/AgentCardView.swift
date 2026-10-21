@@ -59,7 +59,15 @@ final class AgentCardView: CardView {
         browserPane.isInView = zoom >= Self.overviewBelow && !browserPane.visibleRect.isEmpty
     }
 
-    override var zoom: CGFloat { didSet { updateBrowserVisibility() } }
+    override var zoom: CGFloat {
+        didSet {
+            updateBrowserVisibility()
+            // Under the overview the terminal can't be seen, and drawing it is the costliest part of a card.
+            // Its session runs on and keeps what it prints, so it is whole again when the canvas zooms back in.
+            let covered = zoom < Self.overviewBelow
+            if terminalHolder.isHidden != covered { terminalHolder.isHidden = covered }
+        }
+    }
 
     override func removeFromSuperview() {
         browserPane?.letGo()
@@ -88,15 +96,23 @@ final class AgentCardView: CardView {
         }
         // An agent that asked a question is idle, but the run is owed its reply.
         let asked = state == .idle ? context.waiting : nil
-        stateText = asked ?? (isWaiting ? "waiting" : state.label.lowercased())
+        stateText = asked ?? (isWaiting ? "waiting" : context.isSlowToStart ? "starting is taking a while" : state.label.lowercased())
         stateBadge.set(stateText, tone: asked == nil ? tone : .live)
+        stateBadge.toolTip = context.isSlowToStart
+            ? "Claude Code hasn't said it's ready yet. Look in the terminal in case it's asking you something, such as whether to trust this folder. If it's stuck, press Retry."
+            : nil
         restartBadge.set(context.needsRestart ? "restart to apply" : "", tone: .live)
         costBadge.set(context.cost ?? "", tone: .plain)
         let live = state != .notStarted && state != .exited
-        startButton.isHidden = live
-        startButton.title = state == .exited ? "Restart agent" : "Start agent"
+        startButton.isHidden = live && !context.isSlowToStart
+        startButton.title = context.isSlowToStart ? "Retry" : state == .exited ? "Restart agent" : "Start agent"
+        startButton.toolTip = context.isSlowToStart ? "Stop this agent's Claude Code and start it again" : nil
+        isSlowToStart = context.isSlowToStart
         super.update(card: new, context: context)
     }
+
+    /// While a slow start is shown, Retry sits at the foot of the terminal, which may be asking something.
+    private var isSlowToStart = false
 
     override func layoutContent() {
         // With a browser the card is split down the middle: terminal on the left, page on the right.
@@ -111,7 +127,8 @@ final class AgentCardView: CardView {
         terminal?.frame = terminalHolder.bounds.insetBy(dx: 6, dy: 4)
         startButton.sizeToFit()
         startButton.frame.origin = CGPoint(x: left.minX + (left.width - startButton.frame.width) / 2,
-                                           y: (left.height - startButton.frame.height) / 2)
+                                           y: isSlowToStart ? max(0, left.height - startButton.frame.height - Theme.Space.m)
+                                                            : (left.height - startButton.frame.height) / 2)
         updateBrowserVisibility()
     }
 

@@ -1,5 +1,7 @@
 # Agent browser: implementation plan
 
+**Status: done, shipped in 0.4.0.**
+
 Spec: `docs/superpowers/specs/2026-10-12-agent-browser-design.md`
 
 ## What the prototype showed (step 1, done)

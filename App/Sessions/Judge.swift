@@ -22,13 +22,16 @@ nonisolated struct ClaudeJudge: Judge {
         return Checks.parseBranch(branch, branches: branches)
     }
 
+    /// The prompt goes on standard input: it holds the whole message being judged, which on the command line could be
+    /// more than a process may be started with. The engine gives up on a call that takes too long, and cancelling it
+    /// stops the process.
     private func ask(_ prompt: String, schema: JSONValue, field: String) async -> String? {
         let args = ["-p", "--model", "haiku", "--restricted", "--no-session-persistence",
-                    "--output-format", "json", "--json-schema", schema.text(), prompt]
+                    "--output-format", "json", "--json-schema", schema.text()]
         var env: [Environment.Key: String] = [:]
         for (k, v) in environment { if let key = Environment.Key(rawValue: k) { env[key] = v } }
         guard let result = try? await run(.path(FilePath(claude)), arguments: Arguments(args), environment: .custom(env),
-                                          input: .none, output: .string(limit: 2_000_000), error: .discarded),
+                                          input: .string(prompt), output: .string(limit: 2_000_000), error: .discarded),
               let start = result.standardOutput.firstIndex(of: "{"),
               let json = try? JSONValue.parse(Data(result.standardOutput[start...].utf8)) else { return nil }
         return json["structured_output"]?[field]?.stringValue

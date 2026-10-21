@@ -12,6 +12,8 @@ public enum CardKind: String, Codable, CaseIterable, Sendable {
     case script
     /// Runs another flow in the same project as one step of this one.
     case flow
+    /// Splits its message into items and sends them on one at a time, then passes on what came back for each.
+    case forEach = "for-each"
 
     public var label: String {
         switch self {
@@ -28,8 +30,17 @@ public enum CardKind: String, Codable, CaseIterable, Sendable {
         case .approval: "Approval"
         case .script: "Script"
         case .flow: "Flow"
+        case .forEach: "For each"
         }
     }
+}
+
+/// How a For each card splits its message into items.
+public enum ItemSplit: String, Codable, CaseIterable, Sendable {
+    /// The items of a JSON array when the whole message is one, and otherwise one item per line.
+    case auto
+    /// One item per line, whatever the message holds.
+    case lines
 }
 
 /// How an If or Loop card checks a message.
@@ -88,6 +99,19 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
     /// Loop: tries before it gives up and takes Done.
     public var maxTries: Int?
 
+    // Approval
+    /// How long the person has to answer, in minutes, before the card answers for them. Nil waits for good.
+    /// A Script card waiting for its command to be allowed has this too, and goes out fail.
+    public var waitMinutes: Int?
+    /// The output an Approval card takes when nobody answered in time: approved or rejected. Nil for rejected.
+    public var whenNoAnswer: String?
+
+    // For each
+    /// How the message is split into items. Nil for auto.
+    public var split: ItemSplit?
+    /// The most items it sends on; the rest are left out.
+    public var maxItems: Int?
+
     // Switch
     public var branches: [String]?
 
@@ -101,6 +125,11 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
 
     // Note
     public var text: String?
+
+    /// Only ever set on a paired device: the kind a newer Mac gave this card, which this app doesn't know. The card
+    /// is shown as a note saying to update the app, and can't be changed or copied from the device. See
+    /// `Remote.read(fromMac:)`.
+    public var unknownKind: String?
 
     public init(id: String, kind: CardKind, name: String, x: Double, y: Double, width: Double, height: Double) {
         self.id = id; self.kind = kind; self.name = name
@@ -121,6 +150,7 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
         case .note: c.text = ""; c.height = 120
         case .approval: c.text = ""
         case .script: c.command = ""
+        case .forEach: c.split = .auto; c.maxItems = 20
         case .and, .or, .flow: break
         }
         c.height = max(c.height, Card.minimumHeight(for: c))
@@ -139,7 +169,7 @@ public struct Card: Codable, Identifiable, Equatable, Sendable {
 public struct Link: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var from: String
-    /// The output of `from` it leaves: out, yes, no, a branch name, other, done or again.
+    /// The output of `from` it leaves: out, yes, no, a branch name, other, done, again, gave-up or each.
     public var port: String
     public var to: String
     /// How many times it may fire in one run, so loops always end.
@@ -169,6 +199,9 @@ public struct Flow: Codable, Identifiable, Equatable, Sendable {
     /// Named sets of cards that are framed together and can be folded into one card. Nil in
     /// a file from before groups.
     public var groups: [CardGroup]?
+    /// A run that has spent more than this many dollars, as the app reckons its agents' use at API prices, is
+    /// stopped. Nil for no limit.
+    public var spendingLimit: Double?
 
     public init(id: String = Flow.newID(), name: String, cards: [Card] = [], links: [Link] = []) {
         self.version = Flow.currentVersion
@@ -218,10 +251,11 @@ public func ports(of card: Card) -> [String] {
     switch card.kind {
     case .ifElse: ["yes", "no"]
     case .switchCard: (card.branches ?? []) + ["other"]
-    case .loop: ["done", "again"]
+    case .loop: ["done", "again", "gave-up"]
     case .approval: ["approved", "rejected"]
     case .script: ["pass", "fail"]
     case .flow: ["done", "fail"]
+    case .forEach: ["each", "done"]
     case .end, .note: []
     case .agent, .start, .and, .or, .prompt: ["out"]
     }
@@ -240,6 +274,8 @@ public func portLabel(_ port: String) -> String {
     case "other": "Other"
     case "done": "Done"
     case "again": "Again"
+    case "gave-up": "Gave up"
+    case "each": "Each"
     case "approved": "Approved"
     case "rejected": "Rejected"
     case "pass": "Pass"
@@ -265,6 +301,10 @@ public struct CardPatch: Equatable, Sendable {
     public var check: CheckKind?
     public var value: String?
     public var maxTries: Int?
+    public var waitMinutes: Int?
+    public var whenNoAnswer: String?
+    public var split: ItemSplit?
+    public var maxItems: Int?
     public var branches: [String]?
     public var template: String?
     public var saveTo: String?

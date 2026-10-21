@@ -67,6 +67,9 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 
   ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
 
+- An Approval card can be told to wait at most so long, then approve or reject the message itself. A Script card can be told how long to wait for you to allow a command before skipping it.
+- A **For each** card splits a list into items, one per line or the items of a JSON list, and sends them out Each one at a time. Link the last card that works on an item back into the For each card: what comes back that way is that item's result. When every item is back, all the results go out Done together. A **Loop until** card that runs out of tries goes out Gave up, or Done if nothing is linked to Gave up.
+- A flow's settings (the sliders button in the toolbar) can stop a run once it has spent a set amount, reckoned at API prices from what its agents have used.
 - Turn on **Browser** in an agent's settings to give it a web browser in its card: terminal on the left, the live page on the right. The agent opens and reads pages by itself and asks before it clicks or types, unless its permissions say otherwise. Click into the page to use it yourself, for instance to sign in to a site; agents with a browser in the same project share those sign-ins, and **Clear browser data** in the flow's settings forgets them. It uses Chrome, Chromium, Edge or Brave if one is installed, and offers to download a browser of its own if not.
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
@@ -87,6 +90,19 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
 - **View → Appearance** switches between light, dark and following the system.
 - **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows, and run, answer and edit them if you let it. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
+
+### Start a flow from outside the app
+
+The app ships a small command, `qb`, inside it. With Queen Bee open, it starts a flow from Terminal or a script:
+
+```sh
+alias qb="/Applications/Queen Bee.app/Contents/MacOS/qb"
+qb run ~/work/site "Review" "Check the homepage for broken links"
+```
+
+It names the project folder, the flow by its name or id, and the message the run starts with, as if you had typed it into the Start card (leave it out to use the card's own). It waits for the run to end, prints what reached the End cards and exits 0. A run that ends with no answer prints how it ended and exits 1; a run that couldn't start, because the app isn't open, the flow isn't found or is already running, exits 3. `--no-wait` returns as soon as the run has started. The folder must be one you have added to Queen Bee and trusted.
+
+A link starts a flow too: `queenbee://run?flow=<flow id>&message=<message>`, with the message URL-encoded. Any web page or app can open such a link, so Queen Bee shows you the flow and the message and starts the run only if you press **Run**.
 
 ## On your iPad or iPhone
 
@@ -197,7 +213,9 @@ You need Xcode 27 and xcodegen, as for building the Mac app.
    open QueenBee.xcodeproj
    ```
 
-5. Plug in the iPad or iPhone. In Xcode's toolbar pick the **QueenBeeMobile** scheme and your device.
+5. Plug in the iPad or iPhone. In Xcode's toolbar pick the **QueenBeeMobile** scheme and your device. It installs a
+   Release build, which has none of the test harness in it. **QueenBeeMobile Debug** is the same app built for
+   debugging from Xcode.
 6. On the device, turn on **Settings → Privacy & Security → Developer Mode**, and restart it when asked. The switch only appears once the device has been connected to Xcode.
 7. Press **Run** in Xcode.
 8. The first time, the app won't open until you trust yourself as its developer: on the device, **Settings → General → VPN & Device Management**, tap your Apple ID, then **Trust**. Open Queen Bee again.
@@ -213,6 +231,36 @@ Both need to be on the same Wi-Fi.
 3. Choose your Mac from the list, then point the camera at the code.
 
 From then on the device connects by itself whenever both apps are open on the same Wi-Fi. To stop a device connecting, click **Remove** beside it in the Mac's settings, or tap the gear on the device and choose **Forget this Mac**. [SECURITY.md](SECURITY.md) says what a paired device can see and what each side stores.
+
+If the device can't connect, its pill says so and it keeps trying. When your Mac turns its key down several times
+running, it says "Can't connect to your Mac — retrying" and offers **Pair Again…** beside that. A Mac going to
+sleep or a Wi-Fi drop part-way through connecting never makes a device forget its key.
+
+Switching to another app for a moment doesn't disconnect: the device stays connected for about 25 seconds after you
+leave Queen Bee, then lets go until you come back.
+
+### Connect from another network
+
+Pairing needs the same Wi-Fi. After that, a device can also reach the Mac by its address, as over a private network
+such as [Tailscale](https://tailscale.com).
+
+1. On the Mac, in **Settings → Remote**, turn on **Let devices connect by address too**. The Mac shows the port it
+   listens on, 51720, and the addresses it can be reached at.
+2. On the device, tap the gear, and under **Connect by address** type one of those addresses, such as
+   `mac.tail1234.ts.net` or `100.64.0.7`, then **Save**. Add `:port` only if the Mac shows a different port.
+
+The device still looks for the Mac on the Wi-Fi first, and tries the address when it isn't found there. Each device
+still needs its own key from pairing, and the connection is encrypted with it as on the Wi-Fi. Use an address only on
+a network you trust: don't open the port to the internet.
+
+### Notifications
+
+While Queen Bee on the device is connected, and for the short while after you leave it, it can tell you when a
+message is waiting for approval, a Script card is waiting to be allowed, a session asks you something, or a run
+ends. On a device with **Can control**, an approval can be answered from the notification with **Approve** or
+**Reject**, and a script with **Allow** or **Don't Allow**, once the device is unlocked. The app asks whether it may
+notify you the first time it connects; the switch is under **Notifications** in its settings. Nothing comes from a
+server, so once iOS stops the app in the background, nothing more arrives until you open it again.
 
 ### Run it in the Simulator
 
@@ -241,11 +289,11 @@ Use the name of any iPad or iPhone simulator you have (`xcrun simctl list device
 ## Tests
 
 ```sh
-cd Core && swift test        # 448 unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to, the keys it sends, a card's browser on a device and the browser's tools
+cd Core && swift test        # unit tests on the model, store, engine, link router, snapping, layout, triggers, tools, the Remote link, what a device may ask, the rules its edits are held to, the keys it sends, a card's browser on a device and the browser's tools
 ./scripts/e2e.py             # end-to-end: real Claude Code sessions on Haiku, about seven minutes
 ```
 
-The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`.
+The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is left alone. It builds a scratch project with one flow per scenario and drives the app through a test harness that only exists when the app is launched with `--testing`. Name scenarios to run a few: `./scripts/e2e.py guard loop`. A scenario that can't run on this Mac, such as one whose app isn't built, is counted as skipped. The run fails when a scenario you named was skipped, or when nothing passed.
 
 The iPad and iPhone app is checked in the iOS Simulator by ten scenarios that only run when named. Build it first with `./scripts/build-mobile.sh`.
 
@@ -274,14 +322,17 @@ The iPad and iPhone app is checked in the iOS Simulator by ten scenarios that on
 
 ## Releasing
 
-For maintainers. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, put the same version in `Plugin/qb-link/.claude-plugin/plugin.json` and in `serverInfo` in `Core/Sources/QueenBeeCore/MCP.swift`, add a section for the version to `CHANGELOG.md`, then:
+For maintainers. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, put the same version in `Plugin/qb-link/.claude-plugin/plugin.json` and in `MCPServer.version` in `Core/Sources/QueenBeeCore/MCP.swift`, add a section for the version to `CHANGELOG.md`, commit, then:
 
 ```sh
-./scripts/release.sh            # build, sign, notarize and write appcast.xml, into dist/
-./scripts/release.sh publish    # the same, then tag, push and create the GitHub release
+./scripts/release.sh check      # the checks alone: the version matches everywhere, the build number is above appcast.xml's, the tree is clean
+./scripts/release.sh            # build, sign, notarize and write the feed, into dist/
+./scripts/release.sh publish    # the same, then release it on GitHub, tag it and push appcast.xml
 ```
 
-The script's header lists the certificate, notarization profile and update key it needs.
+`swift test` fails too when the three versions disagree. Publish puts the disk image on GitHub before it pushes `appcast.xml`, so installed copies are never pointed at a download that isn't there, and running it again after a failure carries on from the step that failed. Releases from a `release/<version>` branch reach installed copies once that branch is merged into `main`, where they read the feed.
+
+The releases so far are signed but not notarized: they were made with `QB_SKIP_NOTARIZE=1`. The script notarizes when the notarization profile is set up. Its header lists the certificate, profile and update key it needs.
 
 ## Contributing
 

@@ -25,7 +25,8 @@ that file and not the project.
 
 ```sh
 cd Core && swift test    # under a second; run it before every pull request
-./scripts/e2e.py         # about seven minutes; starts real Claude Code sessions on Haiku, which uses your account
+./scripts/e2e.py         # about nine minutes; starts real Claude Code sessions on Haiku, which uses your account
+./scripts/e2e.py features   # For each, Gave up, time limits on holds, the spending limit (one short Sonnet turn) and qb run
 ```
 
 ### The iPad and iPhone app
@@ -59,7 +60,9 @@ bundle id go in `Mobile/Local.xcconfig`, which git ignores. Never commit that fi
 
 A new card, card setting or agent tool is described in `Core/Sources/QueenBeeCore/Capabilities.swift`, which the orchestrator's instructions and `CAPABILITIES.md` are made from. `./scripts/build.sh` rewrites `CAPABILITIES.md`; commit it with your change. The unit tests fail if it is out of date.
 
-The unit tests run on every pull request, and so does a build of the iPad and iPhone app for the Simulator. The end-to-end script does not, because it needs a signed-in
+The unit tests run on every pull request, and so do a Debug and a Release build of the Mac app, a check that the
+Release build has no test harness in it, and a build of the iPad and iPhone app for the Simulator. The end-to-end
+script does not, because it needs a signed-in
 Claude Code. Run it, or the scenarios near your change (`./scripts/e2e.py guard loop`), when you touch sessions,
 hand-offs, the canvas or the engine, and say in the pull request which ones you ran.
 
@@ -92,9 +95,10 @@ Bugs:
   (`App/Sessions/TerminalSession.swift`, `flushSoon`).
 - **A Loop set above 3 tries stops early.** Links default to 3 passes, so the run ends at the link's limit before
   the Loop card gives up (`Core/Sources/QueenBeeCore/Engine.swift`, `send`).
-- **A reply from a stopped run can leak into the next run**, once the same agent has been handed a message
-  there. Replies carry no run identity. The engine only checks that the agent is owed a reply
-  (`Core/Sources/QueenBeeCore/Engine.swift`, `agentReplied`).
+- **A reply from a stopped run can still leak into the next run** when the app never saw the hand-off that
+  began the turn. Stop interrupts the run's agents, and a turn begun by a hand-off of another run is dropped,
+  but the run is read off the prompt the `UserPromptSubmit` hook reports, and a turn without one is passed on
+  (`App/FlowController.swift`, `turnRun`; `Core/Sources/QueenBeeCore/Engine.swift`, `agentReplied`).
 - **Stop Its Agents also stops the flow's schedule** until the flow is opened again.
 - **Schedules stay on through some orchestrator edits:** changes inside a sub-flow, a Prompt card added after
   Start, or Start linked to a different agent.
@@ -104,7 +108,7 @@ Bugs:
 - **Deleting a sub-flow leaves its Flow card pointing at nothing**, with no warning.
 - **Sessions sometimes stay at "starting"** when many start together. The end-to-end `fanout` scenario times out
   on this now and then and passes when run again by itself.
-- **Nothing notices a stalled run.** A scheduled run waiting on an Approval card waits for good.
+- **Nothing notices a stalled run.** A scheduled run waiting on an Approval card with no time limit waits for good.
 
 Security hardening:
 
@@ -121,7 +125,7 @@ Speed. None of this has been measured yet, so the first job is a stress flow and
 
 Other:
 
-- Releases are signed but not notarized.
-- The Mac app's build isn't checked in CI, only the `Core` tests and the iPad and iPhone app's build.
+- Releases are signed but not notarized. `./scripts/release.sh` notarizes once a notarization profile is set up;
+  the releases so far were made with `QB_SKIP_NOTARIZE=1`.
 - The iPad and iPhone app has not been checked with VoiceOver by ear, on an iPad held sideways, or on an iPhone
   held sideways. The Simulator can't be turned from a script.

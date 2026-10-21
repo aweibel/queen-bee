@@ -159,7 +159,7 @@ struct RunPicker: View {
             ForEach(controller.runs.reversed()) { run in
                 let isShown = controller.viewedRunID == run.id || (controller.viewedRunID == nil && run.id == controller.runs.last?.id)
                 Toggle(isOn: Binding(get: { isShown }, set: { _ in controller.view(run: run.id) })) {
-                    Text("\(Self.label(for: run.started)) · \(run.outcome.rawValue) · \(run.handOffs) \(run.handOffs == 1 ? "hand-off" : "hand-offs")")
+                    Text("\(Self.label(for: run.started)) · \(run.summary) · \(run.handOffs) \(run.handOffs == 1 ? "hand-off" : "hand-offs")")
                     Text(run.command)
                 }
             }
@@ -185,6 +185,10 @@ struct RunPicker: View {
 /// What the runs did, newest at the bottom.
 private struct LogList: View {
     let controller: FlowController
+    /// The log is scrolled to its end, so new lines keep it there. Scrolled up to read, it stays put.
+    @State private var followsEnd = true
+    /// The person is scrolling, as opposed to the log growing under a still view.
+    @State private var isScrolling = false
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
@@ -216,12 +220,24 @@ private struct LogList: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Space.m)
             }
+            .onScrollPhaseChange { _, phase in isScrolling = phase == .interacting || phase == .decelerating || phase == .tracking }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
+            } action: { _, atEnd in
+                // New lines make the log longer without anyone scrolling; only the person scrolling away stops it following.
+                if atEnd || isScrolling { followsEnd = atEnd }
+            }
             // By the last line, not the count: a full log stays the same length as it turns over.
-            .onChange(of: controller.log.last?.id) {
-                if let last = controller.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            .onChange(of: controller.shownLog.last?.id) {
+                if followsEnd, let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+            // Another run's log starts at its end.
+            .onChange(of: controller.viewedRunID) {
+                followsEnd = true
+                if let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
             .onAppear {
-                if let last = controller.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if let last = controller.shownLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
         .background(Theme.surface.ui)

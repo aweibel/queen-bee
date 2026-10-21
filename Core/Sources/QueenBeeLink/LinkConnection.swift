@@ -22,8 +22,9 @@ private final class Waiting: @unchecked Sendable {
 }
 
 private extension NWError {
-    /// The only thing the two ends settle while securing a connection is the key, so an error from there means the key.
-    var isTLS: Bool { if case .tls = self { true } else { false } }
+    /// Whether securing the connection failed the way two different keys make it fail. A handshake that was
+    /// only cut off fails in TLS too, and says nothing about the key.
+    var isKeyRefusal: Bool { if case .tls(let status) = self { LinkError.isKeyRefusal(tlsStatus: status) } else { false } }
 }
 
 /// One encrypted connection carrying frames: a four-byte big-endian length, then that many bytes.
@@ -42,8 +43,9 @@ public final class LinkConnection: @unchecked Sendable {
         self.largestInbound = min(largestInbound, Self.largestFrame)
     }
 
-    public convenience init(to endpoint: NWEndpoint, key: Data) {
-        self.init(NWConnection(to: endpoint, using: LinkSecurity.parameters(key: key)))
+    /// `identity` names the key to a listener that holds several: see `LinkSecurity.parameters(keys:)`.
+    public convenience init(to endpoint: NWEndpoint, key: Data, identity: String = LinkSecurity.soleIdentity) {
+        self.init(NWConnection(to: endpoint, using: LinkSecurity.parameters(key: key, identity: identity)))
     }
 
     /// Returns once both ends have proved they hold the key. Throws if they haven't within `timeout`.
@@ -56,10 +58,11 @@ public final class LinkConnection: @unchecked Sendable {
                 connection.stateUpdateHandler = { state in
                     switch state {
                     case .ready: once.run { continuation.resume() }
-                    case .failed(let error): once.run { continuation.resume(throwing: LinkError("\(error)", keyRefused: error.isTLS)) }
-                    // The other end holds a different key. Waiting would not change that, so say so at once.
+                    case .failed(let error): once.run { continuation.resume(throwing: LinkError("\(error)", keyRefused: error.isKeyRefusal)) }
+                    // Securing the connection went wrong. Waiting would not change that, so say so at once.
                     case .waiting(.tls(let status)):
-                        once.run { continuation.resume(throwing: LinkError("\(NWError.tls(status))", keyRefused: true)) }
+                        let error = NWError.tls(status)
+                        once.run { continuation.resume(throwing: LinkError("\(error)", keyRefused: error.isKeyRefusal)) }
                     // Any other wait isn't the end: on a device the first connection waits here while it asks to use
                     // the local network, and a network that is down may come back. The timeout is what gives up.
                     case .waiting(let error): waiting.reason = "\(error)"
@@ -115,6 +118,26 @@ public final class LinkConnection: @unchecked Sendable {
         }
     }
 
+    /// A secret both ends of this connection work out from it once it is secured, and nobody else can: new for
+    /// every connection. Nil before the connection is ready.
+    public func binding() -> Data? {
+        guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata else { return nil }
+        let label = "EXPORTER-queenbee-binding"
+        let secret = label.withCString { sec_protocol_metadata_create_secret(metadata.securityProtocolMetadata, label.utf8.count, $0, 32) }
+        return secret.map { Data($0 as DispatchData) }
+    }
+
+    /// The address the other end connected from, as text, or nil when it isn't known.
+    public var remoteHost: String? {
+        guard case .hostPort(let host, _) = connection.endpoint else { return nil }
+        return switch host {
+        case .ipv4(let address): "\(address)"
+        case .ipv6(let address): "\(address)"
+        case .name(let name, _): name
+        @unknown default: "\(host)"
+        }
+    }
+
     public func send<T: Encodable>(_ message: T) async throws { try await send(try Remote.encode(message)) }
 
     public func receive<T: Decodable>(_ type: T.Type) async throws -> T { try Remote.decode(type, from: try await receive()) }
@@ -133,17 +156,33 @@ public final class LinkListener: @unchecked Sendable {
     private var stopped = false
     /// Ends a `start` that hasn't returned yet.
     private var abandon: (@Sendable (LinkError) -> Void)?
+    /// True once the listener has been started, and once it has let go of its port for good.
+    private var began = false
+    private var cancelled = false
+    /// Who is waiting in `whenCancelled`.
+    private var cancelWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let largestInbound: Int
 
     /// `service` advertises the listener on the local network. `localOnly` keeps it to this machine, for tests.
     /// `largestInbound` is the largest frame taken from an end that connects.
     /// `port` is for a test that has to know the port before the listener exists. Left out, the system picks one.
-    public init(key: Data, service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame,
+    public convenience init(key: Data, service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame,
+                            port: UInt16? = nil) throws {
+        try self.init(keys: [LinkSecurity.soleIdentity: key], service: service, localOnly: localOnly, largestInbound: largestInbound, port: port)
+    }
+
+    /// A listener that takes any of several keys, each under its own name: see `LinkSecurity.parameters(keys:)`.
+    /// A listener on a fixed port is one that may be stopped and started again on it at once, so the port is
+    /// let go of straight away.
+    public init(keys: [String: Data], service: NWListener.Service?, localOnly: Bool, largestInbound: Int = LinkConnection.largestFrame,
                 port: UInt16? = nil) throws {
         self.largestInbound = largestInbound
-        let parameters = LinkSecurity.parameters(key: key)
+        // One with no key it can use would turn everyone away.
+        guard keys.values.contains(where: LinkSecurity.isUsable) else { throw LinkError("no usable key") }
+        let parameters = LinkSecurity.parameters(keys: keys)
         if localOnly { parameters.requiredInterfaceType = .loopback }
+        if port != nil { parameters.allowLocalEndpointReuse = true }
         listener = try NWListener(using: parameters, on: port.flatMap(NWEndpoint.Port.init(rawValue:)) ?? .any)
         listener.service = service
     }
@@ -188,15 +227,23 @@ public final class LinkListener: @unchecked Sendable {
                             continuation.resume(returning: port)
                         }
                     case .failed(let error):
-                        ended(LinkError("\(error)"))
+                        ended(LinkError("\(error)", addressInUse: error == NWError.posix(.EADDRINUSE)))
                         // A failed listener still holds its port and its advertisement until it is cancelled.
                         listener.cancel()
-                    case .cancelled: ended(LinkError("closed"))
+                    // Waiting for a port something else holds could take for ever. Said at once, so it can be tried
+                    // again soon.
+                    case .waiting(let error) where error == NWError.posix(.EADDRINUSE):
+                        ended(LinkError("\(error)", addressInUse: true))
+                        listener.cancel()
+                    case .cancelled:
+                        self?.letGo()
+                        ended(LinkError("closed"))
                     // Waiting isn't the end: the network may simply not be up yet. The timeout is what gives up.
                     default: break
                     }
                 }
                 queue.asyncAfter(deadline: .now() + timeout) { giveUp(LinkError("timed out")) }
+                lock.withLock { began = true }
                 listener.start(queue: queue)
             }
         } catch {
@@ -213,5 +260,47 @@ public final class LinkListener: @unchecked Sendable {
         }
         abandon?(LinkError("closed"))
         listener.cancel()
+    }
+
+    /// Returns once the listener has let go of its port, after `stop()`, so a new one can have it. At once for one
+    /// that was never started, and after `timeout` at most.
+    public func whenCancelled(timeout: TimeInterval = 2) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now = lock.withLock {
+                if !began || cancelled { return true }
+                cancelWaiters.append(continuation)
+                return false
+            }
+            if now { return continuation.resume() }
+            queue.asyncAfter(deadline: .now() + timeout) { self.resumeCancelWaiters() }
+        }
+    }
+
+    private func letGo() {
+        lock.withLock { cancelled = true }
+        resumeCancelWaiters()
+    }
+
+    private func resumeCancelWaiters() {
+        let waiters = lock.withLock {
+            defer { cancelWaiters = [] }
+            return cancelWaiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+}
+
+/// How long to leave it before listening again on a fixed port that couldn't be listened on.
+public enum ListenRetry {
+    /// A port still held is usually a listener before that is letting go of it, which takes a moment. It is tried
+    /// again after `quick` this many times running, before waiting `slow` as for any other failure.
+    public static let quickTries = 3
+    public static let quick: TimeInterval = 1
+    public static let slow: TimeInterval = 30
+
+    /// The wait before the next try, after `error`, with `quickSoFar` quick tries made since the listener last worked.
+    public static func wait(after error: Error, quickSoFar: Int) -> TimeInterval {
+        guard let error = error as? LinkError, error.addressInUse, quickSoFar < quickTries else { return slow }
+        return quick
     }
 }

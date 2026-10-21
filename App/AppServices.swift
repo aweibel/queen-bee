@@ -241,6 +241,92 @@ final class AppServices {
 
     /// The find panel is open.
     var showsFind = false
+    /// The command palette is open.
+    var showsPalette = false
+
+    // MARK: The window, and what needs the person
+
+    /// Opens the app's one window when it has been closed. Set by views that are always there, since only a
+    /// view can ask SwiftUI to open a window.
+    @ObservationIgnored var openWorkspace: (() -> Void)?
+
+    /// The app's one window, if it is open: on screen, behind others or in the Dock.
+    var workspaceWindow: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(Self.workspaceID) == true && ($0.isVisible || $0.isMiniaturized) }
+    }
+
+    static let workspaceID = "workspace"
+
+    /// Brings the app forward with its window, opening the window again if it was closed.
+    func showWorkspace() {
+        NSApp.activate()
+        if let window = workspaceWindow {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            openWorkspace?()
+        }
+    }
+
+    /// Brings the window forward on a flow and, when it is still there, one of its cards, zoomed to.
+    func reveal(flowID: String, cardID: String?) {
+        let wasShowing = workspaceWindow != nil
+        showWorkspace()
+        guard let controller = allFlows.first(where: { $0.flow.id == flowID }) else { return }
+        let switching = selectedFlowID != flowID
+        selectedFlowID = flowID
+        // The orchestrator isn't a card, and a card may have been deleted since.
+        guard let cardID, controller.flow.card(cardID) != nil else { return }
+        controller.select(.card(cardID))
+        Task {
+            // A window or a flow's canvas that wasn't on screen takes a moment to appear.
+            if switching || !wasShowing { try? await Task.sleep(for: .milliseconds(300)) }
+            if let group = controller.flow.group(containing: cardID), group.isFolded { controller.setFolded(false, group: group.id) }
+            controller.canvas?.zoom(toCard: cardID)
+        }
+    }
+
+    /// Every card waiting on the person, in every open project: agents asking a question or for permission, and
+    /// Approval and Script cards waiting for a go-ahead. The flow on screen comes first.
+    var needingYou: [(controller: FlowController, card: Card)] {
+        let flows = allFlows.filter { $0.flow.id == selectedFlowID } + allFlows.filter { $0.flow.id != selectedFlowID }
+        return flows.flatMap { controller in controller.cardsNeedingYou.map { (controller, $0) } }
+    }
+
+    /// Goes to the next card waiting on the person after the one selected, round and round.
+    func revealNextNeedingYou() {
+        let waiting = needingYou
+        guard !waiting.isEmpty else { return NSSound.beep() }
+        let here = current.flatMap { controller in
+            waiting.firstIndex { $0.controller === controller && controller.selection == .card($0.card.id) }
+        }
+        let next = waiting[here.map { ($0 + 1) % waiting.count } ?? 0]
+        reveal(flowID: next.controller.flow.id, cardID: next.card.id)
+    }
+
+    /// Keeps the Dock icon's badge at the number of cards waiting on the person.
+    private func watchNeedsYou() {
+        withObservationTracking {
+            // Sessions are added without telling anyone, so their count is read to hear of new ones.
+            _ = allFlows.map(\.sessionsRevision)
+            let count = needingYou.count
+            NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        } onChange: {
+            Task { @MainActor in AppServices.shared.watchNeedsYou() }
+        }
+    }
+
+    /// What quitting now would cut short: flows with a run going, and agents at work or waiting on the person.
+    var workInProgress: (runs: [String], agents: [String]) {
+        let runs = allFlows.filter(\.isRunning).map(\.flow.name)
+        let agents = allFlows.flatMap { controller in
+            controller.sessions.compactMap { id, session -> String? in
+                guard session.state == .working || session.state == .needsYou else { return nil }
+                return id == FlowController.orchestratorKey ? ClaudeLauncher.orchestratorName(for: controller.flow) : controller.flow.card(id)?.name
+            }
+        }
+        return (runs, agents.sorted())
+    }
     /// The first-run walk-through is on screen.
     var showsWelcome = false
     /// Blank flows whose pointer to the orchestrator has been closed.
@@ -298,6 +384,7 @@ final class AppServices {
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: supportDirectory.path)
         installPlugin()
         startServer()
+        listenForLinks()
         loadRoles()
         loadTold()
         // Also a backstop for flow files the watcher missed while the app was in the background.
@@ -305,6 +392,7 @@ final class AppServices {
             Task { @MainActor in AppServices.shared.projects.forEach { $0.rescan() } }
         }
         restoreProjects()
+        watchNeedsYou()
         RemoteHost.shared.start()
         // A test run isn't a first run, unless it asks to see the walk-through.
         showsWelcome = remembersProjects ? !UserDefaults.standard.bool(forKey: OnboardingView.seenKey) : LaunchArguments.welcome
@@ -314,6 +402,10 @@ final class AppServices {
             self.environment = resolved
             if resolved.claude == nil {
                 self.problem = "Queen Bee can't find Claude Code. Install it from claude.com/claude-code, then reopen Queen Bee."
+                    + (resolved.shellTimedOut ? " Your shell's startup files took too long to load, which can hide where it is installed." : "")
+            } else if resolved.shellTimedOut {
+                let seconds = Int(ResolvedEnvironment.shellTimeout)
+                self.problem = "Your shell's startup files (such as ~/.zshrc) took more than \(seconds) seconds to load, so Queen Bee went on without them. If an agent can't find a command you use, look there for something slow or waiting for input, then reopen Queen Bee."
             }
         }
     }
@@ -343,8 +435,13 @@ final class AppServices {
     /// such as a cloned repository, is only opened once the person has said they trust it.
     func confirmTrust(_ root: URL) -> Bool {
         let path = root.standardizedFileURL.path
+        // A test copy opens the scratch folders it is told to without asking, and remembers them only while it runs.
+        if TestHarness.isEnabled {
+            trustedWhileTesting.insert(path)
+            return true
+        }
         var trusted = Set(UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? [])
-        if trusted.contains(path) || TestHarness.isEnabled { return true }
+        if trusted.contains(path) { return true }
         let flows = (try? FileManager.default.contentsOfDirectory(at: FlowStore(root: root).directory, includingPropertiesForKeys: nil)) ?? []
         if flows.contains(where: { $0.pathExtension == "json" }) {
             let alert = NSAlert()
@@ -359,6 +456,8 @@ final class AppServices {
         UserDefaults.standard.set(trusted.sorted(), forKey: Self.trustedKey)
         return true
     }
+    /// The folders a test copy was told to open, which it trusts as a person's copy trusts the ones they said yes to.
+    @ObservationIgnored private var trustedWhileTesting: Set<String> = []
     /// A test run opens scratch folders, which shouldn't come back the next time the app starts.
     private var remembersProjects: Bool { !TestHarness.isEnabled }
 
@@ -487,7 +586,16 @@ final class AppServices {
     func needsInstructions(session id: String, instructions: String, afresh: Bool) -> Bool {
         let now = Self.stamp(instructions)
         var record = told[id] ?? Told()
-        guard record.born != now else { return false }
+        if record.born == now {
+            // Back to the instructions it began with. Those are in its prompt, but a conversation handed other ones
+            // since has been told they replace them, so it has to hear that they are back. A summary may still
+            // carry the other ones, so it is told again after one.
+            guard let delivered = record.delivered, afresh || delivered != now else { return false }
+            record.delivered = now
+            told[id] = record
+            saveTold()
+            return true
+        }
         guard afresh || record.delivered != now else { return false }
         record.delivered = now
         told[id] = record
@@ -561,6 +669,9 @@ final class AppServices {
 
     /// Answers one helper request. `session` is "<flowID>/<cardID>" or "<flowID>/orchestrator".
     func handle(_ request: WireRequest) async -> JSONValue {
+        // `qb run` is typed by the person, or a script of theirs, with no session behind it and so no secret. Only this
+        // Mac's own account can reach the socket, whose folder no one else may open.
+        if request.kind == "run" { return await runFromCommandLine(request.payload) }
         var parts = request.session.split(separator: "/", maxSplits: 1).map(String.init)
         if request.kind != "test" {
             // Who is asking comes from the secret, never from the name the request gives itself.
@@ -607,6 +718,91 @@ final class AppServices {
         }
     }
 
+    // MARK: Runs started from outside the app
+
+    /// `qb run`: starts a flow of a project with a message, as if it were typed into the flow's Start card, and unless
+    /// told not to, answers once the run has ended. The folder must be one the person has opened in the app, so a
+    /// folder they never said they trust can't be run this way: an open one is used, and one they trusted before
+    /// is opened again.
+    func runFromCommandLine(_ payload: JSONValue) async -> JSONValue {
+        guard let request = OutsideRun.Request(payload: payload) else { return OutsideRun.refusal("Say which project folder and which flow to run.") }
+        let root = URL(fileURLWithPath: request.project).standardizedFileURL
+        var project = projects.first { $0.root == root }
+        if project == nil {
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder), isFolder.boolValue else {
+                return OutsideRun.refusal("There is no folder at \(root.path).")
+            }
+            guard isTrusted(root) else {
+                return OutsideRun.refusal("Queen Bee hasn't opened \(root.lastPathComponent) before. Add it in Queen Bee first, so you can say whether you trust the flows in it.")
+            }
+            project = addProject(root, select: false)
+        }
+        guard let project else { return OutsideRun.refusal("Queen Bee couldn't open \(root.path).") }
+        let wanted = request.flow.trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = project.controllers.filter { $0.flow.name.caseInsensitiveCompare(wanted) == .orderedSame }
+        guard let controller = project.controller(wanted) ?? (named.count == 1 ? named.first : nil) else {
+            return OutsideRun.refusal(named.count > 1 ? "More than one flow in \(project.name) is called \(wanted). Use its id."
+                                      : "\(project.name) has no flow called \(wanted).")
+        }
+        let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : request.message
+        let started = await controller.start(command: message, note: "Started from the command line")
+        guard started.began, let id = started.runID else { return OutsideRun.refusal(started.status) }
+        guard request.wait else { return OutsideRun.started(runID: id, flow: controller.flow.name) }
+        let record = await controller.runEnded(id)
+        return OutsideRun.ended(runID: id, flow: controller.flow.name, record: record, answers: record.map(controller.answers) ?? [])
+    }
+
+    /// Whether the person has said they trust the flows in this folder, or it had none when they added it.
+    private func isTrusted(_ root: URL) -> Bool {
+        let path = root.standardizedFileURL.path
+        if TestHarness.isEnabled { return trustedWhileTesting.contains(path) }
+        return (UserDefaults.standard.stringArray(forKey: Self.trustedKey) ?? []).contains(path)
+    }
+
+    @ObservationIgnored private let linkOpener = LinkOpener()
+
+    /// Takes `queenbee://` links from here on, in place of the window that would otherwise open for them.
+    private func listenForLinks() {
+        NSAppleEventManager.shared().setEventHandler(linkOpener, andSelector: #selector(LinkOpener.open(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    /// A `queenbee://run` link. Any web page or app can open one, so the run starts only after the person says yes
+    /// here, with the flow and its message in front of them. The flow must be in a folder open in the app.
+    func open(link url: URL) {
+        NSApp.activate()
+        guard let link = OutsideRun.link(url) else {
+            return Self.tell("Queen Bee can't open this link", "It isn't a link to run a flow, or its message is longer than \(Remote.promptLimit) characters.")
+        }
+        let named = allFlows.filter { $0.flow.name.caseInsensitiveCompare(link.flow) == .orderedSame }
+        guard let controller = deviceFlow(link.flow) ?? (named.count == 1 ? named.first : nil) else {
+            return Self.tell("Queen Bee can't find that flow", "No flow called \(link.flow), or with that id, is in a folder open in Queen Bee. If two open folders have it, open only one of them.")
+        }
+        selectedFlowID = controller.flow.id
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Run “\(controller.flow.name)”?"
+        let what = link.message.isEmpty ? "with its Start card's own command." : "with this message:\n\n\(link.message.prefix(1_000))\(link.message.count > 1_000 ? "…" : "")"
+        alert.informativeText = "A link opened from a web page or another app is asking to start a run of \(controller.flow.name) in \(controller.project.name) \(what)\n\nThe flow's agents will work with the permissions they have. Only run it if you opened this link yourself."
+        // Don't Run is first, so Return turns the run down.
+        alert.addButton(withTitle: "Don't Run")
+        alert.addButton(withTitle: "Run")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : link.message
+        Task {
+            let started = await controller.start(command: message, note: "Started from a link, once you said yes")
+            if !started.began { controller.banner = started.status }
+        }
+    }
+
+    private static func tell(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
     /// What to say when the flow a session belongs to isn't open.
     private func fallback(for request: WireRequest) -> JSONValue {
         switch request.kind {
@@ -627,6 +823,15 @@ final class AppServices {
 nonisolated struct CanvasObstruction: Equatable, Sendable {
     var left: CGFloat
     var right: CGFloat
+}
+
+/// Hands `queenbee://` links the system opens the app with to the app. An Apple event handler has to be an object.
+private final class LinkOpener: NSObject {
+    @objc func open(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue, let url = URL(string: text) else { return }
+        // After the event is answered, so the alert never sits inside the system's call.
+        Task { @MainActor in AppServices.shared.open(link: url) }
+    }
 }
 
 private struct WeakController {

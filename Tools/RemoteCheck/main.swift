@@ -404,6 +404,9 @@ while true {
         say(["type": "messages", "link": link, "count": all.count])
     case .history(_, let runs):
         say(["type": "history", "runs": runs.count])
+    // Only for a device that says it takes it, which this one doesn't.
+    case .historyChanged(_, _, let order):
+        say(["type": "history", "runs": order.count])
     case .terminal(_, let key, let chunk):
         say(["type": "terminal", "key": key, "reset": chunk.reset, "bytes": chunk.data.count, "cols": chunk.cols, "rows": chunk.rows])
     case .answer(let id, let refusal):

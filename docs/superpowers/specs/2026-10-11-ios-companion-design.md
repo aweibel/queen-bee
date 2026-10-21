@@ -1,7 +1,7 @@
 # Queen Bee for iPad and iPhone: design
 
 Date: 2026-10-11
-Status: stage 1 of 3 is built. Stages 2 and 3 are not started.
+Status: all four stages are built and shipped in 0.5.0. "Where it stands" says what each delivered.
 
 ## Where it stands
 
@@ -286,6 +286,11 @@ listener and leaves the others as they were.
 
 Connecting from outside the local network. A later "type the Mac's address" field would make it work over a private
 network such as Tailscale without changing this design.
+
+Since built: "Connect by address" in the device's settings, and "Let devices connect by address too" on the Mac, which
+adds one listener on a fixed port (51720) holding every paired device's key under that device's id. The device proves
+which device it is on each such connection with an HMAC of a TLS exporter value under its own key, so the per-device
+security above is unchanged.
 
 `SECURITY.md` gets a section covering all of the above.
 

@@ -57,7 +57,7 @@ enum DebugSettings {
 
     private static func value(_ written: String, for name: FieldKey.Name) -> FieldValue {
         switch name {
-        case .maxTries, .limit, .subflowLimit:
+        case .maxTries, .limit, .subflowLimit, .maxItems:
             return .number(Int(written) ?? 0)
         case .notify, .browser:
             return .flag(written == "on")
@@ -237,12 +237,15 @@ enum DebugSettings {
                 (patch.trigger != nil, "trigger"), (patch.removesTrigger == true, "removesTrigger"), (patch.check != nil, "check"), (patch.value != nil, "value"),
                 (patch.maxTries != nil, "maxTries"), (patch.branches != nil, "branches"), (patch.template != nil, "template"),
                 (patch.saveTo != nil, "saveTo"), (patch.text != nil, "text"), (patch.flowRef != nil, "flowRef"),
+                (patch.waitMinutes != nil, "waitMinutes"), (patch.whenNoAnswer != nil, "whenNoAnswer"), (patch.split != nil, "split"),
+                (patch.maxItems != nil, "maxItems"),
             ]
             return "patchCard:" + named.filter(\.0).map(\.1).joined(separator: ",")
         case .setLinkLimit(_, _, let passes): return "setLinkLimit:\(passes)"
         case .renameGroup(_, _, let name): return "renameGroup:\(name)"
         case .setFlowOption(_, .subflowLimit(let levels)): return "subflowLimit:\(levels)"
         case .setFlowOption(_, .notifyOrchestrator(let on)): return "notify:\(on ? "on" : "off")"
+        case .setFlowOption(_, .spendingLimit(let dollars)): return "spendingLimit:\(dollars.map { "\($0)" } ?? "none")"
         case .newFlow(_, let name): return "newFlow:\(name)"
         case .renameFlow(_, let name): return "renameFlow:\(name)"
         case .deleteFlow: return "deleteFlow"

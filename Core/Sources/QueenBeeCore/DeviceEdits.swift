@@ -87,6 +87,8 @@ extension FlowFragment {
             return RemoteCommand.tooMany
         }
         for card in cards {
+            // What the device has of such a card is a note standing in for it, not the card.
+            guard card.unknownKind == nil else { return Remote.unknownCardText }
             guard RemotePoint(x: card.x, y: card.y).isOnCanvas else { return RemoteCommand.offCanvas }
             guard RemoteFrame(x: card.x, y: card.y, width: card.width, height: card.height).isCardSized else { return "A card can't be that size." }
             for short in [card.id, card.name, card.model, card.effort, card.permissionMode, card.role, card.flowRef] + (card.branches ?? []).map(Optional.some) {

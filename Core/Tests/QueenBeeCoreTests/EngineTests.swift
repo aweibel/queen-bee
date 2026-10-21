@@ -498,6 +498,44 @@ actor ScriptedJudge: Judge {
         #expect(done.log.contains("Loop \"Polish\" → Done after 2 tries"))
     }
 
+    @Test func loopTakesGaveUpWhenItsTriesRunOutAndSomethingIsLinkedThere() async throws {
+        var flow = try loopFlow(patch { $0.check = .contains; $0.value = "FINAL"; $0.maxTries = 2 })
+        try flow.addCard(kind: .end, name: "Unfinished")
+        try flow.addLink(from: "Polish", port: "gave-up", to: "Unfinished")
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        let writer = try id("Writer", in: flow)
+        _ = await engine.agentReplied(flow: flow, cardID: writer, text: "one")
+        let out = await engine.agentReplied(flow: flow, cardID: writer, text: "two")
+        #expect(out.log.contains("Loop \"Polish\" → Gave up after 2 tries"))
+        #expect(out.results.map(\.cardName) == ["Unfinished"])
+        // The flow said what to do when the tries ran out, so the run ends as any other does.
+        #expect(out.finished && out.ending == .finishedWithAnswer)
+    }
+
+    @Test func loopWithNothingOnGaveUpTakesDoneAsBefore() async throws {
+        let flow = try loopFlow(patch { $0.check = .contains; $0.value = "FINAL"; $0.maxTries = 1 })
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        let out = await engine.agentReplied(flow: flow, cardID: try id("Writer", in: flow), text: "one")
+        #expect(out.log.contains("Loop \"Polish\" → Done after 1 tries"))
+        #expect(out.results.map(\.cardName) == ["Done"])
+        #expect(out.ending == .gaveUp)
+    }
+
+    @Test func loopCountsAfreshAfterGivingUp() async throws {
+        // Start → Writer → Polish; gave-up goes back to Writer, so the loop is met again in the same run.
+        var flow = try loopFlow(patch { $0.check = .contains; $0.value = "FINAL"; $0.maxTries = 1 })
+        try flow.addLink(from: "Polish", port: "gave-up", to: "Writer", maxPasses: 5)
+        let engine = Engine(judge: ScriptedJudge())
+        _ = await engine.start(flow: flow, startCardID: nil, command: nil)
+        let writer = try id("Writer", in: flow)
+        let first = await engine.agentReplied(flow: flow, cardID: writer, text: "one")
+        #expect(first.log.contains("Loop \"Polish\" → Gave up after 1 tries"))
+        let second = await engine.agentReplied(flow: flow, cardID: writer, text: "two")
+        #expect(second.log.contains("Loop \"Polish\" → Gave up after 1 tries"))
+    }
+
     @Test func loopTriesDefaultToThree() async throws {
         var flow = try loopFlow(patch { $0.check = .contains; $0.value = "FINAL" })
         let index = try #require(flow.cards.firstIndex { $0.name == "Polish" })
@@ -566,14 +604,41 @@ actor ScriptedJudge: Judge {
             deliveries += last.deliveries
             turn += 1
         }
+        // Fifty were handed over and answered. The fifty-first, which would be past the limit, never goes.
         #expect(deliveries.count == 50)
         #expect(deliveries.last?.text.contains("hand-off 50 ") == true)
-        #expect(last.finished)
+        #expect(last.deliveries.isEmpty)
+        #expect(last.finished && last.ending == .hitLimit)
         #expect(last.log.last?.contains("50") == true)
         #expect(await !engine.isRunning)
-        // The run is over, so the fiftieth agent's reply goes nowhere.
         let after = await engine.agentReplied(flow: flow, cardID: reviewer, text: "too late")
         #expect(after == RunOutput())
+    }
+
+    @Test func handOffsMadeAlongsideTheOneThatPassesTheLimitAreNotSentEither() async throws {
+        // Start → Writer → Reviewer and Editor; Reviewer → Writer. Each of the Writer's replies makes two hand-offs.
+        let flow = try flow {
+            try $0.addCard(kind: .start, name: "Start", patch: patch { $0.command = "Go" })
+            for name in ["Writer", "Reviewer", "Editor"] { try $0.addCard(kind: .agent, name: name) }
+            try $0.addLink(from: "Start", to: "Writer")
+            try $0.addLink(from: "Writer", to: "Reviewer", maxPasses: 50)
+            try $0.addLink(from: "Writer", to: "Editor", maxPasses: 50)
+            try $0.addLink(from: "Reviewer", to: "Writer", maxPasses: 50)
+        }
+        let engine = Engine(judge: ScriptedJudge())
+        var owed = await engine.start(flow: flow, startCardID: nil, command: nil).deliveries.map(\.toCardID)
+        var handed = owed.count
+        var last = RunOutput()
+        while !owed.isEmpty, !last.finished {
+            last = await engine.agentReplied(flow: flow, cardID: owed.removeFirst(), text: "reply")
+            handed += last.deliveries.count
+            owed += last.deliveries.map(\.toCardID)
+        }
+        // The Writer's last reply would have made the 50th and the 51st. Neither went.
+        #expect(handed == 49)
+        #expect(last.finished && last.ending == .hitLimit && last.deliveries.isEmpty)
+        // Nothing went to the Reviewer or the Editor, so neither is left waited on and interrupted.
+        #expect(last.leftWaiting.isEmpty)
     }
 
     @Test func logicCardsInACircleAreCutOff() async throws {

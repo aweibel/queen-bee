@@ -39,19 +39,9 @@ enum Notifier {
             let info = response.notification.request.content.userInfo
             let flow = info["flow"] as? String, card = info["card"] as? String
             await MainActor.run {
-                NSApp.activate()
-                NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
-                guard let flow, let controller = AppServices.shared.allFlows.first(where: { $0.flow.id == flow }) else { return }
-                AppServices.shared.selectedFlowID = flow
-                // The orchestrator isn't a card, and a card may have been deleted since.
-                if let card, controller.flow.card(card) != nil {
-                    controller.select(.card(card))
-                    // The canvas for a flow that wasn't on screen takes a moment to appear.
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(300))
-                        controller.canvas?.zoom(toCard: card)
-                    }
-                }
+                // Opens the window again if it was closed, as clicking the Dock icon does.
+                guard let flow else { return AppServices.shared.showWorkspace() }
+                AppServices.shared.reveal(flowID: flow, cardID: card?.isEmpty == false ? card : nil)
             }
         }
     }

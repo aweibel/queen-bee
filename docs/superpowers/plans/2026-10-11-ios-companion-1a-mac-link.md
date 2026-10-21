@@ -1,5 +1,7 @@
 # iOS Companion, Stage 1A: The Mac Side of the Link — Implementation Plan
 
+**Status: done, shipped in 0.5.0.** The boxes below were the working list and were left unticked. "Result of Task 2" at the end says what was built.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** The Mac app can be paired with a device over local Wi-Fi and streams it every flow, its run state and its terminals, proven by a command-line test client.

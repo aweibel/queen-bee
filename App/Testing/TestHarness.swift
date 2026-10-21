@@ -15,6 +15,20 @@ enum TestHarness {
         #endif
     }
 
+    /// How long a card's time limit really waits. A test copy can be told to count a minute as a few seconds, so a
+    /// check of what happens when nobody answers needn't wait a real minute. Any other copy waits as long as it says.
+    @MainActor static func holdWait(_ wait: Duration) -> Duration {
+        #if DEBUG
+        if isEnabled, let seconds = secondsPerHoldMinute { return .milliseconds(Int(Double(wait.components.seconds) / 60 * seconds * 1000)) }
+        #endif
+        return wait
+    }
+
+    #if DEBUG
+    /// Set by the `holdMinute` op: how many seconds a minute of a card's time limit lasts in this test copy.
+    @MainActor private static var secondsPerHoldMinute: Double?
+    #endif
+
     /// Questions about the app as a whole, for when no flow is involved.
     static func handleApp(_ payload: JSONValue) -> JSONValue {
         let services = AppServices.shared
@@ -313,6 +327,10 @@ enum TestHarness {
             default: return ["error": "hold needs answer"]
             }
             return [:]
+        case "holdMinute":
+            // Every card's time limit from here on counts a minute as this many seconds; none puts real minutes back.
+            secondsPerHoldMinute = payload["seconds"]?.doubleValue
+            return [:]
         case "script":
             guard let cardID, let command = payload["command"]?.stringValue else { return ["error": "script needs card and command"] }
             controller.setScriptCommand(cardID, command)
@@ -460,7 +478,8 @@ enum TestHarness {
             "warnings": .object(Dictionary(uniqueKeysWithValues: controller.warnings.map { (controller.flow.card($0.key)?.name ?? $0.key, JSONValue.string($0.value)) })),
             "viewport": .number(Double(controller.viewport.width)),
             "cost": .number(controller.totalUsage.cost),
-            "runs": .array(controller.runs.map { ["id": .string($0.id), "outcome": .string($0.outcome.rawValue), "command": .string($0.command)] }),
+            "runs": .array(controller.runs.map { ["id": .string($0.id), "outcome": .string($0.outcome.rawValue), "command": .string($0.command),
+                                                  "ending": $0.ending.map { .string($0.rawValue) } ?? .null, "summary": .string($0.summary)] }),
             "viewedRun": controller.viewedRunID.map(JSONValue.string) ?? .null,
             "messages": .number(Double(controller.messages.values.reduce(0) { $0 + $1.count })),
             "holds": .array(controller.holds.map { ["card": .string(controller.flow.card($0.cardID)?.name ?? ""), "text": .string($0.text), "needsAllow": .bool($0.needsAllow), "allowOnMac": .bool($0.allowOnMac == true)] }),

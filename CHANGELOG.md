@@ -6,6 +6,49 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A spending limit for a flow's runs, in the flow's settings, on a paired device and for the orchestrator. A run whose agents have used more than it, at API prices, is stopped as Stop would stop it, and the log, the run's history and a notice say so. Their use is read every few seconds while the run goes on, so a long turn is stopped part-way through, before its reply is passed on.
+- Loop until has a third output, Gave up, taken when its tries run out. A Loop with nothing linked to Gave up goes out Done as before.
+- An Approval card can wait at most a set time, then approve or reject the message itself, and the log says so: "No answer after 8 hours, so it was rejected". A Script card can wait a set time for its command to be allowed, then skip it.
+- A For each card: it splits a message into lines, or the items of a JSON list, sends each one in turn to the cards on Each, collects what comes back for each, and passes all of it on from Done. Every hand-off counts toward a run's limit of 50, and it sends 50 items at most. The canvas warns about one with nothing on Each or no way back.
+- `qb run <folder> <flow> "message"` starts a flow from Terminal or a script, waits for it to end and prints its answer; `--no-wait` only starts it. A `queenbee://run?flow=…&message=…` link starts one too, once you say yes in the app.
+- Run history says how each run ended: finished, ended without an answer, gave up after the most tries, stopped at the hand-off limit, failed or stopped. So does the notice when a run ends.
+- Two more warnings on the canvas: an And whose inputs are on different sides of one If or Switch, which can never hear from all of them, and a Loop with nothing on Done.
+- The orchestrator's reference now states the limits a run keeps: 50 hand-offs, a Script card's 10 minutes and last 20,000 characters, a condition's 60 seconds, and how Or and Flow cards behave.
+- Flow › Next Agent Needing You (⌘J) goes from card to card waiting on you, across open flows. The Dock icon shows how many there are.
+- A menu bar item: what is waiting on you, each open flow and whether it is running, and Stop for a run. Click a card to go to it.
+- Edit › Command Palette (⌘K): add any kind of card, run or stop the flow, go to a card by name, and link the selected card to another by name.
+- Each flow's canvas opens where you left it, at the same zoom, also after you reopen the app.
+- An agent still starting after 20 seconds says so on its card, with Retry. It may be asking you something in its terminal, such as whether to trust the folder.
+
+### Changed
+- Stop ends a run at once, even while a condition is being judged, and interrupts the run's agents that are in the middle of a turn, so they stop spending on it.
+- A Flow card that reaches a sub-flow that is already running waits for that run to end and then runs it, instead of failing.
+- Queen Bee has one window. File › New Window is gone; the Dock icon, a notification or the menu bar item brings the window back after you close it.
+- Quitting while a run is going or an agent is working or waiting on you asks first.
+- Deleting a flow moves it to the Trash, with its run history kept, as a delete from a paired device does.
+- ⌘Z in an agent's terminal or a card's browser no longer undoes changes to the canvas. An Undo, Redo or delete that would remove an agent in the middle of its work asks first.
+- A card's new name in its settings is kept when you click or tab away, not only on Return. The Log tab stays put while you scroll up to read it.
+
+### Fixed
+- An agent the run isn't waiting on no longer stops the run when its session ends, is restarted or its card is deleted. When the run is waiting on it, the log names it and says why.
+- An Or card inside a loop passes on the first reply of every round, not only the first round's.
+- A condition that takes longer than 60 seconds to judge counts as No and says so, instead of holding up the run, and a long message is no longer too big to be judged.
+- The hand-off that would pass a run's limit of 50 is no longer typed into an agent after the run has stopped.
+- Retry and "run from here" give a card all of its message, not the first 8,000 characters.
+- A reply an agent finishes for a run that has ended is not passed on in the next run.
+- A flow's file is flushed to the disk before it replaces the old one, and the version before is kept, so a power cut can't leave an empty flow.
+- A run's history is never overwritten by an older copy, and the last run's cost is recorded even when the flow is closed straight after it.
+- An agent whose conversation Claude Code summarised mid-task no longer looks idle, so a hand-off isn't typed into it while it works.
+- An agent whose folder was changed starts a new conversation in the new folder instead of failing to resume every time it starts.
+- If your shell's startup files take more than 10 seconds to load, Queen Bee goes on without them and says so, instead of never starting its agents.
+- Downloading the browser for agent cards no longer holds up the app, and a failed download no longer leaves its file open.
+- The canvas no longer slows down with every switch of flow, and with many cards it redraws less. A card's browser stops streaming while the window is hidden or covered. While agents run, macOS no longer slows the app down in the background.
+
+### Security
+- A program running in an agent's terminal can no longer read your clipboard by asking the terminal for it (OSC 52). Pasting with ⌘V works as before.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added

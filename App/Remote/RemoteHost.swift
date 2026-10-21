@@ -3,11 +3,18 @@ import Network
 import Observation
 import QueenBeeCore
 import QueenBeeLink
+import SystemConfiguration
 
 /// A pairing in progress: the code on screen and when it stops working.
 struct PairingOffer: Equatable {
     let code: PairingCode
     let expires: Date
+}
+
+/// A connection waiting to hear what became of a command a device sent again, while the first is being done.
+struct CommandWaiter {
+    weak var session: RemoteSession?
+    let command: RemoteCommand
 }
 
 /// Lets paired devices connect: one listener per device, each locked to that device's key.
@@ -28,14 +35,41 @@ final class RemoteHost {
     /// How long to leave it before reading a device's key again when the Keychain wouldn't give it.
     static let keyRetry: TimeInterval = 60
 
+    /// Whether a device may also connect by this Mac's address, on `addressPort`, as from another network over a
+    /// private network such as Tailscale. Off until it is turned on.
+    static let byAddressKey = "remoteByAddress"
+    /// The port devices connect to by address. Fixed, so it can be typed into a device once and for all.
+    static let addressPort = Remote.addressPort
+    /// Made up afresh each time the app starts, and told to every device, so a device knows whether the commands
+    /// it sent before are still remembered here: see `RemoteWelcome.memoryID`.
+    static let memoryID = UUID().uuidString.lowercased()
+
     let devices = RemoteDevices()
     private(set) var isOn = false
     private(set) var sessions: [RemoteSession] = []
     private(set) var pairing: PairingOffer?
     /// What to tell the person about Remote not working. Pairing going wrong is the newer news, so it comes first.
-    var problem: String? { pairingProblem ?? listeningProblem }
+    var problem: String? { pairingProblem ?? listeningProblem ?? addressProblem ?? devices.problem }
     private var listeningProblem: String?
     private var pairingProblem: String?
+    private var addressProblem: String?
+    /// True while devices can connect by address.
+    private(set) var isListeningByAddress = false
+
+    /// Connections that haven't yet said who they are, counted in all and by address, so nobody on the network
+    /// can make the Mac hold more than a few.
+    @ObservationIgnored private var gate = LinkGate()
+    /// The answer to each command devices sent lately: see `CommandMemory`.
+    @ObservationIgnored private var memory = CommandMemory<CommandWaiter>()
+    @ObservationIgnored private var addressListener: LinkListener?
+    /// The last address listener stopped, which a new one waits for to let go of the port.
+    @ObservationIgnored private var retiringAddressListener: LinkListener?
+    /// The keys the address listener holds, or is about to: it isn't made afresh for the same ones.
+    @ObservationIgnored private var addressKeys: [String: Data]?
+    /// Quick tries since the address listener last worked, while its port was still held: see `ListenRetry`.
+    @ObservationIgnored private var addressQuickTries = 0
+    /// Goes up whenever the address listener is to be made afresh, so one from before knows it has been replaced.
+    @ObservationIgnored private var addressTurn = 0
 
     @ObservationIgnored private var listeners: [String: LinkListener] = [:]
     @ObservationIgnored private(set) var ports: [String: UInt16] = [:]
@@ -98,6 +132,7 @@ final class RemoteHost {
         watch += 1
         if on {
             devices.devices.forEach(listen(for:))
+            listenByAddress()
             watchLibrary(watch)
             watchUsage(watch)
         } else {
@@ -108,6 +143,7 @@ final class RemoteHost {
     func shutDown() {
         isOn = false
         cancelPairing()
+        stopListeningByAddress()
         listeners.values.forEach { $0.stop() }
         listeners.removeAll()
         ports.removeAll()
@@ -127,7 +163,8 @@ final class RemoteHost {
     // MARK: Paired devices
 
     private func listen(for device: PairedDevice) {
-        guard isOn, listeners[device.id] == nil else { return }
+        // With no id for this Mac a device couldn't tell its listener from another Mac's: see `RemoteDevices.startAfresh`.
+        guard isOn, listeners[device.id] == nil, let macID = devices.macID else { return }
         let id = device.id
         let key: Data
         switch devices.storedKey(for: id) {
@@ -141,7 +178,7 @@ final class RemoteHost {
             // The record lets a device pick out its own listener on its own Mac without connecting to try.
             let service = localOnly ? nil : NWListener.Service(
                 name: "\(macName) \(id.prefix(4))", type: Remote.service,
-                txtRecord: NWTXTRecord(["mac": devices.macID, "device": id, "name": macName]))
+                txtRecord: NWTXTRecord(["mac": macID, "device": id, "name": macName]))
             let listener = try LinkListener(key: key, service: service, localOnly: localOnly, largestInbound: Self.largestFromDevice,
                                             port: fixedPort(for: id))
             listeners[id] = listener
@@ -203,6 +240,8 @@ final class RemoteHost {
     private func listening(_ id: String) {
         failing.remove(id)
         if failing.isEmpty { listeningProblem = nil }
+        // Its key may not have been readable when the address listener was made, or there was none.
+        if isOn, UserDefaults.standard.bool(forKey: Self.byAddressKey) { listenByAddressSoon() }
     }
 
     private func stopListening(_ id: String) {
@@ -236,6 +275,9 @@ final class RemoteHost {
         sessions.removeAll { $0.device.id == id }
         stopListening(id)
         devices.remove(id)
+        memory.forget(device: id)
+        // At once, so its key gets nowhere by address either.
+        listenByAddress()
         #if DEBUG
         testDevicePorts[id] = nil
         #endif
@@ -244,6 +286,12 @@ final class RemoteHost {
     /// Starts a connection and returns the first thing it sends. One that says nothing in time is closed, so
     /// a connection can't be opened and left open without ever saying who it is.
     private func opening<T: Decodable & Sendable>(_ type: T.Type, on connection: LinkConnection, deviceID: String?) async throws -> T {
+        // One too many from anywhere, or from one address, is closed before it costs a handshake.
+        let address = connection.remoteHost
+        guard gate.admit(address) else {
+            connection.close()
+            throw LinkError("too many connections")
+        }
         unannounced.append((deviceID, connection))
         let limit = Task {
             try await Task.sleep(for: .seconds(Self.openingLimit))
@@ -252,6 +300,7 @@ final class RemoteHost {
         defer {
             limit.cancel()
             unannounced.removeAll { $0.connection === connection }
+            gate.release(address)
         }
         try await connection.start()
         return try await connection.receive(type)
@@ -263,12 +312,7 @@ final class RemoteHost {
                 connection.close()
                 return
             }
-            guard hello.version == Remote.version else {
-                let stale = hello.version < Remote.version ? "this device" : "your Mac"
-                try await connection.send(HostMessage.refused("Update Queen Bee on \(stale), so both are on the same version."))
-                connection.close()
-                return
-            }
+            guard try await sameVersion(hello, on: connection) else { return }
             // Ids are kept in lower case, and a device may send its own in either.
             guard isOn, hello.deviceID.lowercased() == deviceID, let device = devices.devices.first(where: { $0.id == deviceID }) else {
                 // Told, so the device can say so instead of trying again for ever as if the link had dropped.
@@ -278,16 +322,194 @@ final class RemoteHost {
             }
             // The listener it came in by was replaced while it was arriving. It can simply connect again.
             guard listeners[deviceID] === listener else { connection.close(); return }
-            // A device that connects again has given up on its old connection, even if the Mac hasn't noticed yet.
-            closeSessions(of: deviceID)
-            let session = RemoteSession(connection: connection, device: device)
-            sessions.append(session)
-            session.send(.welcome(RemoteWelcome(version: Remote.version, macName: macName, canControl: device.canControl)))
-            session.send(.library(library()))
-            await session.run()
-            sessions.removeAll { $0 === session }
+            await welcome(device, hello: hello, on: connection)
         } catch {
             connection.close()
+        }
+    }
+
+    /// Turns a device on another version away, saying which to update. False if it was.
+    private func sameVersion(_ hello: RemoteHello, on connection: LinkConnection) async throws -> Bool {
+        guard hello.version != Remote.version else { return true }
+        let stale = hello.version < Remote.version ? "this device" : "your Mac"
+        try await connection.send(HostMessage.refused("Update Queen Bee on \(stale), so both are on the same version."))
+        connection.close()
+        return false
+    }
+
+    /// Lets a device in, and follows it until it goes.
+    private func welcome(_ device: PairedDevice, hello: RemoteHello, on connection: LinkConnection, viaAddress: Bool = false) async {
+        // A device that connects again has given up on its old connection, even if the Mac hasn't noticed yet.
+        closeSessions(of: device.id)
+        let session = RemoteSession(connection: connection, device: device, hello: hello, viaAddress: viaAddress)
+        sessions.append(session)
+        session.send(.welcome(RemoteWelcome(version: Remote.version, macName: macName, canControl: device.canControl,
+                                            features: [RemoteFeature.commandMemory], memoryID: Self.memoryID)))
+        session.send(.library(library()))
+        await session.run()
+        sessions.removeAll { $0 === session }
+    }
+
+    // MARK: Connecting by address
+
+    /// The addresses this Mac can be reached at, for Settings to show beside the port: its name on the local
+    /// network, and each address it has on a network, a private one such as Tailscale's included.
+    static func addresses() -> [String] {
+        var found: [String] = []
+        if let name = SCDynamicStoreCopyLocalHostName(nil) as String? { found.append("\(name).local") }
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return found }
+        defer { freeifaddrs(list) }
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(entry.pointee.ifa_flags)
+            guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+                  flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let text = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            if !found.contains(text) { found.append(text) }
+        }
+        return found
+    }
+
+    /// After the list of devices and the Mac's id were lost: a new id, so devices can be paired again.
+    func startAfresh() {
+        devices.startAfresh()
+        devices.devices.forEach(listen(for:))
+    }
+
+    /// Turns connecting by address on or off, from Settings.
+    func setByAddress(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.byAddressKey)
+        listenByAddress()
+        // Devices that came in by address go too: nothing reaches the Mac that way any more. Only here, and not
+        // when the listener is only made afresh, as when another device is paired: those connections carry on.
+        guard !on else { return }
+        for session in sessions where session.viaAddress { session.close() }
+        sessions.removeAll { $0.viaAddress }
+    }
+
+    /// Listens on `addressPort` with every paired device's key, if connecting by address is on, or stops. Made
+    /// afresh whenever the keys of the devices paired change, as when one is paired, paired again or removed, so it
+    /// holds exactly those. A test copy never listens by address: it would take the port from the copy you use.
+    private func listenByAddress() {
+        guard isOn, !TestHarness.isEnabled, UserDefaults.standard.bool(forKey: Self.byAddressKey) else { return stopListeningByAddress() }
+        var keys: [String: Data] = [:]
+        for device in devices.devices { if let key = devices.storedKey(for: device.id).key { keys[device.id] = key } }
+        // The listener has these keys already, or is about to: making it afresh would only drop the port a moment.
+        guard keys != addressKeys else { return }
+        stopListeningByAddress()
+        // A listener with no key would turn everyone away, so there is none until a device is paired.
+        guard !keys.isEmpty else { return }
+        addressKeys = keys
+        let turn = addressTurn
+        let retiring = retiringAddressListener
+        Task {
+            // The port is fixed, so the listener before has to have let go of it first.
+            await retiring?.whenCancelled()
+            guard addressTurn == turn else { return }
+            do {
+                let listener = try LinkListener(keys: keys, service: nil, localOnly: false, largestInbound: Self.largestFromDevice, port: Self.addressPort)
+                addressListener = listener
+                _ = try await listener.start(onFailure: { error in
+                    Task { @MainActor in RemoteHost.shared.addressListenerEnded(turn, error: error) }
+                }) { connection in
+                    Task { @MainActor in await RemoteHost.shared.serveByAddress(connection, from: listener) }
+                }
+                guard addressTurn == turn else { return }
+                isListeningByAddress = true
+                addressProblem = nil
+                addressQuickTries = 0
+            } catch {
+                addressListenerEnded(turn, error: error)
+            }
+        }
+    }
+
+    /// Made afresh in a moment, once, however many devices start being listened for meanwhile.
+    @ObservationIgnored private var addressLater: Task<Void, Never>?
+    private func listenByAddressSoon() {
+        guard addressLater == nil else { return }
+        addressLater = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            addressLater = nil
+            listenByAddress()
+        }
+    }
+
+    private func addressListenerEnded(_ turn: Int, error: Error) {
+        guard addressTurn == turn else { return }
+        stopListeningByAddress()
+        // A port still held is most often the listener before letting go of it, so it is tried again in a moment,
+        // a few times, before anyone is told.
+        let wait = ListenRetry.wait(after: error, quickSoFar: addressQuickTries)
+        if wait < ListenRetry.slow {
+            addressQuickTries += 1
+        } else {
+            addressQuickTries = 0
+            addressProblem = "Queen Bee couldn't listen on port \(Self.addressPort) for devices connecting by address, and will try again. Another app may be using the port: \(error)"
+        }
+        let retry = addressTurn
+        Task {
+            try? await Task.sleep(for: .seconds(wait))
+            // Not if it has been turned off, or made afresh, since.
+            if addressTurn == retry { listenByAddress() }
+        }
+    }
+
+    private func stopListeningByAddress() {
+        addressTurn += 1
+        if let addressListener {
+            addressListener.stop()
+            retiringAddressListener = addressListener
+        }
+        addressListener = nil
+        addressKeys = nil
+        isListeningByAddress = false
+        if !UserDefaults.standard.bool(forKey: Self.byAddressKey) || !isOn { addressProblem = nil }
+        for waiting in unannounced where waiting.deviceID == Self.byAddressMark { waiting.connection.close() }
+        unannounced.removeAll { $0.deviceID == Self.byAddressMark }
+    }
+
+    /// What a connection by address waits as, before it says which device it is.
+    private static let byAddressMark = "address"
+
+    /// A connection by address. It got in with some paired device's key, so it is a paired device, and it says
+    /// which: its proof shows it holds that device's own key, on this very connection. Anything less is closed
+    /// with nothing said, as a stranger is by a device's own listener.
+    private func serveByAddress(_ connection: LinkConnection, from listener: LinkListener) async {
+        do {
+            guard case .hello(let hello) = try await opening(DeviceMessage.self, on: connection, deviceID: Self.byAddressMark),
+                  addressListener === listener else {
+                connection.close()
+                return
+            }
+            guard try await sameVersion(hello, on: connection) else { return }
+            let id = hello.deviceID.lowercased()
+            guard isOn, let device = devices.devices.first(where: { $0.id == id }), let key = devices.key(for: id),
+                  let proof = hello.proof, let binding = connection.binding(), LinkSecurity.checks(proof, key: key, binding: binding) else {
+                connection.close()
+                return
+            }
+            await welcome(device, hello: hello, on: connection, viaAddress: true)
+        } catch {
+            connection.close()
+        }
+    }
+
+    // MARK: Commands sent again
+
+    /// A command has arrived from a device that sends commands again after a drop. Returns what is known of it:
+    /// new, to be done now; being done, when `session` is told its answer too; or done, with the answer to give.
+    func arrived(_ id: Int, _ command: RemoteCommand, from session: RemoteSession, epoch: String) -> CommandMemory<CommandWaiter>.Seen {
+        memory.arrive(device: session.device.id, epoch: epoch, id: id, waiter: CommandWaiter(session: session, command: command))
+    }
+
+    /// A command that was remembered as being done has been. Every connection waiting on it is told, as well as
+    /// the one it came on, which is told by its session.
+    func finished(_ id: Int, device: String, epoch: String, refusal: String?) {
+        for waiter in memory.finish(device: device, epoch: epoch, id: id, refusal: refusal) {
+            waiter.session?.answerAgain(id, waiter.command, refusal)
         }
     }
 
@@ -496,7 +718,7 @@ final class RemoteHost {
             // A device being paired again goes back to its old key if it can't be given the new one.
             let before = devices.devices.first { $0.id == id }
             let oldKey = devices.key(for: id)
-            guard let key = devices.add(id: id, name: name.isEmpty ? "Device" : name) else {
+            guard let key = devices.add(id: id, name: name.isEmpty ? "Device" : name), let macID = devices.macID else {
                 pairingProblem = "Queen Bee couldn't save the device's key in your Keychain, so it wasn't paired."
                 try await connection.send(PairReply.refused("Queen Bee couldn't save this device's key on the Mac."))
                 return
@@ -505,15 +727,19 @@ final class RemoteHost {
             // Before the device is given the key, and not after: it connects the moment it has it, and a
             // listener still on the old key would tell it that its new key was wrong.
             stopListening(id)
+            memory.forget(device: id)
             if let device = devices.devices.first(where: { $0.id == id }) { listen(for: device) }
+            // The address listener too: the old key gets nowhere from now on.
+            listenByAddress()
             do {
-                try await connection.send(PairReply.granted(PairGrant(key: key, deviceID: id, macID: devices.macID, macName: macName)))
+                try await connection.send(PairReply.granted(PairGrant(key: key, deviceID: id, macID: macID, macName: macName)))
             } catch {
                 // The device never got its new key. One that was paired before goes back to its old key, and is
                 // listened for with that again. A new one could never connect, and listing it would only mislead.
                 stopListening(id)
                 if let before, let oldKey, devices.restore(before, key: oldKey) {
                     listen(for: before)
+                    listenByAddress()
                     return
                 }
                 remove(id)

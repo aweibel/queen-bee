@@ -15,6 +15,18 @@ public enum SessionState: String, Codable, Sendable, CaseIterable {
         case .exited: "Exited"
         }
     }
+
+    /// The state after Claude Code's SessionStart hook, from the hook's `source`. `compactedByPerson` is true when
+    /// the summary was asked for with /compact, as the PreCompact hook before it says.
+    ///
+    /// A session starts afresh at its prompt after a launch ("startup"), a /resume or a launch with --resume
+    /// ("resume") and a /clear ("clear"), so it is idle. Claude Code summarising a conversation that has grown too
+    /// long ("compact") is different: it does that in the middle of a turn, and the turn carries on afterwards. A
+    /// session at work is still at work then, and anything waiting to be typed must keep waiting.
+    public func afterSessionStart(source: String?, compactedByPerson: Bool = false) -> SessionState {
+        guard source == "compact", !compactedByPerson else { return .idle }
+        return self == .starting || self == .notStarted ? .idle : self
+    }
 }
 
 /// Where the run on show has been, for one card.
@@ -50,6 +62,9 @@ public struct PendingHold: Identifiable, Equatable, Sendable, Codable {
     /// command is allowed at the Mac and nowhere else: no device may answer for the person there. Left out
     /// when it isn't so, so a hold reads the same to a device that knows nothing of this.
     public var allowOnMac: Bool?
+    /// When the card answers for the person if nobody has, for a card with a time limit. Nil for one that waits for good,
+    /// and left out then, so a hold reads the same to a device that knows nothing of this.
+    public var deadline: Date?
 
     /// Whether a paired device may allow this script's command.
     public var canBeAllowedFromDevice: Bool { kind == .script && needsAllow && allowOnMac != true }
@@ -142,6 +157,53 @@ public struct Usage: Codable, Equatable, Sendable {
     }
 }
 
+/// How a run came to end, as the engine saw it.
+public enum RunEnding: String, Codable, Sendable, CaseIterable {
+    /// A message reached an End card and nothing was left to do.
+    case finishedWithAnswer
+    /// Nothing was left to do, but no message reached an End card: a branch with nothing linked, an And
+    /// still waiting, an agent with nothing to pass on.
+    case endedWithoutAnswer
+    /// A Loop card ran out of tries on the way, so whatever came out is what it gave up with.
+    case gaveUp
+    /// Agents were handed as many messages as one run allows.
+    case hitLimit
+    /// An agent the run was waiting on failed.
+    case failed
+    /// Somebody stopped it.
+    case stopped
+    /// Its agents had spent more than the flow allows one run, so the app stopped it.
+    case spentLimit
+
+    /// An ending a later version of the app knows and this one doesn't is read as stopped, so a run kept by that
+    /// version still opens here.
+    public init(from decoder: Decoder) throws {
+        self = RunEnding(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .stopped
+    }
+
+    /// In a few plain words, for the run's row in the history.
+    public var label: String {
+        switch self {
+        case .finishedWithAnswer: "finished"
+        case .endedWithoutAnswer: "ended without an answer"
+        case .gaveUp: "gave up after the most tries"
+        case .hitLimit: "stopped at the hand-off limit"
+        case .failed: "failed"
+        case .stopped: "stopped"
+        case .spentLimit: "stopped at its spending limit"
+        }
+    }
+
+    /// The three kinds of ending a device from before endings were told apart knows.
+    public var outcome: RunRecord.Outcome {
+        switch self {
+        case .finishedWithAnswer, .endedWithoutAnswer, .gaveUp: .finished
+        case .hitLimit, .stopped, .spentLimit: .stopped
+        case .failed: .failed
+        }
+    }
+}
+
 /// One run, kept so it can be looked at again: where it went, what each link carried and how it ended.
 public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     public enum Outcome: String, Codable, Sendable { case finished, stopped, failed }
@@ -160,14 +222,24 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     public var handOffs: Int
     /// What each agent's session used during the run, by card id. Filled in a moment after the run ends.
     public var usage: [String: Usage]?
+    /// How the run ended, more closely than `outcome` says. Nil for a run kept before endings were told apart.
+    /// A device that doesn't know of it reads the record as it always has.
+    public var ending: RunEnding?
 
     public init(id: String, started: Date, ended: Date, outcome: Outcome, command: String, log: [LogLine],
                 results: [String: String], marks: [String: RunMark], linkPasses: [String: Int],
-                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil) {
+                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil, ending: RunEnding? = nil) {
         self.id = id; self.started = started; self.ended = ended; self.outcome = outcome; self.command = command
         self.log = log; self.results = results; self.marks = marks; self.linkPasses = linkPasses
-        self.messages = messages; self.handOffs = handOffs; self.usage = usage
+        self.messages = messages; self.handOffs = handOffs; self.usage = usage; self.ending = ending
     }
 
     public var cost: Usage { (usage ?? [:]).values.reduce(Usage(), +) }
+
+    /// How the run ended, in a few words.
+    public var summary: String {
+        // A run an agent failed in is shown as failed whatever else the engine said of its ending.
+        if outcome == .failed { return RunEnding.failed.label }
+        return ending?.label ?? outcome.rawValue
+    }
 }

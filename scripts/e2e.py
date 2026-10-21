@@ -8,7 +8,8 @@ Claude Code sessions on Haiku, and checks what the app did.
     ./scripts/build.sh && ./scripts/e2e.py            # every scenario
     ./scripts/e2e.py guard loop                        # some of them
 
-Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, deep, browser, nobrowser, noclaude.
+Scenarios: guard, settings, remote, scroll, pan, fanout, switch, loop, exit, apifail, ask, gates, unasked, subflow, timed, features, deep, browser,
+nobrowser, noclaude.
 `mirror` is run only when named: it checks the copy of a terminal that a paired device is sent.
 `mobile` is run only when named: it runs the iPad app in the iOS Simulator against the test copy. Build it
 first with ./scripts/build-mobile.sh. Its screenshots go to the folder named by QB_E2E_SHOTS, or a new one.
@@ -60,12 +61,19 @@ SUPPORT_PREFIX = os.path.expanduser("~/Library/Application Support/QBTest-")
 SUPPORT = SUPPORT_PREFIX + str(os.getpid())
 
 results = []
+# Scenarios that couldn't run here, with why. They are neither passes nor failures, and the summary counts them.
+skipped = []
 
 
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(("  PASS  " if ok else "  FAIL  ") + name + (f"  ({detail})" if detail and not ok else ""), flush=True)
     return ok
+
+
+def skip(scenario, reason):
+    skipped.append((scenario, reason))
+    print("  SKIP  " + reason, flush=True)
 
 
 # ---- talking to the app ----
@@ -2082,11 +2090,11 @@ def shown_card(state, name):
 def scenario_mobile(app):
     print("mobile: the iPad app pairs with the Mac, connects, comes back by itself, and learns when it is removed", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("mobile", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("mobile", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     app.open_flow(GUARD)
     # Printed before the app has ever connected, so the app can only have it from the Mac's kept output.
@@ -2767,11 +2775,11 @@ def scenario_mobile(app):
 def scenario_terminals():
     print("terminals: the iPad app's terminals, fed output made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("terminals", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("terminals", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -2851,7 +2859,8 @@ def scenario_terminals():
         check("zoomed in as far as it goes, a card's terminal is still drawn no more than twice as finely",
               s.get("canvas", {}).get("zoom", 1) > 2.9 and in_view(s, "Agent") and terminal(s).get("sharpness") == 2,
               f"sharpness {terminal(s).get('sharpness')} at zoom {s.get('canvas', {}).get('zoom')}")
-        s = play(3, "-qbZoomCard", "Start", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 1)
+        # Done, not Start: Start is close enough to Agent that on a big iPad the edge of Agent is still on screen beside the panel.
+        s = play(3, "-qbZoomCard", "Done", "-qbZoom", "3", also=lambda s: (s.get("canvas") or {}).get("zoom", 1) > 2.9 and terminal(s).get("sharpness") == 1)
         check("and one whose card is out of view is left at the screen's own fineness",
               s.get("canvas", {}).get("zoom", 1) > 2.9 and not in_view(s, "Agent") and terminal(s).get("sharpness") == 1,
               f"sharpness {terminal(s).get('sharpness')}, in view {in_view(s, 'Agent')}, seeing {s.get('canvas', {}).get('visible')}")
@@ -2902,11 +2911,11 @@ def scenario_terminals():
 def scenario_panels():
     print("panels: the iPad app's panels, fed a run made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("panels", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("panels", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3125,16 +3134,18 @@ def scenario_panels():
 def scenario_controls():
     print("controls: the iPad app's run bar and the buttons that answer a run, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("controls", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("controls", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
     # What `DebugCannedRun` in the app plays, stage by stage, and how its made-up Mac answers.
     watch_only, away = "can only watch", "Not connected to your Mac right now."
+    # What a command that went and was never answered is told: it may have been done.
+    unsure = "Your Mac didn't answer. Check the run on your Mac."
     on = ("-qbControl", "1")
 
     def controls(state):
@@ -3250,8 +3261,8 @@ def scenario_controls():
               controls(s).get("waiting") == ["approve"] and controls(s).get("disabled") == ["Approve", "Reject"]
               and drawn(s, "Sign off") == [(t, False) for t in approval] and controls(s).get("bar") == ["Stop"], f"{controls(s)} {drawn(s, 'Sign off')}")
         s = mobile.wait(lambda s: did(s), 15, "the link to drop")
-        check("when the link drops, what was waiting is told so, and nothing is kept to send later",
-              did(s) == [("approve:Sign off", away)] and controls(s).get("waiting") == [] and controls(s).get("refusal") == away, str(controls(s)))
+        check("when the link drops, what was waiting is told that what became of it is not known, and nothing is kept to send later",
+              did(s) == [("approve:Sign off", unsure)] and controls(s).get("waiting") == [] and controls(s).get("refusal") == unsure, str(controls(s)))
         check("and with no Mac there are no controls, and no line about turning them on", nothing(s) and controls(s).get("hint") is None, str(controls(s)))
         s = play(2, *on, "-qbSilent", "1", "-qbAnswerWait", "2", "-qbZoomCard", "Sign off", "-qbDo", "approve:Sign off", steps=1)
         check("a command the Mac never answers stops being waited for, and the person is told to look on the Mac, not that it failed",
@@ -3309,11 +3320,11 @@ def scenario_controls():
 def scenario_editing():
     print("editing: the iPad app's canvas edited by touch, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("editing", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("editing", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3322,7 +3333,7 @@ def scenario_editing():
     on = ("-qbControl", "1")
     away, gone = "Not connected to your Mac right now.", "That card is no longer in the flow."
     # The kinds of card in the Mac's order, with the made-up Mac's two saved roles under Agent, as its palette has them.
-    kinds = ["Agent", "Note writer", "Proof reader", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "Approval", "Script", "Flow", "End", "Note"]
+    kinds = ["Agent", "Note writer", "Proof reader", "Start", "If / Else", "Switch", "And", "Or", "Prompt", "Loop until", "For each", "Approval", "Script", "Flow", "End", "Note"]
     bar = ["undo", "redo", "add", "select", "tidy", "done"]
 
     def edit(state):
@@ -3459,9 +3470,11 @@ def scenario_editing():
         check("if the link drops under the finger the drag ends, the card goes back, and editing turns itself off",
               edit(s).get("on") is False and edit(s).get("overlay") is None and edit(s).get("dragging") is None and at(s, "Style guide") == style
               and edit(s).get("bar") == [], f"{edit(s)} {at(s, 'Style guide')}")
-        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause;away", *on, "-qbSilent", "1", also=lambda s: did(s)[-1:] == [("move:Style guide:-117,20", away)])
-        check("if it drops while the last step is with the Mac, the card goes back and the person is told",
-              did(s)[-1:] == [("move:Style guide:-117,20", away)] and edit(s).get("overlay") is None and at(s, "Style guide") == style, f"{did(s)} {at(s, 'Style guide')}")
+        # The last step went, so the Mac may have taken it: the person is told to look, not that it didn't happen.
+        unsure = "Your Mac didn't answer. Check the flow on your Mac."
+        s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause;away", *on, "-qbSilent", "1", also=lambda s: did(s)[-1:] == [("move:Style guide:-117,20", unsure)])
+        check("if it drops while the last step is with the Mac, the card goes back to where the Mac last had it and the person is told to look on the Mac",
+              did(s)[-1:] == [("move:Style guide:-117,20", unsure)] and edit(s).get("overlay") is None and at(s, "Style guide") == style, f"{did(s)} {at(s, 'Style guide')}")
         s = play("edit:on;zoom:1;~move:Style guide:-117,20;pause", *on, "-qbSilent", "1", also=lambda s: (edit(s).get("overlay") or {}).get("settling"))
         check("until the Mac answers, the card stays where the finger left it and no other can be dragged",
               (edit(s).get("overlay") or {}).get("settling") is True and at(s, "Style guide") == (340, 432, 240, 120) and controls(s).get("waiting") == ["moveCards"],
@@ -3625,11 +3638,11 @@ def scenario_editing():
 def scenario_settings_edit():
     print("settings-edit: the iPad app's details and its list of flows changed from the device, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("settings-edit", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("settings-edit", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -3875,7 +3888,8 @@ def scenario_settings_edit():
         asks = "A command changed from here was not typed on your Mac, so the next run stops and asks before running it."
         s = play("edit:on;pick:Style guide;set:Style guide:command:cat docs/style.md | head -20", *on, also=lambda s: mac(s, "Style guide").get("command", "").endswith("head -20"))
         check("a Script card's command can be changed, and says the run will ask before running it",
-              named(s) == ["name", "command", "caution", "note"] and lines(s, "caution") == [asks] and row(s, "command").get("label") == "Command"
+              named(s) == ["name", "command", "caution", "waitMinutes", "note"] and lines(s, "caution") == [asks] and row(s, "command").get("label") == "Command"
+              and (row(s, "waitMinutes").get("label"), row(s, "waitMinutes").get("shown")) == ("Wait to be allowed", "As long as it takes")
               and mac(s, "Style guide").get("command") == "cat docs/style.md | head -20" and sent(s) == ["patchCard:command"], f"{named(s)} {lines(s, 'caution')} {sent(s)}")
         both("settings-04-script")
 
@@ -3931,9 +3945,10 @@ def scenario_settings_edit():
         # The flow's own settings.
         s = play("flowSettings", *on, also=lambda s: flows(s).get("sheet"))
         fs = flows(s).get("settings", [])
-        limit, notify = row(s, "subflowLimit", fs), row(s, "notify", fs)
-        check("the flow's settings are the Mac's: its name, how deep sub-flows can go, and telling the orchestrator",
-              [r.get("name") for r in fs] == ["flowName", "subflowLimit", "notify"] and row(s, "flowName", fs).get("value") == "Welcome note"
+        limit, notify, spend = row(s, "subflowLimit", fs), row(s, "notify", fs), row(s, "spendingLimit", fs)
+        check("the flow's settings are the Mac's: its name, how deep sub-flows can go, what a run may spend, and telling the orchestrator",
+              [r.get("name") for r in fs] == ["flowName", "subflowLimit", "spendingLimit", "notify"] and row(s, "flowName", fs).get("value") == "Welcome note"
+              and (spend.get("label"), spend.get("control"), spend.get("shown")) == ("Stop a run once it has spent ($)", "line", "") and "Leave it empty for no limit" in (spend.get("help") or "")
               and (limit.get("label"), limit.get("range"), limit.get("shown")) == ("Sub-flows can go", [0, 10], "3 levels deep")
               and (notify.get("label"), notify.get("shown")) == ("Tell the orchestrator when a run ends", "On") and "0 means no sub-flows" in limit.get("help", ""), str(fs))
         both("settings-10-flow-settings")
@@ -3950,11 +3965,11 @@ def scenario_settings_edit():
 def scenario_parity():
     print("parity: stage 4's controls in the iPad app, each in both control states, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("parity", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("parity", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -4059,8 +4074,12 @@ def scenario_parity():
         both("parity-03-pasted")
 
         # Snapping, and the map.
-        s = play("edit:on;snap:off;move:Sent:5,7", *on, also=lambda s: shown_card(s, "Sent").get("x") == 1805)
-        check("with snapping off a card goes exactly where the finger leaves it", (shown_card(s, "Sent").get("x"), shown_card(s, "Sent").get("y")) == (1805, 167)
+        # The finger is put on the screen and read back from it, so the canvas point it leaves at can be off by
+        # a trillionth from going through the zoom: "exactly" is to within a millionth of a point.
+        def lands(s, x, y):
+            return abs(shown_card(s, "Sent").get("x", 0) - x) < 1e-6 and abs(shown_card(s, "Sent").get("y", 0) - y) < 1e-6
+        s = play("edit:on;snap:off;move:Sent:5,7", *on, also=lambda s: lands(s, 1805, 167))
+        check("with snapping off a card goes exactly where the finger leaves it", lands(s, 1805, 167)
               and p(s).get("snaps") is False, str(shown_card(s, "Sent")))
         s = play("map:on", "-qbZoom", "1", also=lambda s: p(s).get("mapView"))
         before = (s.get("canvas") or {}).get("visible") or {}
@@ -4231,11 +4250,11 @@ def scenario_parity():
 def scenario_typing():
     print("typing: the iPad app's message box and keys under a terminal, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("typing", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("typing", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -5002,6 +5021,247 @@ def scenario_timed(app):
     app.op(fid, "trigger", card="Clock")
 
 
+# For each: three lines go one at a time through an agent and come back, then out Done together.
+EACH = flow("Each", [
+    card("start", "Start", 0, 0, command="apple\nbanana\ncherry"),
+    card("for-each", "Every fruit", 312, 0, split="lines"),
+    card("agent", "Upper", 624, 0, instructions=(
+        "Each message you get has a first line in square brackets, which you ignore. Reply with the rest of the "
+        "message in capital letters, and nothing else.")),
+    card("end", "All", 1180, 0),
+], [("Start", "out", "Every fruit", 3), ("Every fruit", "each", "Upper", 3), ("Upper", "out", "Every fruit", 3),
+    ("Every fruit", "done", "All", 3)])
+
+# Two Loop cards whose check never holds, each with two tries: one with Gave up linked, one without.
+GAVEUP = flow("Gaveup", [
+    card("start", "Linked", 0, 0, command="try"),
+    card("loop", "Never", 312, 0, check="contains", value="UNREACHABLE", maxTries=2, height=144),
+    card("prompt", "Again", 312, 240, template="{{message}} again"),
+    card("end", "Gave up", 624, 0),
+    card("end", "Passed", 624, 240),
+    card("start", "Unlinked", 0, 480, command="try"),
+    card("loop", "Never 2", 312, 480, check="contains", value="UNREACHABLE", maxTries=2, height=144),
+    card("prompt", "Again 2", 312, 720, template="{{message}} again"),
+    card("end", "Done 2", 624, 480),
+], [("Linked", "out", "Never", 9), ("Never", "again", "Again", 9), ("Again", "out", "Never", 9),
+    ("Never", "gave-up", "Gave up", 9), ("Never", "done", "Passed", 9),
+    ("Unlinked", "out", "Never 2", 9), ("Never 2", "again", "Again 2", 9), ("Again 2", "out", "Never 2", 9),
+    ("Never 2", "done", "Done 2", 9)])
+
+# Three holds in a row that each answer for the person when the minute is up: approved, rejected by default,
+# and a command nobody allowed, which is skipped.
+HOLDS = flow("Holds", [
+    card("start", "Start", 0, 0, command="nobody is watching"),
+    card("approval", "Say yes", 312, 0, text="Fine?", waitMinutes=1, whenNoAnswer="approved"),
+    card("approval", "Say no", 624, 0, text="Really fine?", waitMinutes=1),
+    card("script", "Touch", 936, 0, command="touch ran-unasked.txt", waitMinutes=1),
+    card("end", "Ran", 1248, 0),
+    card("end", "Skipped", 1248, 192),
+    card("end", "Wrong", 936, 384),
+], [("Start", "out", "Say yes", 9), ("Say yes", "approved", "Say no", 9), ("Say yes", "rejected", "Wrong", 9),
+    ("Say no", "approved", "Wrong", 9), ("Say no", "rejected", "Touch", 9),
+    ("Touch", "pass", "Ran", 9), ("Touch", "fail", "Skipped", 9)])
+
+# One agent busy with a slow command, under the smallest spending limit a flow may have, a cent. A Haiku turn costs
+# less than that, so this one agent is on Sonnet, whose first reply passes it.
+SPEND = flow("Spend", [
+    card("start", "Start", 0, 0, command="Run the shell command `sh count.sh`, which counts to 40 slowly. Then reply with exactly: SLEPT"),
+    card("agent", "Spender", 312, 0, model="sonnet"),
+    card("end", "Out", 868, 0),
+], [("Start", "out", "Spender", 3), ("Spender", "out", "Out", 3)])
+SPEND["spendingLimit"] = 0.01
+
+# For qb run: one that answers at once, and one that waits on the person.
+CLI = flow("Cli", [card("start", "Start", 0, 0, command="from the start card"), card("end", "Answer", 312, 0)],
+           [("Start", "out", "Answer", 9)])
+CLIWAIT = flow("Cliwait", [
+    card("start", "Start", 0, 0, command="wait for me"),
+    card("approval", "Gate", 312, 0, text="Go on?"),
+    card("end", "Answer", 624, 0),
+], [("Start", "out", "Gate", 9), ("Gate", "approved", "Answer", 9)])
+
+FLOWS.update({"features": EACH, "gaveup": GAVEUP, "holds": HOLDS, "spend": SPEND, "cli": CLI, "cliwait": CLIWAIT})
+QB = os.path.join(APP, "Contents/MacOS/qb")
+
+
+def qb(app, *args, timeout=60):
+    """Runs `qb run` against the test copy, as a script on this Mac would."""
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "qb.sock"))
+    started = time.time()
+    done = subprocess.run([QB, "run", *args], env=env, capture_output=True, text=True, timeout=timeout)
+    return done.returncode, done.stdout, done.stderr, time.time() - started
+
+
+def scenario_features(app):
+    print("features: For each, Gave up, time limits on holds, the spending limit and qb run", flush=True)
+
+    # For each
+    fid = EACH["id"]
+    app.open_flow(EACH)
+    app.op(fid, "run")
+    try:
+        s = app.wait(fid, lambda s: not s["isRunning"] and s["runs"], 240, "the For each run to end")
+    except TimeoutError as e:
+        check("For each sends every item through the agent and passes on what came back", False, str(e)[:400])
+        app.op(fid, "stop")
+        s = app.state(fid)
+    log = s["log"]
+    sent = [line for line in log if line.startswith('For each "Every fruit" → Each')]
+    check("For each sends its three items one at a time, in order",
+          sent == [f'For each "Every fruit" → Each (item {i} of 3)' for i in (1, 2, 3)], str(sent))
+    check("and goes out Done once all three are back",
+          any(line == 'For each "Every fruit" → Done, with what came back for all 3 items' for line in log), str(log[-4:]))
+    out = s["results"].get("All", "")
+    headings = ["## From item 1: apple", "## From item 2: banana", "## From item 3: cherry"]
+    places = [out.find(h) for h in headings]
+    check("End gets each item's result under a heading naming it, in order", all(p >= 0 for p in places) and places == sorted(places), out[:300])
+    parts = [out[a:b] for a, b in zip(places, places[1:] + [len(out)])] if all(p >= 0 for p in places) else []
+    check("each result is what the agent made of that item",
+          len(parts) == 3 and all(w in p for w, p in zip(["APPLE", "BANANA", "CHERRY"], parts)), out[:300])
+    check("the agent took one turn per item", s["marks"].get("Upper", {}).get("passes") == 3 and s["handOffs"] == 3,
+          f"{s['marks'].get('Upper')} handOffs={s['handOffs']}")
+    check("the run is recorded as finished", s["runs"] and s["runs"][-1]["ending"] == "finishedWithAnswer", str(s["runs"][-1:]))
+    app.op(fid, "close")
+
+    # Gave up
+    gid = GAVEUP["id"]
+    app.op(gid, "select")
+    time.sleep(1)
+    app.op(gid, "pick", card="Linked")
+    app.op(gid, "run")
+    s = app.wait(gid, lambda s: not s["isRunning"] and s["runs"], 30, "the linked Gave up run to end")
+    check("a Loop that runs out of tries goes out Gave up when something is linked to it",
+          list(s["results"]) == ["Gave up"] and s["results"]["Gave up"] == "try again", str(s["results"]))
+    check("the log says it gave up after two tries", 'Loop "Never" → Gave up after 2 tries' in s["log"]
+          and sum('Loop "Never" → Again' in line for line in s["log"]) == 1, str([l for l in s["log"] if "Loop" in l]))
+    check("a run that dealt with giving up is recorded as finished", s["runs"][-1]["ending"] == "finishedWithAnswer"
+          and s["runs"][-1]["summary"] == "finished", str(s["runs"][-1]))
+    check("the Loop card counts its Gave up", s["marks"].get("Never", {}).get("ports") == {"again": 1, "gave-up": 1}, str(s["marks"].get("Never")))
+    app.op(gid, "pick", card="Unlinked")
+    app.op(gid, "run")
+    s = app.wait(gid, lambda s: not s["isRunning"] and len(s["runs"]) == 2, 30, "the unlinked Gave up run to end")
+    check("with nothing on Gave up, it goes out Done instead", list(s["results"]) == ["Done 2"], str(s["results"]))
+    check("the log says it left by Done after two tries", 'Loop "Never 2" → Done after 2 tries' in s["log"], str(s["log"][-4:]))
+    check("and the run is recorded as having given up", s["runs"][-1]["ending"] == "gaveUp"
+          and s["runs"][-1]["summary"] == "gave up after the most tries", str(s["runs"][-1]))
+    app.op(gid, "pick")
+    app.op(gid, "close")
+
+    # Time limits on holds, with a minute counted as two seconds.
+    hid = HOLDS["id"]
+    app.op(hid, "holdMinute", seconds=2)
+    try:
+        app.op(hid, "select")
+        time.sleep(1)
+        app.op(hid, "run")
+        h = held(app, hid, "Say yes")
+        check("an Approval with a time limit waits for the person first", h[0]["text"] == "nobody is watching", str(h))
+        s = app.wait(hid, lambda s: not s["isRunning"] and s["runs"], 30, "the holds to answer for themselves")
+        log = s["log"]
+        check("an Approval set to approve does so when nobody answers, and says so",
+              "Say yes: No answer after 1 minute, so it was approved" in log, str(log[-8:]))
+        check("one left at the default rejects", "Say no: No answer after 1 minute, so it was rejected" in log, str(log[-8:]))
+        check("a command nobody allowed in time is skipped, and the log says so",
+              "Touch: No answer after 1 minute, so its command was not run" in log, str(log[-8:]))
+        check("and it goes out Fail", list(s["results"]) == ["Skipped"] and "Nobody let the command run in time" in s["results"]["Skipped"],
+              str(s["results"]))
+        check("without running the command", not os.path.exists(os.path.join(app.project, "ran-unasked.txt")))
+        check("nothing is left held", s["holds"] == [], str(s["holds"]))
+    finally:
+        app.op(hid, "holdMinute")
+    app.op(hid, "close")
+
+    # Spending limit
+    sid = SPEND["id"]
+    with open(os.path.join(app.project, "count.sh"), "w") as script:
+        script.write("for i in $(seq 1 40); do echo $i; sleep 1; done\n")
+    app.open_flow(SPEND)
+    app.op(sid, "run")
+    started = time.time()
+    try:
+        s = app.wait(sid, lambda s: not s["isRunning"] and s["runs"], 90, "the run to stop at its spending limit")
+    except TimeoutError as e:
+        check("a run whose agent passes the spending limit is stopped", False, str(e)[:400])
+        app.op(sid, "stop")
+        s = app.state(sid)
+    took = time.time() - started
+    check("a run whose agent passes the spending limit is stopped before the agent finishes", s["runs"] and s["runs"][-1]["ending"] == "spentLimit"
+          and "Out" not in s["results"], f"{s['runs'][-1:]} {s['results']} after {took:.0f}s, cost {s['cost']}")
+    check("the log says why", any(line.startswith("Run stopped: its agents had spent about") and "more than this flow's limit" in line
+                                  for line in s["log"]), str(s["log"][-4:]))
+    check("its history says it stopped at its spending limit", s["runs"] and s["runs"][-1]["summary"] == "stopped at its spending limit", str(s["runs"][-1:]))
+    try:
+        s = app.wait(sid, lambda s: s["sessions"]["Spender"]["state"] == "idle", 20, "Spender to be interrupted")
+        check("the agent was interrupted", "SLEPT" not in (s["sessions"]["Spender"]["lastReply"] or ""), str(s["sessions"]["Spender"]))
+    except TimeoutError as e:
+        check("the agent was interrupted", False, str(e)[:300])
+    app.op(sid, "close")
+
+    # qb run
+    check("the app carries the qb helper", os.access(QB, os.X_OK), QB)
+    code, out, err, took = qb(app, app.project, "Cli", "hello from the shell")
+    check("qb run prints what reached End and exits 0", code == 0 and out == "hello from the shell\n", f"{code} {out!r} {err!r}")
+    code, out, err, took = qb(app, app.project, "cli")
+    check("with no message it runs the Start card's own command, and finds the flow by name in any case",
+          code == 0 and out == "from the start card\n", f"{code} {out!r} {err!r}")
+    check("the run is in the flow's history, noted as started from the command line",
+          len(app.state(CLI["id"])["runs"]) == 2 and "Started from the command line" in app.state(CLI["id"])["log"], str(app.state(CLI["id"])["runs"]))
+    wid = CLIWAIT["id"]
+    code, out, err, took = qb(app, app.project, "Cliwait", "--no-wait")
+    check("--no-wait returns at once with 0, saying on standard error that the run started, and prints no answer",
+          code == 0 and took < 10 and out == "" and err.startswith("Started run ") and "of Cliwait" in err,
+          f"{code} {out!r} {err!r} {took:.1f}s")
+    h = held(app, wid, "Gate")
+    check("and the run goes on in the app", h[0]["text"] == "wait for me", str(h))
+    code, out, err, took = qb(app, app.project, "Cliwait")
+    check("a flow that is already running is refused with 3 and why", code == 3 and "already going" in err, f"{code} {out!r} {err!r}")
+    app.op(wid, "stop")
+    app.wait(wid, lambda s: not s["isRunning"], 20, "the run to stop")
+
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "qb.sock"))
+    waiting = subprocess.Popen([QB, "run", app.project, "Cliwait", "approved from afar"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        held(app, wid, "Gate")
+        time.sleep(1)
+        check("qb run waits while the run is held", waiting.poll() is None)
+        app.op(wid, "hold", answer="approve")
+        out, err = waiting.communicate(timeout=30)
+        check("and prints the answer once it is approved", waiting.returncode == 0 and out == "approved from afar\n", f"{waiting.returncode} {out!r} {err!r}")
+    finally:
+        if waiting.poll() is None:
+            waiting.kill()
+    waiting = subprocess.Popen([QB, "run", app.project, "Cliwait"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        held(app, wid, "Gate")
+        app.op(wid, "stop")
+        out, err = waiting.communicate(timeout=30)
+        check("a run that is stopped exits 1 and says how it ended", waiting.returncode == 1 and out == "" and "stopped" in err,
+              f"{waiting.returncode} {out!r} {err!r}")
+    finally:
+        if waiting.poll() is None:
+            waiting.kill()
+    app.op(wid, "close")
+
+    code, out, err, took = qb(app, app.project, "Nope")
+    check("an unknown flow exits 3 and says so", code == 3 and "has no flow called Nope" in err, f"{code} {out!r} {err!r}")
+    stranger = tempfile.mkdtemp(prefix="qb-e2e-stranger-")
+    write(stranger, 0, CLI)
+    code, out, err, took = qb(app, stranger, "Cli")
+    projects = call(app.support, "*", {"op": "app"})["projects"]
+    check("a folder never opened in the app is refused with 3, and not opened",
+          code == 3 and "hasn't opened" in err and not any(os.path.realpath(p) == os.path.realpath(stranger) for p in projects),
+          f"{code} {out!r} {err!r} {projects}")
+    shutil.rmtree(stranger, ignore_errors=True)
+    code, out, err, took = qb(app, os.path.join(app.project, "no-such-folder"), "Cli")
+    check("a folder that isn't there exits 3", code == 3 and "There is no folder" in err, f"{code} {out!r} {err!r}")
+    code, out, err, took = qb(app, app.project)
+    check("a command without a flow prints how to use it and exits 2", code == 2 and "usage: qb run" in err, f"{code} {out!r} {err!r}")
+    env = dict(os.environ, QB_SOCKET=os.path.join(app.support, "nothing-here.sock"))
+    done = subprocess.run([QB, "run", app.project, "Cli"], env=env, capture_output=True, text=True, timeout=30)
+    check("with the app out of reach it exits 3 and says so", done.returncode == 3 and "Couldn't reach Queen Bee" in done.stderr,
+          f"{done.returncode} {done.stderr!r}")
+
+
 def level(n, last=4):
     """One link in a chain of flows that each run the next. The last just passes its message to its Output."""
     if n == last:
@@ -5384,6 +5644,7 @@ def scenario_browser_remote(app):
     def sessions():
         return (app.op("app", "remote-state").get("browsers") or [{}])[0]
 
+    device_id = None
     try:
         paired = device.until("paired")
         device_id = paired["device"]
@@ -5608,17 +5869,20 @@ def scenario_browser_remote(app):
               "isn't on this device's screen" in ((ask(act="press", x=5, y=5) or {}).get("refusal") or ""))
     finally:
         device.stop()
+        # Unpaired again, so a scenario after this one starts with no devices, as a Mac that has never paired one.
+        if device_id:
+            app.op("app", "remote-remove", device=device_id)
         app.op("app", "remote-on", on=False)
 
 
 def scenario_browser_mobile(app):
     print("browser-mobile: a card's browser on the iPad, from the real Mac: the picture, the address, a tap and typing", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("browser-mobile", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("browser-mobile", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     site = serve_pages()
     fid = BROWSER["id"]
@@ -5683,11 +5947,11 @@ def scenario_browser_mobile(app):
 def scenario_browser_canned():
     print("browser-canned: a card's browser on the iPad in each of its states, with a Mac made up inside the app", flush=True)
     if not os.path.exists(MOBILE_APP):
-        print("  SKIP  the iPad app isn't built. Build it first: ./scripts/build-mobile.sh", flush=True)
+        skip("browser-canned", "the iPad app isn't built. Build it first: ./scripts/build-mobile.sh")
         return
     udid = simulator()
     if udid is None:
-        print("  SKIP  this Mac has no iOS 26 Simulator to run the iPad app in", flush=True)
+        skip("browser-canned", "this Mac has no iOS 26 Simulator to run the iPad app in")
         return
     mobile = Mobile(udid)
     print(f"        screenshots: {mobile.shots}", flush=True)
@@ -5821,14 +6085,15 @@ def scenario_noclaude(project):
 
 
 def main():
-    wanted = sys.argv[1:] or ["guard", "settings", "remote", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "deep", "browser", "nobrowser", "noclaude"]
+    wanted = sys.argv[1:] or ["guard", "settings", "remote", "scroll", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "unasked", "subflow", "timed", "features", "deep", "browser", "nobrowser", "noclaude"]
     if not os.path.exists(APP):
         sys.exit("Build the app first: ./scripts/build.sh")
     sweep()
     project = tempfile.mkdtemp(prefix="qb-e2e-")
     # Guard is written first so it is the flow the app opens on, and the others wait their turn.
     for i, name in enumerate(["guard", "pan", "fanout", "switch", "loop", "exit", "apifail", "ask", "gates", "inner", "subflow", "timed"]
-                             + [f"level{n}" for n in range(5)] + ["doors", "slow", "edits", "unasked", "browser"]):
+                             + [f"level{n}" for n in range(5)] + ["doors", "slow", "edits", "unasked", "browser"]
+                             + ["features", "gaveup", "holds", "spend", "cli", "cliwait"]):
         write(project, i, FLOWS[name])
     print(f"project: {project}", flush=True)
 
@@ -5907,10 +6172,19 @@ def main():
             check("noclaude ran to the end", False, f"{type(e).__name__}: {e}"[:500])
 
     failed = [r for r in results if not r[1]]
-    print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed")
+    passed = len(results) - len(failed)
+    print(f"\n{passed} passed, {len(failed)} failed, {len(skipped)} skipped")
     for name, _, detail in failed:
         print(f"  FAIL {name}: {detail}")
-    sys.exit(1 if failed else 0)
+    for name, reason in skipped:
+        print(f"  SKIP {name}: {reason}")
+    # A scenario asked for by name that couldn't run hasn't been checked, and neither has a run where nothing passed.
+    named = bool(sys.argv[1:])
+    if named and skipped:
+        print(f"\n{len(skipped)} scenario{'s' if len(skipped) != 1 else ''} you named didn't run, so this run checked less than you asked.")
+    if not passed:
+        print("\nNothing passed, so nothing was checked.")
+    sys.exit(1 if failed or (named and skipped) or not passed else 0)
 
 
 if __name__ == "__main__":

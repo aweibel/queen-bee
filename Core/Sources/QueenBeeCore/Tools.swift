@@ -144,6 +144,12 @@ public enum Tools {
             try await host.mutate { try $0.removeLink(id) }
             return "Removed link \(id)."
 
+        case "update_flow":
+            guard let given = try arguments.number("spending_limit") else { throw FlowError.invalid("Give at least one setting to change") }
+            let limit = SpendingLimit.clamped(given)
+            try await host.mutate { $0.spendingLimit = limit }
+            return limit.map { "Runs of this flow now stop once they have spent more than \(Usage(cost: $0).price)." } ?? "This flow's runs have no spending limit now."
+
         case "run_flow":
             return try await host.runFlow(command: try arguments.string("command"))
 
@@ -203,6 +209,7 @@ public enum Tools {
                 fields["has_last_reply"] = .bool(!(status?.lastReply ?? "").isEmpty)
             case .start, .script:
                 fields["command"] = text(card.command)
+                if card.kind == .script { fields["wait_minutes"] = .number(Double(card.waitMinutes ?? 0)) }
                 if card.kind == .start, let trigger = card.trigger {
                     fields["schedule"] = .string(trigger.summary)
                     fields["schedule_on"] = .bool(snapshot.armedStartIDs.contains(card.id))
@@ -219,6 +226,13 @@ public enum Tools {
                 fields["save_to"] = text(card.saveTo)
             case .note, .approval:
                 fields["text"] = text(card.text)
+                if card.kind == .approval {
+                    fields["wait_minutes"] = .number(Double(card.waitMinutes ?? 0))
+                    fields["when_no_answer"] = .string(card.whenNoAnswer ?? "rejected")
+                }
+            case .forEach:
+                fields["split"] = .string((card.split ?? .auto).rawValue)
+                fields["max_items"] = .number(Double(card.maxItems ?? Engine.defaultItems))
             case .flow:
                 fields["flow"] = text(snapshot.innerFlowNames[card.id])
             case .and, .or:
@@ -239,6 +253,7 @@ public enum Tools {
         }
 
         return ["name": .string(flow.name), "is_running": .bool(snapshot.isRunning), "cards": .array(cards), "links": .array(links),
+                "spending_limit": flow.spendingLimit.map { .number($0) } ?? .null,
                 "other_flows": .array(snapshot.otherFlows.map(JSONValue.string)),
                 "sub_flow_levels_left": .number(Double(max(0, snapshot.subflowLevelsLeft))),
                 "sub_flows": .array(snapshot.subflows.map { ["name": .string($0.name), "levels_down": .number(Double($0.depth + 1))] })]
@@ -308,6 +323,13 @@ public enum Tools {
             name: "remove_link",
             description: "Remove a link by its id. Link ids are listed by get_flow and returned by add_link.",
             inputSchema: schema(["link": ["type": "string", "description": "The link's id."]], required: ["link"])),
+        ToolDefinition(
+            name: "update_flow",
+            description: """
+            Change the flow's own settings, not a card's. What each one does is under "Flow settings" in the \
+            capabilities reference. Pass only what should change.
+            """,
+            inputSchema: schema(Capabilities.flowSettingSchemas)),
         ToolDefinition(
             name: "run_flow",
             description: """
@@ -440,6 +462,15 @@ private struct Arguments: Sendable {
         }
         patch.value = try string("value")
         patch.maxTries = try int("max_tries")
+        patch.waitMinutes = try int("wait_minutes")
+        patch.whenNoAnswer = try string("when_no_answer")
+        if let raw = try string("split") {
+            guard let split = ItemSplit(rawValue: raw.lowercased()) else {
+                throw FlowError.invalid("Unknown split \"\(raw)\". Use one of: \(ItemSplit.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            patch.split = split
+        }
+        patch.maxItems = try int("max_items")
         patch.branches = try strings("branches")
         patch.template = try string("template")
         patch.saveTo = try string("save_to")
