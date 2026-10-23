@@ -152,15 +152,14 @@ public struct Workplace: Codable, Equatable, Sendable {
 
     // MARK: Showing it
 
-    /// The branch the setting puts the flow on, given the branch the project folder is on now.
-    public func branchShown(current: String?) -> String? {
-        kind == .worktree ? branch : (branch ?? current)
-    }
-
-    /// The words in the title bar's chip.
-    public func chipText(current: String?) -> String {
-        let name = branchShown(current: current) ?? "no branch"
-        return kind == .worktree ? "\(name) · worktree" : name
+    /// The words in the title bar's chip: where the flow works now, not what it is set to. The two differ
+    /// while a switch is refused, or after the folder was switched by hand. `current` is the branch the
+    /// project folder is on; `expected` names a worktree git hasn't listed yet.
+    public static func chipText(workRoot: URL, projectRoot: URL, current: String?, worktrees: [Worktree], expected: String?) -> String {
+        let here = workRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        if here == projectRoot.resolvingSymlinksInPath().standardizedFileURL.path { return current ?? "no branch" }
+        let listed = worktrees.first { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path == here }
+        return "\(listed?.branch ?? expected ?? "no branch") · worktree"
     }
 
     /// One sentence for the flow's log and the settings: where the flow works.

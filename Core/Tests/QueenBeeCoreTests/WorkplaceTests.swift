@@ -126,11 +126,19 @@ import Testing
         #expect(Workplace.folder(forCard: "~/notes", projectRoot: root, workRoot: worktree) == "~/notes")
     }
 
-    @Test func theChipSaysWhichBranchAndWhetherItIsAWorktree() {
-        #expect(Workplace.asItIs.chipText(current: "main") == "main")
-        #expect(Workplace.asItIs.chipText(current: nil) == "no branch")
-        #expect(Workplace.folder(on: "dev").chipText(current: "main") == "dev")
-        #expect(Workplace.worktree("qb/x", from: "main").chipText(current: "main") == "qb/x · worktree")
+    @Test func theChipSaysWhereTheFlowWorksNowNotWhatItIsSetTo() {
+        let root = URL(fileURLWithPath: "/Users/k/acme", isDirectory: true)
+        let worktree = Workplace.worktreeFolder(for: "qb/x", in: root)
+        let listed = [Workplace.Worktree(path: root.path, branch: "main"), Workplace.Worktree(path: worktree.path, branch: "qb/x")]
+        #expect(Workplace.chipText(workRoot: root, projectRoot: root, current: "main", worktrees: listed, expected: nil) == "main")
+        #expect(Workplace.chipText(workRoot: root, projectRoot: root, current: nil, worktrees: listed, expected: nil) == "no branch")
+        // Set to dev, but the switch was refused: the folder is still on main, and the chip says so.
+        #expect(Workplace.chipText(workRoot: root, projectRoot: root, current: "main", worktrees: listed, expected: "dev") == "main")
+        // Set to a worktree that couldn't be made: the flow still works in the folder.
+        #expect(Workplace.chipText(workRoot: root, projectRoot: root, current: "main", worktrees: listed, expected: "qb/y") == "main")
+        #expect(Workplace.chipText(workRoot: worktree, projectRoot: root, current: "main", worktrees: listed, expected: nil) == "qb/x · worktree")
+        #expect(Workplace.chipText(workRoot: worktree, projectRoot: root, current: "main", worktrees: [], expected: "qb/x") == "qb/x · worktree")
+        #expect(Workplace.chipText(workRoot: URL(fileURLWithPath: "/Users/k/acme/"), projectRoot: root, current: "dev", worktrees: listed, expected: nil) == "dev")
         #expect(Workplace.worktree("qb/x", from: nil).summary(project: "acme", current: "main") == "Works in a worktree of acme on qb/x.")
         #expect(Workplace.folder(on: "dev").summary(project: "acme", current: "main") == "Works in acme, switched to dev.")
     }

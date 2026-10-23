@@ -189,6 +189,9 @@ final class FlowController: ToolHost {
     @ObservationIgnored private var launchedIn: [String: String] = [:]
     /// Getting the flow's place ready, while that is under way: one at a time.
     @ObservationIgnored private var preparing: Task<String?, Never>?
+    /// The banner the last refusal to get the place ready put up, so that it comes down once the place is
+    /// ready, and no other banner does.
+    @ObservationIgnored private var workplaceRefusal: String?
 
     private var services: AppServices { AppServices.shared }
     var warnings: [String: String] { QueenBeeCore.warnings(for: flow) }
@@ -1843,10 +1846,13 @@ final class FlowController: ToolHost {
     /// True for a flow another flow runs, which can't choose a place of its own.
     var inheritsWorkplace: Bool { !nesting.outerFlows(of: flow.id).isEmpty }
 
-    /// The words of the title bar's chip, or nil outside a git repository.
+    /// The words of the title bar's chip, or nil outside a git repository: where the flow works now, which
+    /// is not what it is set to while a switch is refused.
     var workplaceChip: String? {
         guard let git else { return nil }
-        return (workplaceSetting.workplace ?? .asItIs).chipText(current: git.current)
+        let setting = workplaceSetting.workplace
+        return Workplace.chipText(workRoot: workRoot, projectRoot: project.root, current: git.current, worktrees: git.worktrees,
+                                  expected: setting?.kind == .worktree ? setting?.branch : nil)
     }
 
     /// Asked once, when a flow at the top of its chain first opens in a repository with no place chosen.
@@ -1925,7 +1931,12 @@ final class FlowController: ToolHost {
         let task = Task { await self.readyWorkplace() }
         preparing = task
         defer { preparing = nil }
-        return await task.value
+        let refusal = await task.value
+        if refusal == nil {
+            if let workplaceRefusal, banner == workplaceRefusal { banner = nil }
+            workplaceRefusal = nil
+        }
+        return refusal
     }
 
     private func readyWorkplace() async -> String? {
@@ -1975,6 +1986,7 @@ final class FlowController: ToolHost {
 
     private func refuse(_ why: String) -> String {
         banner = why
+        workplaceRefusal = why
         append(why, kept: true)
         return why
     }

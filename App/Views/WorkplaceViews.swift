@@ -21,6 +21,9 @@ struct WorkplaceChip: View {
             .padding(.vertical, 1)
             .background(Theme.select.ui.opacity(0.12), in: Capsule())
             .contentShape(Capsule())
+            // Its whole width, always: the title bar measures its item once, and would otherwise cut the
+            // branch short when the chip's words change after the flow opens.
+            .fixedSize()
         }
         .buttonStyle(.plain)
         .help("Where this flow works. Click to check or change it.")
