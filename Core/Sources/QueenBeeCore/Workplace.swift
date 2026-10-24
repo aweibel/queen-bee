@@ -144,6 +144,14 @@ public struct Workplace: Codable, Equatable, Sendable {
         }
     }
 
+    /// The branches checked out in a worktree other than the project folder. git keeps a branch in one
+    /// place at a time, so the project folder can't be switched to any of these.
+    public static func branchesOpenElsewhere(worktrees: [Worktree], projectRoot: URL) -> [String] {
+        let root = projectRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        return worktrees.filter { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path != root }
+            .compactMap(\.branch)
+    }
+
     public static func worktreePlan(branch: String, base: String, root: URL, worktrees: [Worktree], branches: [String]) -> WorktreePlan {
         if let have = worktrees.first(where: { $0.branch == branch }) { return .reuse(path: have.path) }
         let path = worktreeFolder(for: branch, in: root).path

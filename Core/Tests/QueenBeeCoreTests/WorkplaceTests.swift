@@ -126,6 +126,19 @@ import Testing
         #expect(Workplace.folder(forCard: "~/notes", projectRoot: root, workRoot: worktree) == "~/notes")
     }
 
+    @Test func theFolderCantBeSwitchedToABranchAWorktreeHasOpen() {
+        let root = URL(fileURLWithPath: "/Users/k/acme", isDirectory: true)
+        let listed = [
+            Workplace.Worktree(path: root.path, branch: "main"),
+            Workplace.Worktree(path: Workplace.worktreeFolder(for: "qb/x", in: root).path, branch: "qb/x"),
+            Workplace.Worktree(path: "/Users/k/elsewhere", branch: "dev"),
+            Workplace.Worktree(path: "/Users/k/detached", branch: nil),
+        ]
+        #expect(Workplace.branchesOpenElsewhere(worktrees: listed, projectRoot: root) == ["qb/x", "dev"])
+        #expect(Workplace.branchesOpenElsewhere(worktrees: listed, projectRoot: URL(fileURLWithPath: "/Users/k/acme/")) == ["qb/x", "dev"])
+        #expect(Workplace.branchesOpenElsewhere(worktrees: [listed[0]], projectRoot: root).isEmpty)
+    }
+
     @Test func theChipSaysWhereTheFlowWorksNowNotWhatItIsSetTo() {
         let root = URL(fileURLWithPath: "/Users/k/acme", isDirectory: true)
         let worktree = Workplace.worktreeFolder(for: "qb/x", in: root)

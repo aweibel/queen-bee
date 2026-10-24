@@ -1954,6 +1954,9 @@ final class FlowController: ToolHost {
             guard info.branches.contains(branch) else {
                 return refuse("\(branch) isn't a branch of \(project.name) any more. Choose another in the title bar.")
             }
+            if Workplace.branchesOpenElsewhere(worktrees: info.worktrees, projectRoot: root).contains(branch) {
+                return refuse("\(project.name) can't be switched to \(branch): it's open in a worktree, and git lets a branch be open in only one place. Have the flow work in that worktree instead, or choose another branch.")
+            }
             if let other = project.controllers.first(where: { $0 !== self && ($0.isRunning || $0.isStartingRun) && $0.workRoot == root }) {
                 return refuse("\(project.name) can't be switched to \(branch) while \(other.flow.name) is running in it.")
             }

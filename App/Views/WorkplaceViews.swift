@@ -113,6 +113,13 @@ struct WorkplaceForm: View {
             }
             note("Agents work in \(controller.project.name) itself" + (folderBranch.map { ", switched to \($0)." } ?? ", on whatever branch it is on.")
                  + " Your own edits there show up for them too.")
+            let elsewhere = openElsewhere(git)
+            if !elsewhere.isEmpty {
+                note("Not listed: \(elsewhere.joined(separator: ", ")). "
+                     + (elsewhere.count == 1 ? "It's" : "They're")
+                     + " open in a worktree, and git lets a branch be open in only one place. To use "
+                     + (elsewhere.count == 1 ? "it" : "one") + ", choose A worktree.")
+            }
         case .worktree:
             row("Branch") {
                 TextField("qb/my-flow", text: $worktreeBranch)
@@ -171,7 +178,13 @@ struct WorkplaceForm: View {
     private func folderOptions(_ git: Git.Info) -> [(value: String?, label: String)] {
         let current = git.current.map { " (\($0))" } ?? ""
         let asItIs: [(value: String?, label: String)] = [(value: nil, label: "Leave as it is" + current)]
-        return asItIs + git.branches.map { (value: Optional($0), label: $0) }
+        let elsewhere = openElsewhere(git)
+        return asItIs + git.branches.filter { !elsewhere.contains($0) }.map { (value: Optional($0), label: $0) }
+    }
+
+    /// Branches the project folder can't be switched to, because a worktree has them open.
+    private func openElsewhere(_ git: Git.Info) -> [String] {
+        Workplace.branchesOpenElsewhere(worktrees: git.worktrees, projectRoot: controller.project.root).filter { git.branches.contains($0) }
     }
 
     private func worktreeNote(_ git: Git.Info) -> String {
@@ -198,6 +211,8 @@ struct WorkplaceForm: View {
         let now = controller.workplaceSetting.workplace
         kind = now?.kind ?? .folder
         folderBranch = now?.kind == .folder ? now?.branch : nil
+        // A branch a worktree has opened since can't be offered, so the form starts from the folder as it is.
+        if let branch = folderBranch, let git, openElsewhere(git).contains(branch) { folderBranch = nil }
         worktreeBranch = now?.kind == .worktree ? (now?.branch ?? "") : Workplace.suggestedBranch(forFlowNamed: controller.flow.name, id: controller.flow.id)
         base = now?.base ?? git?.defaultBranch ?? "main"
         isReady = true
