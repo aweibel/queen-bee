@@ -1,6 +1,6 @@
 {
   "name": "qb-link",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Queen Bee: hands each agent's finished reply to the next agents in its flow, and keeps agents to the links drawn on the canvas",
   "author": { "name": "Keith Vaz" }
 }

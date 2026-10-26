@@ -6,6 +6,8 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-26
+
 ### Fixed
 
 - Turning on a schedule that came with the flow, in its file or from an undo, starts it at once. Before, the Start card kept saying "off" and nothing ran until Queen Bee was opened again.
@@ -269,7 +271,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/bamboozledkitty/queen-bee/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...v0.5.0

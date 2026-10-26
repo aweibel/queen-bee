@@ -7,7 +7,7 @@ public enum MCPServer {
     static let defaultProtocolVersion = "2025-06-18"
     /// The app's version, the same as `MARKETING_VERSION` in project.yml and the plugin's manifest.
     /// `MCPTests` and `./scripts/release.sh` fail when the three disagree.
-    public static let version = "0.7.0"
+    public static let version = "0.7.1"
 
     /// The orchestrator's reply to one message, or nil when it was a notification and expects none.
     public static func handle(_ message: JSONValue, host: any ToolHost) async -> JSONValue? {
