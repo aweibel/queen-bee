@@ -225,13 +225,23 @@ public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     /// How the run ended, more closely than `outcome` says. Nil for a run kept before endings were told apart.
     /// A device that doesn't know of it reads the record as it always has.
     public var ending: RunEnding?
+    /// The run's number in its flow, counting from 1 and never reused, so "#12" stays #12 after older runs are let go.
+    /// Nil for a run kept before runs were numbered.
+    public var number: Int?
 
     public init(id: String, started: Date, ended: Date, outcome: Outcome, command: String, log: [LogLine],
                 results: [String: String], marks: [String: RunMark], linkPasses: [String: Int],
-                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil, ending: RunEnding? = nil) {
+                messages: [String: [LinkMessage]], handOffs: Int, usage: [String: Usage]? = nil, ending: RunEnding? = nil,
+                number: Int? = nil) {
         self.id = id; self.started = started; self.ended = ended; self.outcome = outcome; self.command = command
         self.log = log; self.results = results; self.marks = marks; self.linkPasses = linkPasses
-        self.messages = messages; self.handOffs = handOffs; self.usage = usage; self.ending = ending
+        self.messages = messages; self.handOffs = handOffs; self.usage = usage; self.ending = ending; self.number = number
+    }
+
+    /// The number the next run of a flow gets, after `runs`: one past the highest so far, or past their count
+    /// when none of them has a number yet.
+    public static func nextNumber(after runs: [RunRecord]) -> Int {
+        (runs.compactMap(\.number).max() ?? runs.count) + 1
     }
 
     public var cost: Usage { (usage ?? [:]).values.reduce(Usage(), +) }

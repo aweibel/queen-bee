@@ -37,7 +37,9 @@ struct WorkspaceView: View {
                         .frame(width: DS.Size.sidebarWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
-                panel
+                Group {
+                    if services.place == .flow { panel } else { PlaceView(place: services.place, showsSidebar: $showsSidebar) }
+                }
                     .insetPanel()
                     .padding(.vertical, DS.Size.panelInset)
                     .padding(.trailing, DS.Size.panelInset)

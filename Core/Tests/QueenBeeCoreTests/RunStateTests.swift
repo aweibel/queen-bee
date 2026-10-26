@@ -54,3 +54,29 @@ import Testing
         #expect("\(FlowActivity.needsYou)" == "needsYou")
     }
 }
+
+@Suite struct RunNumberTests {
+    private func run(_ number: Int?) -> RunRecord {
+        RunRecord(id: UUID().uuidString, started: Date(), ended: Date(), outcome: .finished, command: "", log: [],
+                  results: [:], marks: [:], linkPasses: [:], messages: [:], handOffs: 0, number: number)
+    }
+
+    @Test func theFirstRunIsOne() {
+        #expect(RunRecord.nextNumber(after: []) == 1)
+    }
+
+    @Test func numbersCarryOnPastTheHighest() {
+        #expect(RunRecord.nextNumber(after: [run(7), run(8)]) == 9)
+    }
+
+    /// Runs kept before numbering count as numbered by their place, so the first numbered run follows them.
+    @Test func runsFromBeforeNumberingAreCounted() {
+        #expect(RunRecord.nextNumber(after: [run(nil), run(nil), run(nil)]) == 4)
+    }
+
+    @Test func aRunWithoutANumberStillReads() throws {
+        let data = try JSONEncoder().encode(run(nil))
+        #expect(!String(decoding: data, as: UTF8.self).contains("number"))
+        #expect(try JSONDecoder().decode(RunRecord.self, from: data).number == nil)
+    }
+}

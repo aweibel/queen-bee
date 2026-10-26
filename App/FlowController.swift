@@ -577,7 +577,8 @@ final class FlowController: ToolHost {
         let outcome: RunRecord.Outcome = marks.values.contains(where: \.failed) ? .failed : ending?.outcome ?? .finished
         let record = RunRecord(id: run.id, started: run.started, ended: Date(), outcome: outcome, command: run.command,
                                log: Array(log.dropFirst(runLogStart)), results: results, marks: marks, linkPasses: linkPasses,
-                               messages: messages, handOffs: handOffs, ending: ending)
+                               messages: messages, handOffs: handOffs, ending: ending,
+                               number: RunRecord.nextNumber(after: runs))
         runs.append(record)
         if runs.count > Self.keptRuns { runs.removeFirst(runs.count - Self.keptRuns) }
         // The messages a link carried are kept for the newest few runs only; older runs keep their path and answers.

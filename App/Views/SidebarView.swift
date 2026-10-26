@@ -19,6 +19,7 @@ struct SidebarView: View {
             Color.clear.frame(height: 30)
             topRow
             if isSearching { searchField }
+            places
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
@@ -70,6 +71,39 @@ struct SidebarView: View {
         } message: {
             Text("Its agents are stopped and the flow's file goes to the Trash, so you can put it back from there with its run history. What the agents said stays in Claude Code's history.")
         }
+    }
+
+    /// What is going on across every flow: what waits on you, the runs, the schedules, and the devices.
+    private var places: some View {
+        let waiting = services.needingYou.count
+        let schedules = services.allFlows.reduce(0) { count, flow in count + flow.flow.cards.filter { $0.kind == .start && flow.isArmed($0) }.count }
+        let devices = RemoteHost.shared.sessions.count
+        return VStack(spacing: 1) {
+            place(.needsYou, "Needs you", icon: "tray") {
+                if waiting > 0 { CountBadge(waiting, tone: .live) }
+            }
+            place(.runs, "Runs", icon: "play.circle") {
+                if services.allFlows.contains(where: \.isRunning) { StatusDot(.live, size: 6) }
+            }
+            place(.schedules, "Schedules", icon: "clock") {
+                if schedules > 0 { Text("\(schedules)").textRole(.caption).foregroundStyle(Palette.textFaint.color) }
+            }
+            place(.devices, "Devices", icon: "ipad.and.iphone") {
+                if devices > 0 { StatusDot(.pass, size: 6) }
+            }
+        }
+        .padding(.horizontal, DS.Space.s)
+        .padding(.bottom, DS.Space.xs)
+    }
+
+    private func place<Trailing: View>(_ place: AppServices.Place, _ title: String, icon: String,
+                                       @ViewBuilder trailing: () -> Trailing) -> some View {
+        Button { services.place = place } label: {
+            NavRow(title, selected: services.place == place) {
+                Image(systemName: icon).font(.system(size: 12, weight: .medium))
+            } trailing: { trailing() }
+        }
+        .buttonStyle(.plain)
     }
 
     /// The app's menu, then search and a new flow.
@@ -206,7 +240,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func row(for controller: FlowController, outer: FlowController? = nil) -> some View {
         let id = controller.flow.id
-        let selected = services.selectedFlowID == id
+        let selected = services.place == .flow && services.selectedFlowID == id
         Group {
             if renaming == id {
                 TextField("Name", text: $draftName)
@@ -239,6 +273,7 @@ struct SidebarView: View {
                 controller.showWholeFlowSoon()
             } else {
                 services.selectedFlowID = id
+                services.place = .flow
             }
         }
         .contextMenu {

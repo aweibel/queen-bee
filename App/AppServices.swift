@@ -22,9 +22,14 @@ final class AppServices {
 
     /// The project folders in the sidebar, in the order they were added.
     private(set) var projects: [ProjectModel] = []
+    /// The places in the sidebar above the projects, which show what is going on across every flow.
+    enum Place: Hashable { case flow, needsYou, runs, schedules, devices }
+    /// What the window shows: a flow, or one of the places. Picking a flow goes back to it.
+    var place = Place.flow
     /// The flow on the canvas.
     var selectedFlowID: String? {
         didSet {
+            place = .flow
             guard selectedFlowID != oldValue else { return }
             // Going into a sub-flow sets the trail first. Any other change of flow starts a new one.
             if flowTrail.last != selectedFlowID { flowTrail = selectedFlowID.map { [$0] } ?? [] }
