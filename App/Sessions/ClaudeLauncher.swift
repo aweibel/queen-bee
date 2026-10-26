@@ -125,9 +125,10 @@ enum ClaudeLauncher {
 
     static func orchestratorName(for flow: Flow) -> String { "\(flow.name) orchestrator" }
 
-    /// The folder an agent card's session runs in: its own, or else the project's.
-    static func folder(for card: Card, projectRoot: URL) -> String {
-        card.cwd?.isEmpty == false ? card.cwd! : projectRoot.path
+    /// The folder an agent card's session runs in: its own, or else where the flow works, which is the
+    /// project folder or a worktree of it. See `Workplace.folder(forCard:projectRoot:workRoot:)`.
+    static func folder(for card: Card, projectRoot: URL, workRoot: URL? = nil) -> String {
+        Workplace.folder(forCard: card.cwd, projectRoot: projectRoot, workRoot: workRoot ?? projectRoot)
     }
 
     /// The session behind a card or orchestrator: resumed when Claude Code has its transcript for the folder it
@@ -173,10 +174,10 @@ enum ClaudeLauncher {
         ]
     }
 
-    static func agent(flow: Flow, card: Card, sessionID: String, projectRoot: URL, services: AppServices,
+    static func agent(flow: Flow, card: Card, sessionID: String, projectRoot: URL, workRoot: URL? = nil, services: AppServices,
                       environment: ResolvedEnvironment) -> LaunchSpec? {
         guard let claude = environment.claude else { return nil }
-        let cwd = folder(for: card, projectRoot: projectRoot)
+        let cwd = folder(for: card, projectRoot: projectRoot, workRoot: workRoot)
         var args = common(sessionID: sessionID, directory: cwd, name: card.name,
                           systemPrompt: agentPrompt(flow: flow, card: card), services: services)
         // These come from a flow file, which may not be one this app wrote. Anything that could be read
@@ -198,20 +199,21 @@ enum ClaudeLauncher {
                     services: services, environment: environment)
     }
 
-    static func orchestrator(flow: Flow, sessionID: String, projectRoot: URL, services: AppServices,
+    static func orchestrator(flow: Flow, sessionID: String, projectRoot: URL, workRoot: URL? = nil, services: AppServices,
                              environment: ResolvedEnvironment) -> LaunchSpec? {
         guard let claude = environment.claude else { return nil }
         let key = "\(flow.id)/orchestrator"
+        let directory = (workRoot ?? projectRoot).path
         // The session's secret is in its environment (see `spec`) and Claude Code fills these in from there.
         // Written out here it would sit on the command line, where `ps` shows it to every other process.
         let server: JSONValue = ["mcpServers": ["queenbee": [
             "command": .string(services.helperPath), "args": ["mcp"],
             "env": ["QB_SOCKET": "${QB_SOCKET}", "QB_SESSION": "${QB_SESSION}"],
         ]]]
-        let args = common(sessionID: sessionID, directory: projectRoot.path, name: orchestratorName(for: flow),
+        let args = common(sessionID: sessionID, directory: directory, name: orchestratorName(for: flow),
                           systemPrompt: orchestratorPrompt(flow: flow), services: services)
             + ["--mcp-config", server.text(), "--allowedTools", "mcp__queenbee"]
-        return spec(claude: claude, args: args, cwd: projectRoot.path, key: key, sessionID: sessionID,
+        return spec(claude: claude, args: args, cwd: directory, key: key, sessionID: sessionID,
                     services: services, environment: environment)
     }
 

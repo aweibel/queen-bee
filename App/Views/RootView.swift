@@ -115,6 +115,15 @@ struct WorkspaceView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
         .toolbar(removing: .title)
+        // The first time a flow opens in a git repository, it asks where it works. Its agents wait for the answer.
+        .sheet(isPresented: Binding(get: { services.current?.asksForWorkplace == true }, set: { shown in
+            guard !shown, let controller = services.current, controller.asksForWorkplace else { return }
+            Task { await controller.answerWorkplaceQuestion(nil) }
+        })) {
+            if let controller = services.current {
+                WorkplaceForm(controller: controller, isFirstRun: true) {}
+            }
+        }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(minWidth: 900, minHeight: 560)
     }
@@ -263,10 +272,17 @@ private struct TitlePlate: View {
                 }
             }
             if !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    // The branch the flow works on, or its worktree's: one place for the whole flow.
+                    if let controller, let chip = controller.workplaceChip {
+                        Text("·").font(.system(size: 11)).foregroundStyle(.secondary)
+                        WorkplaceChip(controller: controller, text: chip)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12)

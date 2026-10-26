@@ -176,6 +176,22 @@ final class FlowController: ToolHost {
     var isStartingRun: Bool { runsStarting > 0 }
     /// True while a paired device's Undo or Redo is being done.
     @ObservationIgnored private var undoingForDevice = false
+    /// Where the flow's agents, its orchestrator, its scripts and its saved answers work: the project folder,
+    /// or a worktree of it. See `Workplace`.
+    private(set) var workRoot: URL
+    /// The project's repository as last read. Nil when the project isn't in one, or it hasn't been read yet.
+    private(set) var git: Git.Info?
+    /// The flow is asking where it should work, the first time it opens. Its agents wait for the answer.
+    var asksForWorkplace = false
+    /// The person said "Not now" to that question: it isn't asked again until the app is next opened.
+    @ObservationIgnored private var workplaceDeferred = false
+    /// The folder each session was started in, by card id, with the orchestrator under its key.
+    @ObservationIgnored private var launchedIn: [String: String] = [:]
+    /// Getting the flow's place ready, while that is under way: one at a time.
+    @ObservationIgnored private var preparing: Task<String?, Never>?
+    /// The banner the last refusal to get the place ready put up, so that it comes down once the place is
+    /// ready, and no other banner does.
+    @ObservationIgnored private var workplaceRefusal: String?
 
     private var services: AppServices { AppServices.shared }
     var warnings: [String: String] { QueenBeeCore.warnings(for: flow) }
@@ -206,6 +222,7 @@ final class FlowController: ToolHost {
         self.flow = flow
         self.fileURL = fileURL
         self.project = project
+        self.workRoot = project.root
         undoManager.groupsByEvent = false
         loadHistory()
         reschedule()
@@ -609,6 +626,13 @@ final class FlowController: ToolHost {
         heldBack.removeAll()
         Task {
             while services.environment == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            // The first time a flow opens in a repository, it asks where it works before any agent starts.
+            git = await Git.info(at: project.root)
+            if shouldAskForWorkplace {
+                asksForWorkplace = true
+                return
+            }
+            await prepareWorkplace()
             startMissingSessions()
             await refreshUsage()
         }
@@ -620,7 +644,8 @@ final class FlowController: ToolHost {
     func startAgents() {
         guard isOpen else { return open() }
         heldBack.removeAll()
-        if services.environment != nil { startMissingSessions() }
+        // Not before the person has said where the flow works.
+        if services.environment != nil, !asksForWorkplace { startMissingSessions() }
     }
 
     /// True when the flow is open and has an agent whose session is waiting to be asked for.
@@ -805,6 +830,8 @@ final class FlowController: ToolHost {
         }
         var back = old
         back.orchestratorSessionID = current.orchestratorSessionID
+        // Where the flow works isn't part of the graph either: Undo never moves it.
+        back.workplace = current.workplace
         for i in back.cards.indices {
             guard let now = current.card(back.cards[i].id) else { continue }
             back.cards[i].sessionID = now.sessionID
@@ -1214,7 +1241,7 @@ final class FlowController: ToolHost {
         heldBack.remove(id)
         // The id ends up on the command line and in a file name, so one from a flow file has to be a real id.
         if flow.cards[index].sessionID.flatMap(UUID.init(uuidString:)) == nil { flow.cards[index].sessionID = UUID().uuidString.lowercased() }
-        let folder = ClaudeLauncher.folder(for: flow.cards[index], projectRoot: project.root)
+        let folder = ClaudeLauncher.folder(for: flow.cards[index], projectRoot: project.root, workRoot: workRoot)
         let start = ClaudeLauncher.transcriptStart(for: flow.cards[index].sessionID!, in: folder)
         if start == .freshWithNewID {
             // Its conversation was had in another folder, and Claude Code only carries one on in the folder it began in.
@@ -1227,17 +1254,18 @@ final class FlowController: ToolHost {
             services.noteBorn(session: card.sessionID!, instructions: ClaudeLauncher.agentPrompt(flow: flow, card: card))
         }
         guard let spec = ClaudeLauncher.agent(flow: flow, card: card, sessionID: card.sessionID!, projectRoot: project.root,
-                                              services: services, environment: environment) else {
+                                              workRoot: workRoot, services: services, environment: environment) else {
             banner = services.problem
             return
         }
         freshSession(for: id).start(spec, settings: AgentSettings(card))
+        launchedIn[id] = spec.workingDirectory
     }
 
     func startOrchestrator() {
         guard let environment = services.environment else { return }
         if flow.orchestratorSessionID.flatMap(UUID.init(uuidString:)) == nil { flow.orchestratorSessionID = UUID().uuidString.lowercased() }
-        let start = ClaudeLauncher.transcriptStart(for: flow.orchestratorSessionID!, in: project.root.path)
+        let start = ClaudeLauncher.transcriptStart(for: flow.orchestratorSessionID!, in: workRoot.path)
         if start == .freshWithNewID {
             // The project folder moved since the orchestrator's conversation began, so it begins a new one here.
             flow.orchestratorSessionID = UUID().uuidString.lowercased()
@@ -1247,11 +1275,12 @@ final class FlowController: ToolHost {
             services.noteBorn(session: flow.orchestratorSessionID!, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
         }
         guard let spec = ClaudeLauncher.orchestrator(flow: flow, sessionID: flow.orchestratorSessionID!, projectRoot: project.root,
-                                                     services: services, environment: environment) else {
+                                                     workRoot: workRoot, services: services, environment: environment) else {
             banner = services.problem
             return
         }
         freshSession(for: Self.orchestratorKey).start(spec, instructions: ClaudeLauncher.orchestratorPrompt(flow: flow))
+        launchedIn[Self.orchestratorKey] = spec.workingDirectory
     }
 
     /// The orchestrator is running with instructions that are no longer the flow's, because the flow was renamed
@@ -1325,8 +1354,11 @@ final class FlowController: ToolHost {
             parts.append("[Queen Bee] Your instructions have changed since this conversation began. These are the current ones. They replace the earlier ones wherever the two differ.\n\n\(instructions)")
         }
         if who == Self.orchestratorKey {
-            let file = project.root.appendingPathComponent(Capabilities.projectFile)
+            // The orchestrator reads it in the folder it works in, which may be a worktree.
+            let file = workRoot.appendingPathComponent(Capabilities.projectFile)
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let ignore = file.deletingLastPathComponent().appendingPathComponent(".gitignore")
+            if !FileManager.default.fileExists(atPath: ignore.path) { try? Data("*\n".utf8).write(to: ignore) }
             try? Data(Capabilities.file.utf8).write(to: file, options: .atomic)
             if services.referenceChanged(forSession: id, afresh: afresh) {
                 parts.append("[Queen Bee] The app's capabilities reference is the file \(Capabilities.projectFile) in this folder. The app has just written it from its own code, and you have not read this version. Read the whole file with the Read tool before you answer or build anything. It replaces what you remember about the app's cards, settings, tools and limits, and anything said about them earlier in this conversation.")
@@ -1510,6 +1542,8 @@ final class FlowController: ToolHost {
             runsStarting -= 1
             subflowTurns.somethingEnded()
         }
+        // A run only begins where the flow is set to work. The branch or worktree can have changed since it opened.
+        if !isRunning, let refusal = await prepareWorkplace() { return RunStart(began: false, status: refusal) }
         isClosed = false
         // Run directly, a flow goes by its own place under the flow at the top. Run by a Flow
         // card, it is handed what is left of the run's allowance.
@@ -1547,14 +1581,19 @@ final class FlowController: ToolHost {
             banner = "A run is already going. Stop it before starting another."
             return RunStart(began: false, status: banner ?? "")
         }
-        isClosed = false
-        runLevelsLeft = levelsLeft
-        runInside = []
         runsStarting += 1
         defer {
             runsStarting -= 1
             subflowTurns.somethingEnded()
         }
+        if let refusal = await prepareWorkplace() { return RunStart(began: false, status: refusal) }
+        guard !isRunning else {
+            banner = "A run is already going. Stop it before starting another."
+            return RunStart(began: false, status: banner ?? "")
+        }
+        isClosed = false
+        runLevelsLeft = levelsLeft
+        runInside = []
         let output = await engine.start(flow: flow, at: cardID, message: message, fromName: sender)
         if let id = output.runID {
             clearForRun()
@@ -1795,6 +1834,180 @@ final class FlowController: ToolHost {
         registerUndo(from: old, on ? "Tell Orchestrator of Runs" : "Stop Telling Orchestrator of Runs")
     }
 
+    // MARK: Where the flow works
+
+    /// The setting the flow works by, and the flow at the top it comes from when it isn't its own: a flow that
+    /// another flow runs works wherever that one does.
+    var workplaceSetting: (workplace: Workplace?, from: FlowController?) {
+        let found = Workplace.effective(for: flow.id, in: project.controllers.map(\.flow), nesting: nesting)
+        return (found.workplace, found.from.flatMap(project.controller))
+    }
+
+    /// True for a flow another flow runs, which can't choose a place of its own.
+    var inheritsWorkplace: Bool { !nesting.outerFlows(of: flow.id).isEmpty }
+
+    /// The words of the title bar's chip, or nil outside a git repository: where the flow works now, which
+    /// is not what it is set to while a switch is refused.
+    var workplaceChip: String? {
+        guard let git else { return nil }
+        let setting = workplaceSetting.workplace
+        return Workplace.chipText(workRoot: workRoot, projectRoot: project.root, current: git.current, worktrees: git.worktrees,
+                                  expected: setting?.kind == .worktree ? setting?.branch : nil)
+    }
+
+    /// Asked once, when a flow at the top of its chain first opens in a repository with no place chosen.
+    private var shouldAskForWorkplace: Bool {
+        git != nil && flow.workplace == nil && !inheritsWorkplace && !workplaceDeferred && !TestHarness.isEnabled
+    }
+
+    /// Reads the repository again, for the chip's popover.
+    func refreshGit() async {
+        git = await Git.info(at: project.root)
+    }
+
+    /// The answer to the first-run question. Nil is "Not now": the flow works in the project folder as it is,
+    /// and is asked again the next time the app opens.
+    func answerWorkplaceQuestion(_ chosen: Workplace?) async {
+        asksForWorkplace = false
+        if let chosen {
+            await setWorkplace(chosen)
+        } else {
+            workplaceDeferred = true
+            await prepareWorkplace()
+        }
+        guard isOpen else { return }
+        startMissingSessions()
+        await refreshUsage()
+    }
+
+    /// Chooses where the whole flow works, and moves its sessions there. Not while it runs, and not for a
+    /// flow another flow runs: that one goes by the flow at the top.
+    func setWorkplace(_ wanted: Workplace) async {
+        guard !inheritsWorkplace else {
+            banner = "\(flow.name) works wherever the flow that runs it does. Change it there."
+            return
+        }
+        guard !isRunning, !isStartingRun else {
+            banner = "Stop the run before changing where the flow works."
+            return
+        }
+        if let branch = wanted.branch, let problem = Workplace.problem(branchName: branch) {
+            banner = problem
+            return
+        }
+        let busy = flow.cards.filter(isBusy)
+        if !busy.isEmpty, !TestHarness.isEnabled {
+            let names = busy.map(\.name).joined(separator: ", ")
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Move the flow and stop \(names)?"
+            alert.informativeText = "Agents in the middle of a task are restarted in the new place, and the work they were doing is cut short."
+            alert.addButton(withTitle: "Move")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        let old = flow.workplace
+        flow.workplace = wanted
+        if let refusal = await prepareWorkplace() {
+            // Nothing moved, so the setting goes back to what it was.
+            flow.workplace = old
+            banner = refusal
+            return
+        }
+        banner = nil
+        append(wanted.summary(project: project.name, current: git?.current), kept: true)
+        // The flows this one runs work where it does.
+        for inner in nesting.subflows(of: flow.id).compactMap({ project.controller($0.id) }) where inner.isOpen && !inner.isRunning {
+            await inner.prepareWorkplace()
+        }
+    }
+
+    /// Gets the flow's place ready: the project folder switched to its branch, or its worktree found or made.
+    /// Sessions started somewhere else are moved there. Nil when it is ready, else why not, which is also put
+    /// in the banner and the log.
+    @discardableResult
+    func prepareWorkplace() async -> String? {
+        if let preparing { return await preparing.value }
+        let task = Task { await self.readyWorkplace() }
+        preparing = task
+        defer { preparing = nil }
+        let refusal = await task.value
+        if refusal == nil {
+            if let workplaceRefusal, banner == workplaceRefusal { banner = nil }
+            workplaceRefusal = nil
+        }
+        return refusal
+    }
+
+    private func readyWorkplace() async -> String? {
+        let root = project.root
+        guard let info = await Git.info(at: root) else {
+            git = nil
+            return move(to: root)
+        }
+        git = info
+        let setting = workplaceSetting.workplace ?? .asItIs
+        switch setting.kind {
+        case .folder:
+            guard let branch = setting.branch, branch != info.current else { return move(to: root) }
+            if let problem = Workplace.problem(branchName: branch) { return refuse("The flow's branch can't be used: \(problem)") }
+            guard info.branches.contains(branch) else {
+                return refuse("\(branch) isn't a branch of \(project.name) any more. Choose another in the title bar.")
+            }
+            if Workplace.branchesOpenElsewhere(worktrees: info.worktrees, projectRoot: root).contains(branch) {
+                return refuse("\(project.name) can't be switched to \(branch): it's open in a worktree, and git lets a branch be open in only one place. Have the flow work in that worktree instead, or choose another branch.")
+            }
+            if let other = project.controllers.first(where: { $0 !== self && ($0.isRunning || $0.isStartingRun) && $0.workRoot == root }) {
+                return refuse("\(project.name) can't be switched to \(branch) while \(other.flow.name) is running in it.")
+            }
+            if await Git.hasUncommittedChanges(at: root) {
+                return refuse("\(project.name) has changes that aren't committed, so it isn't switched to \(branch). Commit or stash them, or have the flow work in a worktree.")
+            }
+            if let error = await Git.switchBranch(to: branch, at: root) { return refuse("\(project.name) couldn't be switched to \(branch): \(error)") }
+            append("Switched \(project.name) to \(branch)", kept: true)
+            git = await Git.info(at: root) ?? info
+            return move(to: root)
+        case .worktree:
+            guard let branch = setting.branch, Workplace.problem(branchName: branch) == nil else {
+                return refuse("The flow's worktree has no branch git allows. Choose one in the title bar.")
+            }
+            let base = setting.base ?? info.defaultBranch
+            let plan = Workplace.worktreePlan(branch: branch, base: base, root: root, worktrees: info.worktrees, branches: info.branches)
+            if case .create = plan {
+                guard Workplace.problem(branchName: base) == nil, info.branches.contains(base) else {
+                    return refuse("A worktree on \(branch) is made from \(base), which isn't a branch of \(project.name). Choose another in the title bar.")
+                }
+            }
+            if let error = await Git.make(plan, at: root) { return refuse("The worktree on \(branch) couldn't be made: \(error)") }
+            if plan.gitArguments != nil {
+                append("Made a worktree on \(branch) for the flow", kept: true)
+                git = await Git.info(at: root) ?? info
+            }
+            return move(to: URL(fileURLWithPath: plan.path, isDirectory: true))
+        }
+    }
+
+    private func refuse(_ why: String) -> String {
+        banner = why
+        workplaceRefusal = why
+        append(why, kept: true)
+        return why
+    }
+
+    /// Makes `target` where the flow works, and restarts every live session that was started somewhere else.
+    private func move(to target: URL) -> String? {
+        workRoot = target
+        guard services.environment != nil else { return nil }
+        for (key, folder) in launchedIn where sessions[key]?.isLive == true {
+            if key == Self.orchestratorKey {
+                if folder != workRoot.path { startOrchestrator() }
+            } else if let card = flow.card(key), ClaudeLauncher.folder(for: card, projectRoot: project.root, workRoot: workRoot) != folder {
+                startSession(forCard: key)
+            }
+        }
+        return nil
+    }
+
     /// How the project's flows nest, as of now. Built on each call, so work that asks several
     /// questions at once should take one and keep it.
     var nesting: Nesting { project.nesting }
@@ -1947,7 +2160,7 @@ final class FlowController: ToolHost {
 
     private func runScript(_ hold: PendingHold) {
         guard let environment = services.environment else { return resolve(hold.id, port: "fail", text: "Queen Bee was still starting up.") }
-        let folder = project.root
+        let folder = workRoot
         holdTasks[hold.id] = Task {
             let result = await ScriptRunner.run(hold.command, message: hold.text, from: hold.from, in: folder, environment: environment)
             guard !Task.isCancelled else { return }
@@ -2076,7 +2289,7 @@ final class FlowController: ToolHost {
 
     private func save(_ text: String, to file: String, card: String) {
         // Symlinks are followed before the checks, so a link inside the project can't point the save somewhere else.
-        let root = project.root.resolvingSymlinksInPath()
+        let root = workRoot.resolvingSymlinksInPath()
         let url = Self.resolvingExistingPart(of: root.appendingPathComponent(file).standardizedFileURL)
         guard url.path.hasPrefix(root.path + "/") else {
             append("\(card) didn't save: \(file) is outside the project folder")

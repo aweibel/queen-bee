@@ -202,6 +202,9 @@ public struct Flow: Codable, Identifiable, Equatable, Sendable {
     /// A run that has spent more than this many dollars, as the app reckons its agents' use at API prices, is
     /// stopped. Nil for no limit.
     public var spendingLimit: Double?
+    /// The branch or worktree the whole flow works in. Nil until the person has chosen, and for a
+    /// flow from before the setting: it then works in the project folder as it is.
+    public var workplace: Workplace?
 
     public init(id: String = Flow.newID(), name: String, cards: [Card] = [], links: [Link] = []) {
         self.version = Flow.currentVersion

@@ -6,6 +6,10 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Each flow works on one branch, in the project folder or in a worktree of its own. The first time a flow opens in a git repository it asks where it should work, and its agents wait for the answer. After that the chip after the project's name in the title bar shows the branch, with "worktree" when it is one, and opens the setting to check or change it. A worktree is made from the branch you pick, main by default, in the project's `.queenbee/worktrees` folder, and used again from then on. Sub-flows work wherever the flow at the top does. Runs, schedules and `qb run` all go by the setting.
+
 ## [0.6.0] - 2026-10-21
 
 ### Added
