@@ -10,29 +10,31 @@ import SwiftUI
 /// "the run passed through". Red is "it stopped here". Cobalt is selected or focused.
 enum Theme {
     // MARK: Colour, as light and dark pairs
-    // The colours from before the redesign, for the screens that haven't moved to `Palette` yet.
+    // The Mac's long-standing names for the roles in `Palette`. New code can take `Palette` directly.
 
-    static let paper = Palette.Classic.paper.platform
-    static let surface = Palette.Classic.surface.platform
-    static let bar = Palette.Classic.bar.platform
-    static let barHover = Palette.Classic.barHover.platform
-    static let ink = Palette.Classic.ink.platform
-    static let inkSecondary = Palette.Classic.inkSecondary.platform
-    static let hairline = Palette.Classic.hairline.platform
-    /// The canvas's dot matrix.
-    static let dot = Palette.Classic.dot.platform
+    /// Behind a panel's content.
+    static let paper = Palette.panel.platform
+    /// A panel, a popover, a sheet.
+    static let surface = Palette.overlay.platform
+    /// A strip or a row set off from the panel: a header, a field.
+    static let bar = Palette.raised.platform
+    static let barHover = Palette.hover.platform
+    static let ink = Palette.text.platform
+    static let inkSecondary = Palette.textMuted.platform
+    static let hairline = Palette.hairline.platform
+    static let dot = Palette.canvasDot.platform
 
-    static let live = Palette.Classic.live.platform
-    static let liveTint = Palette.Classic.liveTint.platform
-    static let liveInk = Palette.Classic.liveInk.platform
-    static let passTint = Palette.Classic.passTint.platform
-    static let passInk = Palette.Classic.passInk.platform
-    static let failTint = Palette.Classic.failTint.platform
-    static let failInk = Palette.Classic.failInk.platform
-    static let select = Palette.Classic.select.platform
+    static let live = Palette.live.platform
+    static let liveTint = Palette.liveTint.platform
+    static let liveInk = Palette.liveText.platform
+    static let passTint = Palette.passTint.platform
+    static let passInk = Palette.passText.platform
+    static let failTint = Palette.failTint.platform
+    static let failInk = Palette.failText.platform
+    static let select = Palette.accent.platform
 
-    static let terminal = Palette.Classic.terminal.platform
-    static let terminalInk = Palette.Classic.terminalInk.platform
+    static let terminal = Palette.terminal.platform
+    static let terminalInk = Palette.terminalText.platform
 
     /// The canvas, its cards and links, and the terminals in them, in the redesign's colours. AppKit views draw
     /// with these; SwiftUI views take `Palette` directly.
@@ -85,10 +87,10 @@ enum Theme {
     }
 
     enum Size {
-        static let caption: CGFloat = 11
-        static let body: CGFloat = 12
-        static let title: CGFloat = 13
-        static let heading: CGFloat = 15
+        static let caption: CGFloat = 11.5
+        static let body: CGFloat = 12.5
+        static let title: CGFloat = 13.5
+        static let heading: CGFloat = 16
     }
 
     // MARK: Shape
@@ -102,8 +104,8 @@ enum Theme {
     }
 
     enum Radius {
-        static let card: CGFloat = 3
-        static let badge: CGFloat = 2
+        static let card: CGFloat = DS.Radius.m
+        static let badge: CGFloat = DS.Radius.xs
     }
 
     enum Stroke {
@@ -251,11 +253,11 @@ struct Badge: View {
             if let symbol { Image(systemName: symbol).font(.system(size: 9, weight: .bold)) }
             if !text.isEmpty { Text(text) }
         }
-        .font(.dsMono(Theme.Size.caption, .medium))
+        .font(.dsSans(Theme.Size.caption, .medium))
         .foregroundStyle(foreground.ui)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1)
-        .background(background.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
+        .padding(.horizontal, tone == .plain ? 6 : 8)
+        .frame(minHeight: 20)
+        .background(background.ui, in: Capsule())
     }
 
     private var foreground: NSColor {

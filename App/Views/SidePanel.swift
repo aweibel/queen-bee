@@ -1,5 +1,6 @@
 import AppKit
 import QueenBeeCore
+import QueenBeeDesign
 import SwiftUI
 
 /// The panel beside the canvas: the flow's orchestrator, the run log, and what the run produced.
@@ -43,15 +44,15 @@ struct SidePanel: View {
                         VStack(spacing: 5) {
                             HStack(spacing: 5) {
                                 Text(item.label)
-                                    .font(.dsMono(Theme.Size.body, tab == item ? .medium : .regular))
+                                    .font(.dsSans(Theme.Size.body, tab == item ? .medium : .regular))
                                 if let count = count(for: item) {
-                                    Text("\(count)").font(.dsMono(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
+                                    Text("\(count)").font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
                                 }
                             }
                             // One rule shared by the tabs, so it slides to the tab you pick.
                             ZStack {
                                 if tab == item {
-                                    Rectangle().fill(Theme.ink.ui).matchedGeometryEffect(id: "rule", in: tabs)
+                                    Rectangle().fill(Theme.select.ui).matchedGeometryEffect(id: "rule", in: tabs)
                                 }
                             }
                             .frame(height: 2)
@@ -76,7 +77,7 @@ struct SidePanel: View {
                         .help("Clear the log and the list of earlier runs")
                 }
             }
-            .background(Theme.bar.ui)
+            .frame(minHeight: DS.Size.tabRow - 4)
             .animation(Theme.Motion.standard, value: tab)
             Rectangle().fill(Theme.hairline.ui).frame(height: 1)
             if let id = controller.viewedRunID, let run = controller.runs.first(where: { $0.id == id }) {
@@ -167,7 +168,7 @@ struct RunPicker: View {
                 Text(controller.viewedRunID == nil ? "Latest run" : "Earlier run")
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
             }
-            .font(.dsMono(Theme.Size.caption, .medium))
+            .font(.dsSans(Theme.Size.caption, .medium))
             .foregroundStyle(Theme.inkSecondary.ui)
             .contentShape(Rectangle())
         }
@@ -215,7 +216,7 @@ private struct LogList: View {
                         .id(line.id)
                     }
                 }
-                .font(.dsMono(Theme.Size.caption))
+                .font(.dsSans(Theme.Size.caption))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Theme.Space.m)
             }
@@ -259,14 +260,14 @@ private struct OutputList: View {
                 ForEach(ends) { card in
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
                         HStack {
-                            Text(card.name).font(.dsMono(Theme.Size.body, .medium))
+                            Text(card.name).font(.dsSans(Theme.Size.body, .medium))
                             Spacer()
                             if let file = card.saveTo, !file.isEmpty, controller.results[card.id] != nil {
                                 Button(file) {
                                     NSWorkspace.shared.activateFileViewerSelecting([controller.project.root.appendingPathComponent(file)])
                                 }
                                 .buttonStyle(.link)
-                                .font(.dsMono(Theme.Size.caption))
+                                .font(.dsSans(Theme.Size.caption))
                                 .help("Show the saved file in Finder")
                             }
                         }

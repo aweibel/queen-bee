@@ -120,7 +120,7 @@ struct WorkplaceForm: View {
             row("Branch") {
                 TextField("qb/my-flow", text: $worktreeBranch)
                     .textFieldStyle(.plain)
-                    .font(.dsMono(Theme.Size.body, .medium))
+                    .font(.dsSans(Theme.Size.body, .medium))
                     .fieldBox()
             }
             if !git.branches.contains(trimmed(worktreeBranch)) {

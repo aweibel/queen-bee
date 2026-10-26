@@ -48,7 +48,7 @@ struct OnboardingView: View {
 
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text(Self.steps[step].title)
-                        .font(.dsMono(Theme.Size.heading, .medium))
+                        .font(.dsSans(Theme.Size.heading, .medium))
                     Text(Self.steps[step].text)
                         .font(.dsSans(Theme.Size.title))
                         .foregroundStyle(Theme.inkSecondary.ui)
@@ -143,9 +143,9 @@ struct OnboardingView: View {
                 MiniCard(icon: "arrow.triangle.branch", name: "Approved?", badge: "✓ 2", width: 132) {
                     VStack(alignment: .trailing, spacing: 3) {
                         MiniText("Has \"APPROVED\"")
-                        Text("Yes").font(.dsMono(10, .medium)).foregroundStyle(Theme.liveInk.ui)
+                        Text("Yes").font(.dsSans(10, .medium)).foregroundStyle(Theme.liveInk.ui)
                             .padding(.horizontal, 5).background(Theme.liveTint.ui)
-                        Text("No").font(.dsMono(10, .medium))
+                        Text("No").font(.dsSans(10, .medium))
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .padding(6)
@@ -233,11 +233,11 @@ private struct MiniCard<Content: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
                 Image(systemName: icon).font(.system(size: 8, weight: .medium))
-                Text(name).font(.dsMono(10, .medium)).lineLimit(1)
+                Text(name).font(.dsSans(10, .medium)).lineLimit(1)
                 Spacer(minLength: 0)
                 if let badge {
                     Text(badge)
-                        .font(.dsMono(9, .medium))
+                        .font(.dsSans(9, .medium))
                         .foregroundStyle((live ? Theme.liveInk : badge.hasPrefix("✓") ? Theme.passInk : Theme.inkSecondary).ui)
                         .padding(.horizontal, 3)
                         .background((live ? Theme.liveTint : badge.hasPrefix("✓") ? Theme.passTint : NSColor.clear).ui,

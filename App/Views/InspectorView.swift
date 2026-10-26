@@ -210,7 +210,7 @@ private struct CardSettings: View {
                 .help(card.kind.label)
             TextField(card.kind.label, text: $name)
                 .textFieldStyle(.plain)
-                .font(.dsMono(Theme.Size.title, .medium))
+                .font(.dsSans(Theme.Size.title, .medium))
                 .focused($isNaming)
                 .onSubmit(commitName)
                 .onAppear { name = card.name }
@@ -224,7 +224,7 @@ private struct CardSettings: View {
                 Badge(text: session.state.label.lowercased(), tone: session.state.tone)
             } else {
                 Text(card.kind.label)
-                    .font(.dsMono(Theme.Size.caption))
+                    .font(.dsSans(Theme.Size.caption))
                     .foregroundStyle(Theme.inkSecondary.ui)
             }
         }
@@ -291,7 +291,7 @@ private struct CardSettings: View {
             row("Cost") {
                 let run = controller.runUsage(forCard: card.id)
                 Text(run.map { $0.isZero ? "\(all.price) in all" : "\($0.price) this run · \(all.price) in all" } ?? "\(all.price) in all")
-                    .font(.dsMono(Theme.Size.caption, .medium))
+                    .font(.dsSans(Theme.Size.caption, .medium))
                     .help("An estimate of what this agent's work would cost if you paid Anthropic by usage (\(all.tokenCount) so far). On a Claude subscription you don't pay this.")
             }
         }
@@ -344,7 +344,7 @@ private struct CardSettings: View {
                     Text(current?.name ?? "None").lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui)
                 }
-                .font(.dsMono(Theme.Size.caption, .medium))
+                .font(.dsSans(Theme.Size.caption, .medium))
                 .foregroundStyle(Theme.ink.ui)
                 .contentShape(Rectangle())
             }
@@ -459,7 +459,7 @@ private struct ApprovalReview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text("From \(hold.from). Waiting for you.")
-                .font(.dsMono(Theme.Size.caption, .medium))
+                .font(.dsSans(Theme.Size.caption, .medium))
             if let deadline = hold.deadline, let card = controller.flow.card(hold.cardID) {
                 Text("If you don't answer by \(deadline.formatted(date: .omitted, time: .shortened)), it will be \(HoldTimeLimit.port(for: card) == "approved" ? "approved" : "rejected") for you.")
                     .font(.dsSans(Theme.Size.caption))
@@ -513,7 +513,7 @@ private struct ScriptReview: View {
                     .font(.dsSans(Theme.Size.caption))
                     .fixedSize(horizontal: false, vertical: true)
                 Text(hold.command)
-                    .font(.dsMono(Theme.Size.caption))
+                    .font(.dsSans(Theme.Size.caption))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
@@ -529,7 +529,7 @@ private struct ScriptReview: View {
                 }
             } else {
                 Text("Running its command…")
-                    .font(.dsMono(Theme.Size.caption, .medium))
+                    .font(.dsSans(Theme.Size.caption, .medium))
             }
         }
         .foregroundStyle(Theme.liveInk.ui)
@@ -585,7 +585,7 @@ private struct TriggerSettings: View {
                                 set { $0.weekdays = isOn ? $0.weekdays.filter { $0 != day } : ($0.weekdays + [day]).sorted() }
                             } label: {
                                 Text(letter)
-                                    .font(.dsMono(Theme.Size.caption, .medium))
+                                    .font(.dsSans(Theme.Size.caption, .medium))
                                     .frame(width: 20, height: 20)
                                     .foregroundStyle((isOn ? Theme.surface : Theme.ink).ui)
                                     .background((isOn ? Theme.ink : Theme.bar).ui, in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
@@ -666,7 +666,7 @@ private struct LinkMessages: View {
                             ForEach(messages.reversed()) { message in
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text("\(Self.time.string(from: message.date)) · from \(message.from)")
-                                        .font(.dsMono(Theme.Size.caption))
+                                        .font(.dsSans(Theme.Size.caption))
                                         .foregroundStyle(Theme.inkSecondary.ui)
                                     Text(message.text)
                                         .font(.dsSans(Theme.Size.body))
@@ -733,7 +733,7 @@ private struct SeveralSettings: View {
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
                 Text("\(count) cards")
-                    .font(.dsMono(Theme.Size.title, .medium))
+                    .font(.dsSans(Theme.Size.title, .medium))
                     .contentTransition(.numericText())
                 Spacer(minLength: 0)
             }
@@ -785,7 +785,7 @@ private struct GroupName: View {
             field("Group") {
                 TextField("Name", text: $name)
                     .textFieldStyle(.plain)
-                    .font(.dsMono(Theme.Size.body, .medium))
+                    .font(.dsSans(Theme.Size.body, .medium))
                     .fieldBox()
                     .onAppear { name = group.name }
                     .onChange(of: name) { if name != group.name, !name.trimmingCharacters(in: .whitespaces).isEmpty { controller.rename(group: group.id, to: name) } }
@@ -807,11 +807,11 @@ private struct LinkSettings: View {
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
                 Text(link.port == "out" ? "\(from) → \(to)" : "\(from) · \(portLabel(link.port)) → \(to)")
-                    .font(.dsMono(Theme.Size.title, .medium))
+                    .font(.dsSans(Theme.Size.title, .medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Text("Link")
-                    .font(.dsMono(Theme.Size.caption))
+                    .font(.dsSans(Theme.Size.caption))
                     .foregroundStyle(Theme.inkSecondary.ui)
             }
             .padding(.horizontal, Theme.Space.m)

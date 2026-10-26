@@ -52,8 +52,9 @@ struct WorkspaceView: View {
                         .padding(.top, 90)
                     Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background {
-                    Color.clear.contentShape(Rectangle()).onTapGesture { services.showsFind = false }
+                    Palette.scrim.color.ignoresSafeArea().contentShape(Rectangle()).onTapGesture { services.showsFind = false }
                 }
                 .transition(.opacity.combined(with: .offset(y: -8)))
             }
@@ -61,11 +62,12 @@ struct WorkspaceView: View {
             if services.showsPalette, let controller = services.current {
                 VStack {
                     CommandPalette(controller: controller) { services.showsPalette = false }
-                        .padding(.top, 90)
+                        .padding(.top, 140)
                     Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background {
-                    Color.clear.contentShape(Rectangle()).onTapGesture { services.showsPalette = false }
+                    Palette.scrim.color.ignoresSafeArea().contentShape(Rectangle()).onTapGesture { services.showsPalette = false }
                 }
                 .transition(.opacity.combined(with: .offset(y: -8)))
             }
@@ -251,7 +253,7 @@ struct WelcomeView: View {
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(Theme.ink.ui)
             Text("Queen Bee")
-                .font(.dsMono(22, .medium))
+                .font(.dsSans(22, .medium))
                 .foregroundStyle(Theme.ink.ui)
             Text("To start, choose the folder your agents should work in. Queen Bee saves your flows inside it.")
                 .font(.dsSans(Theme.Size.title))

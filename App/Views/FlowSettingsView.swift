@@ -18,11 +18,11 @@ struct FlowSettingsView: View {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .medium)).frame(width: 16)
                 TextField("Flow name", text: $name)
                     .textFieldStyle(.plain)
-                    .font(.dsMono(Theme.Size.title, .medium))
+                    .font(.dsSans(Theme.Size.title, .medium))
                     .onSubmit { controller.rename(to: name) }
                     .help("Rename this flow")
                 Text(controller.flow.isSubflow == true ? "Sub-flow" : "Flow")
-                    .font(.dsMono(Theme.Size.caption))
+                    .font(.dsSans(Theme.Size.caption))
                     .foregroundStyle(Theme.inkSecondary.ui)
                 Button { controller.showsFlowSettings = false } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).frame(width: 16, height: 16).contentShape(Rectangle())
@@ -126,7 +126,7 @@ struct FlowSettingsView: View {
             }
             text("Agent cards with a browser share one set of sign-ins across this project, kept apart from your own browser.")
         }
-        .frame(width: InspectorView.width)
+        .frame(width: 480)
         .foregroundStyle(Theme.ink.ui)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
         .floatingPanel()

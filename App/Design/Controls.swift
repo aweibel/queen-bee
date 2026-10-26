@@ -1,12 +1,14 @@
+import QueenBeeDesign
 import SwiftUI
 
 /// The controls the floating panels share, drawn from the tokens so a button, a menu and a
 /// stepper all look like parts of the same drawing.
 
-/// A button in a panel: an ink outline by default, quieter or louder by kind.
+/// A button in a panel. The panels' names for the design system's buttons, so a panel's buttons look like
+/// every other button in the app.
 struct PanelButtonStyle: ButtonStyle {
     enum Kind {
-        /// The usual button: ink text in an ink outline.
+        /// The usual button: a raised surface with an outline.
         case outline
         /// For an action that should stay out of the way, like Delete or Skip: text only.
         case quiet
@@ -19,62 +21,13 @@ struct PanelButtonStyle: ButtonStyle {
     var kind: Kind = .outline
 
     func makeBody(configuration: Configuration) -> some View {
-        PanelButton(configuration: configuration, kind: kind)
-    }
-}
-
-private struct PanelButton: View {
-    let configuration: ButtonStyleConfiguration
-    let kind: PanelButtonStyle.Kind
-    @State private var isHovered = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        configuration.label
-            .font(.dsMono(Theme.Size.caption, .medium))
-            .foregroundStyle(foreground.ui)
-            .padding(.horizontal, kind == .quiet ? 6 : 10)
-            .padding(.vertical, 4)
-            .background(background.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(border.ui, lineWidth: Theme.Stroke.card))
-            .opacity(configuration.isPressed && isEnabled ? 0.6 : 1)
-            .contentShape(Rectangle())
-            .onHover { isHovered = $0 }
-            .animation(Theme.Motion.quick, value: isHovered)
-            .animation(Theme.Motion.quick, value: configuration.isPressed)
-            .animation(Theme.Motion.quick, value: isEnabled)
-    }
-
-    // A button that can't be pressed is drawn as a faint outline of itself: no fill, no ink
-    // border, grey text. One that can is ink, and the one a panel is asking for is filled.
-    private var foreground: NSColor {
-        guard isEnabled else { return Theme.inkSecondary.withAlphaComponent(0.55) }
-        switch kind {
-        case .outline: return Theme.ink
-        case .quiet: return isHovered ? Theme.ink : Theme.inkSecondary
-        case .filled: return Theme.surface
-        case .live: return Theme.liveInk
+        let style: DSButtonStyle = switch kind {
+        case .outline: .ds(.secondary)
+        case .quiet: .ds(.ghost)
+        case .filled: .ds(.primary)
+        case .live: .ds(.live)
         }
-    }
-
-    private var background: NSColor {
-        guard isEnabled else { return .clear }
-        switch kind {
-        case .outline: return isHovered ? Theme.barHover : .clear
-        case .quiet: return isHovered ? Theme.barHover : .clear
-        case .filled: return isHovered ? Theme.inkSecondary : Theme.ink
-        case .live: return isHovered ? Theme.live.withAlphaComponent(0.25) : Theme.liveTint
-        }
-    }
-
-    private var border: NSColor {
-        guard isEnabled else { return kind == .quiet ? .clear : Theme.hairline }
-        switch kind {
-        case .outline: return Theme.ink
-        case .quiet: return .clear
-        case .filled: return isHovered ? Theme.inkSecondary : Theme.ink
-        case .live: return Theme.live
-        }
+        return style.makeBody(configuration: configuration)
     }
 }
 
@@ -105,7 +58,7 @@ struct MenuField<Value: Hashable>: View {
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(Theme.inkSecondary.ui)
             }
-            .font(.dsMono(Theme.Size.caption, .medium))
+            .font(.dsSans(Theme.Size.body, .medium))
             .foregroundStyle(Theme.ink.ui)
             .contentShape(Rectangle())
         }
@@ -151,9 +104,9 @@ struct StepField: View {
 extension View {
     /// The box a panel's text is typed into.
     func fieldBox() -> some View {
-        padding(.horizontal, 7)
+        padding(.horizontal, DS.Space.s)
             .padding(.vertical, 5)
-            .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.hairline.ui))
+            .background(Palette.raised.color, in: RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous).strokeBorder(Palette.hairlineStrong.color))
     }
 }

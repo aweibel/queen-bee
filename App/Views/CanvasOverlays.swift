@@ -50,7 +50,7 @@ private struct PaletteRow: View {
                 .font(.system(size: 11, weight: .medium))
                 .frame(width: 16)
             Text(role?.name ?? kind.label)
-                .font(.dsMono(Theme.Size.caption, role == nil ? .medium : .regular))
+                .font(.dsSans(Theme.Size.caption, role == nil ? .medium : .regular))
                 .lineLimit(1)
             Spacer(minLength: 0)
             // A role a paired device saved or changed, which the Mac asks about before it is first used.
@@ -109,7 +109,7 @@ struct CardHelpView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: role == nil ? CanvasGeometry.icon(for: kind) : "person.crop.square").font(.system(size: 11, weight: .medium))
-                Text(role?.name ?? kind.label).font(.dsMono(Theme.Size.body, .medium))
+                Text(role?.name ?? kind.label).font(.dsSans(Theme.Size.body, .medium))
             }
             Text(help.what)
                 .font(.dsSans(Theme.Size.body))
@@ -121,7 +121,7 @@ struct CardHelpView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(role == nil ? "For example" : "Its instructions").font(.dsMono(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
+                Text(role == nil ? "For example" : "Its instructions").font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
                 Text(help.example)
                     .font(.dsSans(Theme.Size.caption))
                     .fixedSize(horizontal: false, vertical: true)
@@ -343,11 +343,11 @@ struct FindPanel: View {
                                 .font(.system(size: 11, weight: .medium))
                                 .frame(width: 16)
                             Text(match.card?.name ?? match.controller.flow.name)
-                                .font(.dsMono(Theme.Size.body, .medium))
+                                .font(.dsSans(Theme.Size.body, .medium))
                                 .lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
                             Text(match.card == nil ? "flow in \(match.controller.project.name)" : match.controller.flow.name)
-                                .font(.dsMono(Theme.Size.caption))
+                                .font(.dsSans(Theme.Size.caption))
                                 .foregroundStyle(Theme.inkSecondary.ui)
                                 .lineLimit(1)
                         }
@@ -440,7 +440,7 @@ struct CostBreakdown: View {
         let whole = max(total.cost, 0.000001)
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Cost of \(controller.flow.name)").font(.dsMono(Theme.Size.title, .medium)).lineLimit(1)
+                Text("Cost of \(controller.flow.name)").font(.dsSans(Theme.Size.title, .medium)).lineLimit(1)
                 Spacer()
                 Text(total.price).font(.dsMono(Theme.Size.title, .medium))
                 Button(action: close) {
@@ -487,7 +487,7 @@ struct CostBreakdown: View {
                 part("Recent runs", trailing: nil) {
                     ForEach(Array(costed)) { run in
                         HStack {
-                            Text("\(RunPicker.label(for: run.started)) · \(run.summary)").font(.dsMono(Theme.Size.caption))
+                            Text("\(RunPicker.label(for: run.started)) · \(run.summary)").font(.dsSans(Theme.Size.caption))
                             Spacer()
                             Text(run.cost.price).font(.dsMono(Theme.Size.caption, .medium))
                         }
@@ -500,7 +500,7 @@ struct CostBreakdown: View {
                 Button { services.goBack(to: outer.flow.id) } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.turn.left.up").font(.system(size: 10, weight: .medium)).frame(width: 14)
-                        Text("Part of \(outer.flow.name)").font(.dsMono(Theme.Size.caption, .medium)).lineLimit(1)
+                        Text("Part of \(outer.flow.name)").font(.dsSans(Theme.Size.caption, .medium)).lineLimit(1)
                         Spacer(minLength: Theme.Space.s)
                         Text("\(outer.usageWithSubflows.price) in all").font(.dsMono(Theme.Size.caption))
                     }
@@ -537,7 +537,7 @@ struct CostBreakdown: View {
                 HStack {
                     Text(title).font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
                     Spacer()
-                    if let trailing { Text(trailing).font(.dsMono(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui) }
+                    if let trailing { Text(trailing).font(.dsSans(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui) }
                 }
             }
             rows()
@@ -551,7 +551,7 @@ struct CostBreakdown: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 10, weight: .medium)).frame(width: 14)
-                Text(name).font(.dsMono(Theme.Size.caption, .medium)).lineLimit(1)
+                Text(name).font(.dsSans(Theme.Size.caption, .medium)).lineLimit(1)
                 if opens { Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui) }
                 Spacer(minLength: Theme.Space.s)
                 Text(usage.tokenCount).font(.dsMono(Theme.Size.caption)).foregroundStyle(Theme.inkSecondary.ui)
@@ -645,7 +645,7 @@ struct OrchestratorCallout: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Describe the flow you want")
-                        .font(.dsMono(Theme.Size.body, .medium))
+                        .font(.dsSans(Theme.Size.body, .medium))
                     Spacer(minLength: Theme.Space.s)
                     Button { AppServices.shared.dismissHint(forFlow: controller.flow.id) } label: {
                         Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
