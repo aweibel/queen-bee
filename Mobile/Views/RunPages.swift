@@ -16,7 +16,7 @@ struct LogPage: View {
             if canClear {
                 let command = client.clearLogCommand()
                 HStack(spacing: Theme.Space.s) {
-                    Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")").dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                    Text("\(lines.count) \(lines.count == 1 ? "line" : "lines")").dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
                     Spacer(minLength: Theme.Space.s)
                     Button("Clear") { asksToClear = true }
                         .buttonStyle(.panel(.quiet))
@@ -53,7 +53,7 @@ struct LogPage: View {
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .dsMono(Theme.Touch.caption + 1)
+                        .dsSans(Theme.Touch.caption + 1)
                         .accessibilityElement(children: .combine)
                         .id(line.id)
                     }
@@ -113,11 +113,11 @@ struct OutputPage: View {
                             Image(systemName: CanvasGeometry.icon(for: .end))
                                 .font(.system(size: 13, weight: .medium))
                                 .accessibilityHidden(true)
-                            Text(card.name).dsMono(Theme.Touch.body, .medium).accessibilityAddTraits(.isHeader)
+                            Text(card.name).dsSans(Theme.Touch.body, .medium).accessibilityAddTraits(.isHeader)
                             Spacer(minLength: Theme.Space.s)
                             if let file = card.saveTo, !file.isEmpty, results[card.id] != nil {
                                 Text(file)
-                                    .dsMono(Theme.Touch.caption)
+                                    .dsSans(Theme.Touch.caption)
                                     .foregroundStyle(Theme.inkSecondary.ui)
                                     .lineLimit(1)
                                     .truncationMode(.head)
@@ -196,7 +196,7 @@ private struct RunRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs + 2) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                Text(row.started).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+                Text(row.started).dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                 Badge(text: row.outcome.rawValue, tone: tone)
                 Spacer(minLength: Theme.Space.s)
                 Text(row.cost ?? "–").dsMono(Theme.Touch.body, .medium).foregroundStyle((row.cost == nil ? Theme.inkSecondary : Theme.ink).ui)
@@ -207,9 +207,9 @@ private struct RunRowView: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
             HStack(spacing: Theme.Space.s) {
-                Text("\(row.length) · \(row.handOffs)").dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                Text("\(row.length) · \(row.handOffs)").dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
                 Spacer(minLength: Theme.Space.s)
-                if row.isOnShow { Text("On show").dsMono(Theme.Touch.caption, .medium).foregroundStyle(Theme.select.ui) }
+                if row.isOnShow { Text("On show").dsSans(Theme.Touch.caption, .medium).foregroundStyle(Theme.select.ui) }
             }
         }
         .padding(Theme.Space.m)
@@ -284,7 +284,7 @@ struct CostPage: View {
                     Button { client.open(outer.id) } label: {
                         HStack(spacing: Theme.Space.s) {
                             Image(systemName: "arrow.turn.left.up").font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
-                            Text("Part of \(outer.name)").dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                            Text("Part of \(outer.name)").dsSans(Theme.Touch.body, .medium).lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
                             Text("\(outer.usage.price) in all").dsMono(Theme.Touch.caption)
                         }
@@ -320,7 +320,7 @@ private struct CostLine: View {
         VStack(alignment: .leading, spacing: Theme.Space.xs + 2) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Image(systemName: line.icon).font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
-                Text(line.name).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Text(line.name).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                 if opens { Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true) }
                 Spacer(minLength: Theme.Space.s)
                 Text(line.usage.price).dsMono(Theme.Touch.body, .medium)

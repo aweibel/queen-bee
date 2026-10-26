@@ -125,7 +125,7 @@ struct DetailsHeader: View {
                 .frame(width: 22)
                 .accessibilityHidden(true)
             Text(title)
-                .dsMono(Theme.Touch.title, .medium)
+                .dsSans(Theme.Touch.title, .medium)
                 .foregroundStyle(Theme.ink.ui)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
@@ -133,7 +133,7 @@ struct DetailsHeader: View {
             if let state {
                 Badge(text: state.label.lowercased(), tone: state.tone)
             } else {
-                Text(kind).dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                Text(kind).dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -320,7 +320,7 @@ struct FieldStatus: View {
         if state != .untouched || counted != nil {
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 if let counted {
-                    Text(counted).dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                    Text(counted).dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
                 }
                 switch state {
                 case .untouched:
@@ -446,7 +446,7 @@ private struct ChoiceMenu: View {
             }
         } label: {
             HStack(spacing: Theme.Space.xs + 2) {
-                Text(chosen).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Text(chosen).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui)
             }
             .foregroundStyle(Theme.ink.ui)
@@ -475,7 +475,7 @@ private struct OnOffSwitch: View {
             half("On", true)
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.outline.ui, lineWidth: Theme.Stroke.card))
         .frame(minHeight: Theme.Touch.target)
         .animation(Theme.Motion.quick, value: isOn)
         .accessibilityElement(children: .ignore)
@@ -488,7 +488,7 @@ private struct OnOffSwitch: View {
     private func half(_ name: String, _ value: Bool) -> some View {
         Button { if isOn != value { set(value) } } label: {
             Text(name)
-                .dsMono(Theme.Touch.body, .medium)
+                .dsSans(Theme.Touch.body, .medium)
                 .foregroundStyle((isOn == value ? Theme.surface : Theme.ink).ui)
                 .frame(minWidth: 52, minHeight: 36)
                 .background(isOn == value ? Theme.ink.ui : .clear)
@@ -512,7 +512,7 @@ private struct StepControl: View {
             HStack(spacing: 0) {
                 step("minus", by: -1)
                 Text("\(value)")
-                    .dsMono(Theme.Touch.body, .medium)
+                    .dsSans(Theme.Touch.body, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .frame(minWidth: 34)
                     .contentTransition(.numericText())
@@ -572,7 +572,7 @@ private struct BranchesField: View {
                         if new.contains("\n") { focus.wrappedValue = order.next(after: mine) }
                     }, axis: .vertical)
                     .lineLimit(1...2)
-                    .dsMono(Theme.Touch.body, .medium)
+                    .dsSans(Theme.Touch.body, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .submitLabel(.next)
                     .focused(focus, equals: mine)
@@ -678,7 +678,7 @@ private struct ScheduleField: View {
                                     set { $0.weekdays = isOn ? $0.weekdays.filter { $0 != day } : ($0.weekdays + [day]).sorted() }
                                 } label: {
                                     Text(letter)
-                                        .dsMono(Theme.Touch.body, .medium)
+                                        .dsSans(Theme.Touch.body, .medium)
                                         .foregroundStyle((isOn ? Theme.surface : Theme.ink).ui)
                                         .frame(maxWidth: .infinity, minHeight: 36)
                                         .background((isOn ? Theme.ink : Theme.bar).ui, in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
@@ -804,9 +804,9 @@ struct FlowSettingsSheet: View {
         VStack(spacing: 0) {
             HStack(spacing: Theme.Space.s) {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 15, weight: .medium)).frame(width: 22).accessibilityHidden(true)
-                Text("Flow Settings").dsMono(Theme.Touch.title, .medium).accessibilityAddTraits(.isHeader)
+                Text("Flow Settings").dsSans(Theme.Touch.title, .medium).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: Theme.Space.s)
-                Text(flow?.isSubflow == true ? "Sub-flow" : "Flow").dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
+                Text(flow?.isSubflow == true ? "Sub-flow" : "Flow").dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui)
                 Button("Done") {
                     if focus != nil { focus = nil } else { client.settings.showsFlowSettings = false }
                 }

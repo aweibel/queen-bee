@@ -143,7 +143,7 @@ private struct ModeSwitch: View {
             segment(.keys, "Keys", "keyboard", hint: "Press keys in the terminal, one at a time.")
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.outline.ui, lineWidth: Theme.Stroke.card))
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("How to type")
@@ -153,7 +153,7 @@ private struct ModeSwitch: View {
         let isOn = which == mode
         return Button { pick(which) } label: {
             Label(title, systemImage: symbol)
-                .dsMono(Theme.Touch.body, .medium)
+                .dsSans(Theme.Touch.body, .medium)
                 .lineLimit(1)
                 .foregroundStyle((isOn ? Theme.surface : Theme.ink).ui)
                 .padding(.horizontal, Theme.Space.m)
@@ -325,7 +325,7 @@ private struct KeyCap: View {
             if let symbol = extra.symbol { Image(systemName: symbol).font(.system(size: 14, weight: .medium)) }
             if !extra.title.isEmpty { Text(extra.title) }
         }
-        .dsMono(Theme.Touch.body, .medium)
+        .dsSans(Theme.Touch.body, .medium)
         .lineLimit(1)
         .foregroundStyle((isHeld ? Theme.surface : isEnabled ? Theme.ink : Theme.inkSecondary.withAlphaComponent(0.55)).ui)
         .padding(.horizontal, Theme.Space.s)

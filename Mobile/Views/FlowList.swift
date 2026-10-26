@@ -70,7 +70,7 @@ struct FlowList: View {
     private func heading(_ title: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(title)
-                .dsMono(Theme.Touch.caption, .medium)
+                .dsSans(Theme.Touch.caption, .medium)
                 .foregroundStyle(Theme.inkSecondary.ui)
                 .accessibilityAddTraits(.isHeader)
             Hairline()
@@ -84,7 +84,7 @@ struct FlowList: View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.xs) {
                 Text(project.name)
-                    .dsMono(Theme.Touch.caption, .medium)
+                    .dsSans(Theme.Touch.caption, .medium)
                     .foregroundStyle(Theme.inkSecondary.ui)
                     .lineLimit(1)
                     .accessibilityAddTraits(.isHeader)
@@ -147,7 +147,7 @@ struct FlowList: View {
 
     private func note(_ title: String, _ text: String) -> some View {
         VStack(spacing: Theme.Space.s) {
-            Text(title).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+            Text(title).dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
             if !text.isEmpty { Text(text).dsSans(Theme.Touch.body).foregroundStyle(Theme.inkSecondary.ui) }
         }
         .multilineTextAlignment(.center)
@@ -179,7 +179,7 @@ private struct FlowRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(flow.name)
-                    .dsMono(Theme.Touch.body, isOpen ? .medium : .regular)
+                    .dsSans(Theme.Touch.body, isOpen ? .medium : .regular)
                     .foregroundStyle((flow.isSubflow && !isOpen ? Theme.inkSecondary : Theme.ink).ui)
                     .lineLimit(1)
                 // The Mac opens and changes neither of two flows with one id, so the row says why it won't open.
@@ -225,7 +225,7 @@ private struct FlowRowMenu: View {
                             .font(.system(size: 14, weight: .medium))
                             .frame(width: 24)
                             .accessibilityHidden(true)
-                        Text(item.title).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                        Text(item.title).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle((item.kind == .delete || item.kind == .stopAgents ? Theme.failInk : Theme.ink).ui)
@@ -324,7 +324,7 @@ private struct FindList: View {
 
     private func title(_ text: String) -> some View {
         Text(text)
-            .dsMono(Theme.Touch.caption, .medium)
+            .dsSans(Theme.Touch.caption, .medium)
             .foregroundStyle(Theme.inkSecondary.ui)
             .padding(.leading, Theme.Space.s)
             .padding(.top, Theme.Space.l)
@@ -336,9 +336,9 @@ private struct FindList: View {
         Button { client.go(to: hit) } label: {
             HStack(spacing: Theme.Space.s) {
                 Image(systemName: icon).font(.system(size: 12, weight: .medium)).frame(width: 18).accessibilityHidden(true)
-                Text(name).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Text(name).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
-                Text(place).dsMono(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui).lineLimit(1)
+                Text(place).dsSans(Theme.Touch.caption).foregroundStyle(Theme.inkSecondary.ui).lineLimit(1)
             }
             .foregroundStyle(Theme.ink.ui)
             .padding(.horizontal, Theme.Space.s)

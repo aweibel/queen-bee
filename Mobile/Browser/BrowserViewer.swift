@@ -35,7 +35,7 @@ struct BrowserViewer: View {
                     .foregroundStyle(Theme.ink.ui)
                     .accessibilityHidden(true)
                 Text(name)
-                    .dsMono(Theme.Touch.title, .medium)
+                    .dsSans(Theme.Touch.title, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .lineLimit(1)
                     .accessibilityAddTraits(.isHeader)
@@ -100,7 +100,7 @@ struct BrowserViewer: View {
             barButton("chevron.right", "Forward", isEnabled: canAct && page.canGoForward) { use(.forward) }
             barButton("arrow.clockwise", "Reload this page", isEnabled: canAct) { use(.reload) }
             TextField("Type an address, or what to search for", text: $typed)
-                .dsMono(Theme.Touch.body)
+                .dsSans(Theme.Touch.body)
                 .foregroundStyle(Theme.ink.ui)
                 .tint(Theme.select.ui)
                 .textInputAutocapitalization(.never)

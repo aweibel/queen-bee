@@ -71,7 +71,7 @@ struct ConnectionPill: View {
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
             Text(isBrief && status.isConnected ? "Connected" : status.text)
-                .dsMono(Theme.Touch.caption, .medium)
+                .dsSans(Theme.Touch.caption, .medium)
                 .foregroundStyle(Theme.ink.ui)
                 .lineLimit(1)
         }

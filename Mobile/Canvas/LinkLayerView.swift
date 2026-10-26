@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import UIKit
 
 /// Draws every link as a right-angled route under the cards, as the Mac's `LinkLayerView` does, and the
@@ -180,7 +181,7 @@ final class LinkLayerView: UIView {
                 label.textColor = Theme.passInk
                 label.backgroundColor = Theme.passTint
                 label.textAlignment = .center
-                label.layer.cornerRadius = Theme.Radius.badge
+                label.layer.cornerRadius = 8
                 label.layer.masksToBounds = true
                 label.contentScaleFactor = traitCollection.displayScale * sharpness
                 addSubview(label)
@@ -198,7 +199,7 @@ final class LinkLayerView: UIView {
 
     private func restyle(_ strand: Strand) {
         let look = strand.look
-        let color = (look.isSelected ? Theme.select : look.isLive ? Theme.live : look.count > 0 ? Theme.passInk : Theme.ink).cg(in: self)
+        let color = (look.isSelected ? Theme.select : look.isLive ? Theme.live : look.count > 0 ? Theme.passInk : Palette.textFaint.platform).cg(in: self)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         strand.line.strokeColor = color

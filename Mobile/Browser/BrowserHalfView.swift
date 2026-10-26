@@ -46,15 +46,15 @@ final class BrowserHalfView: UIView {
         notice.textAlignment = .center
         notice.numberOfLines = 0
         addSubview(notice)
-        offer.font = Theme.mono(Theme.Size.body)
+        offer.font = Theme.sans(Theme.Size.body)
         offer.textColor = Theme.ink
         offer.textAlignment = .center
         offer.layer.cornerRadius = Theme.Radius.card
         offer.layer.borderWidth = Theme.Stroke.card
         offer.backgroundColor = Theme.surface
         addSubview(offer)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: BrowserHalfView, _) in view.offer.layer.borderColor = Theme.ink.cg(in: view) }
-        offer.layer.borderColor = Theme.ink.cg(in: self)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: BrowserHalfView, _) in view.offer.layer.borderColor = Theme.outline.cg(in: view) }
+        offer.layer.borderColor = Theme.outline.cg(in: self)
         show(page: nil, picture: nil)
     }
 

@@ -146,7 +146,7 @@ struct RoleMenu: View {
             }
         } label: {
             HStack(spacing: Theme.Space.xs + 2) {
-                Text(chosen).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Text(chosen).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui)
             }
             .foregroundStyle(Theme.ink.ui)

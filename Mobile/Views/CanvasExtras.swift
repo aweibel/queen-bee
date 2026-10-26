@@ -149,7 +149,7 @@ struct BackToParent: View {
         Button { client.goBackToParent() } label: {
             HStack(spacing: Theme.Space.xs + 2) {
                 Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold)).accessibilityHidden(true)
-                Text("Back to \(parent.name)").dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                Text("Back to \(parent.name)").dsSans(Theme.Touch.body, .medium).lineLimit(1)
             }
             .foregroundStyle(Theme.ink.ui)
             .padding(.horizontal, Theme.Space.m)
@@ -209,7 +209,7 @@ struct CalloutView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(Callout.title).dsMono(Theme.Touch.body, .medium).accessibilityAddTraits(.isHeader)
+            Text(Callout.title).dsSans(Theme.Touch.body, .medium).accessibilityAddTraits(.isHeader)
             Text(callout.text)
                 .dsSans(Theme.Touch.caption + 1)
                 .foregroundStyle(Theme.inkSecondary.ui)

@@ -39,7 +39,7 @@ private struct NeedsYouBanner: View {
         let abilities = client.abilities
         VStack(alignment: .leading, spacing: 0) {
             Label(waiting.count == 1 ? "1 needs you" : "\(waiting.count) need you", systemImage: "hand.raised")
-                .dsMono(Theme.Touch.body, .medium)
+                .dsSans(Theme.Touch.body, .medium)
                 .foregroundStyle(Theme.liveInk.ui)
                 .padding(.horizontal, Theme.Space.m)
                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
@@ -54,7 +54,7 @@ private struct NeedsYouBanner: View {
                             .frame(width: 20)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(card.name).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                            Text(card.name).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                             Text(card.reason).dsSans(Theme.Touch.caption + 1).foregroundStyle(Theme.inkSecondary.ui)
                                 .multilineTextAlignment(.leading)
                         }

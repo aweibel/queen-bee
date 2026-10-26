@@ -66,7 +66,7 @@ struct DetailsScreen: View {
                 Button { client.closeDetails() } label: {
                     HStack(spacing: Theme.Space.xs) {
                         Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
-                        Text(back).dsMono(Theme.Touch.body).lineLimit(1)
+                        Text(back).dsSans(Theme.Touch.body).lineLimit(1)
                     }
                     .foregroundStyle(Theme.ink.ui)
                     .padding(.horizontal, Theme.Space.m)
@@ -80,7 +80,7 @@ struct DetailsScreen: View {
             } else {
                 // Named as the sheet of the panel's tabs names its tab, so the two sheets read alike.
                 Text("Details")
-                    .dsMono(Theme.Touch.body, .medium)
+                    .dsSans(Theme.Touch.body, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .padding(.horizontal, Theme.Space.xs + 7)
                     .accessibilityAddTraits(.isHeader)
@@ -274,7 +274,7 @@ struct ItemView: View {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
                 Text(item.label).dsSans().foregroundStyle(Theme.inkSecondary.ui)
                 Spacer(minLength: Theme.Space.s)
-                Text(item.value).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+                Text(item.value).dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                     .multilineTextAlignment(.trailing)
                     // Wrapped, never cut short: a sheet pulled to full height offers a row one line.
                     .fixedSize(horizontal: false, vertical: true)
@@ -417,7 +417,7 @@ struct MessageList: View {
             ForEach(messages) { message in
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text("\(Clock.time(message.date)) · from \(message.from)")
-                        .dsMono(Theme.Touch.caption)
+                        .dsSans(Theme.Touch.caption)
                         .foregroundStyle(Theme.inkSecondary.ui)
                     LongText(text: message.text, lines: 6).foregroundStyle(Theme.ink.ui)
                 }

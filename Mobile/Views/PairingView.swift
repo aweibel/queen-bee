@@ -42,7 +42,7 @@ private struct IntroScreen: View {
         PairingPage {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 Text("Queen Bee")
-                    .dsMono(28, .medium)
+                    .dsSans(28, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .accessibilityAddTraits(.isHeader)
                 // Ink, as is everything written straight on the paper here: the lighter ink is too faint on it to read easily.
@@ -75,14 +75,14 @@ private struct StepRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Text("\(number)")
-                .dsMono(Theme.Touch.body, .medium)
+                .dsSans(Theme.Touch.body, .medium)
                 .foregroundStyle(Theme.ink.ui)
                 .frame(width: 28, height: 28)
                 .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.hairline.ui))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text(title).dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+                Text(title).dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                 Text(text).dsSans().foregroundStyle(Theme.inkSecondary.ui)
             }
         }
@@ -113,7 +113,7 @@ private struct MacListScreen: View {
                         Button { choose(mac) } label: {
                             HStack(spacing: Theme.Space.m) {
                                 Image(systemName: "desktopcomputer").foregroundStyle(Theme.inkSecondary.ui).accessibilityHidden(true)
-                                Text(mac.name).dsMono().foregroundStyle(Theme.ink.ui).lineLimit(1)
+                                Text(mac.name).dsSans().foregroundStyle(Theme.ink.ui).lineLimit(1)
                                 Spacer(minLength: Theme.Space.s)
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 12, weight: .semibold))
@@ -240,7 +240,7 @@ private struct CodeScreen: View {
             }
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.outline.ui, lineWidth: Theme.Stroke.card))
                 .accessibilityLabel("Camera, looking for the pairing code")
         case .notDetermined:
 ProgressView().tint(Theme.inkSecondary.ui).frame(maxWidth: .infinity).padding(.vertical, 60)

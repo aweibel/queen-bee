@@ -9,30 +9,35 @@ import UIKit
 /// through". Red is "it stopped here". Cobalt is selected or focused.
 nonisolated enum Theme {
     // MARK: Colour, as light and dark pairs
-    // The colours from before the redesign, for the screens that haven't moved to `Palette` yet.
+    // The app's long-standing names for the roles in `Palette`, the same as the Mac's. New code can take `Palette` directly.
 
-    static let paper = Palette.Classic.paper.platform
-    static let surface = Palette.Classic.surface.platform
-    static let bar = Palette.Classic.bar.platform
+    /// Behind a screen's content, and the canvas.
+    static let paper = Palette.panel.platform
+    /// A panel, a sheet, a list.
+    static let surface = Palette.overlay.platform
+    /// A strip or a row set off from what it sits on: a header, a field, a card.
+    static let bar = Palette.raised.platform
     /// Under a finger, where the Mac has the pointer over it.
-    static let barHover = Palette.Classic.barHover.platform
-    static let ink = Palette.Classic.ink.platform
-    static let inkSecondary = Palette.Classic.inkSecondary.platform
-    static let hairline = Palette.Classic.hairline.platform
+    static let barHover = Palette.hover.platform
+    static let ink = Palette.text.platform
+    static let inkSecondary = Palette.textMuted.platform
+    static let hairline = Palette.hairline.platform
+    /// A line that has to be seen: around a control or a card.
+    static let outline = Palette.hairlineStrong.platform
     /// The canvas's dot matrix.
-    static let dot = Palette.Classic.dot.platform
+    static let dot = Palette.canvasDot.platform
 
-    static let live = Palette.Classic.live.platform
-    static let liveTint = Palette.Classic.liveTint.platform
-    static let liveInk = Palette.Classic.liveInk.platform
-    static let passTint = Palette.Classic.passTint.platform
-    static let passInk = Palette.Classic.passInk.platform
-    static let failTint = Palette.Classic.failTint.platform
-    static let failInk = Palette.Classic.failInk.platform
-    static let select = Palette.Classic.select.platform
+    static let live = Palette.live.platform
+    static let liveTint = Palette.liveTint.platform
+    static let liveInk = Palette.liveText.platform
+    static let passTint = Palette.passTint.platform
+    static let passInk = Palette.passText.platform
+    static let failTint = Palette.failTint.platform
+    static let failInk = Palette.failText.platform
+    static let select = Palette.accent.platform
 
-    static let terminal = Palette.Classic.terminal.platform
-    static let terminalInk = Palette.Classic.terminalInk.platform
+    static let terminal = Palette.terminal.platform
+    static let terminalInk = Palette.terminalText.platform
 
     // MARK: Type
 
@@ -77,8 +82,8 @@ nonisolated enum Theme {
     }
 
     enum Radius {
-        static let card: CGFloat = 3
-        static let badge: CGFloat = 2
+        static let card: CGFloat = DS.Radius.m
+        static let badge: CGFloat = DS.Radius.xs
     }
 
     enum Stroke {

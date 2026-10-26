@@ -172,7 +172,7 @@ private struct TabButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .dsMono(Theme.Touch.body, isOn ? .medium : .regular)
+                .dsSans(Theme.Touch.body, isOn ? .medium : .regular)
                 .foregroundStyle((isOn ? Theme.ink : Theme.inkSecondary).ui)
                 .lineLimit(1)
                 .fixedSize()
@@ -201,8 +201,8 @@ private struct PageSwitch: View {
                 let isOn = page == selected, count = counts[page] ?? 0
                 Button { pick(page) } label: {
                     HStack(spacing: Theme.Space.xs + 2) {
-                        Text(page.title).dsMono(Theme.Touch.body, .medium)
-                        if count > 0 { Text("\(count)").dsMono(Theme.Touch.caption).opacity(0.75) }
+                        Text(page.title).dsSans(Theme.Touch.body, .medium)
+                        if count > 0 { Text("\(count)").dsSans(Theme.Touch.caption).opacity(0.75) }
                     }
                     .lineLimit(1)
                     .foregroundStyle((isOn ? Theme.surface : Theme.ink).ui)
@@ -216,7 +216,7 @@ private struct PageSwitch: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.outline.ui, lineWidth: Theme.Stroke.card))
         .animation(Theme.Motion.quick, value: selected)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isTabBar)
@@ -252,7 +252,7 @@ struct NothingOpen: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text("No flow open").dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+            Text("No flow open").dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
             Text(text).dsSans().foregroundStyle(Theme.inkSecondary.ui)
         }
     }
@@ -301,7 +301,7 @@ struct OrchestratorPanel: View {
             }
         } else {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                Text("Not started").dsMono(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
+                Text("Not started").dsSans(Theme.Touch.body, .medium).foregroundStyle(Theme.ink.ui)
                 Text("The session that runs this flow hasn't been started on your Mac.").dsSans().foregroundStyle(Theme.inkSecondary.ui)
                 if let button = client.abilities.orchestrator { OrchestratorButton(button: button).padding(.top, Theme.Space.xs) }
             }

@@ -399,7 +399,7 @@ private struct AskSheet<Content: View, Action: View>: View {
     var body: some View {
         let asked = VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text(title)
-                .dsMono(Theme.Touch.title, .medium)
+                .dsSans(Theme.Touch.title, .medium)
                 .foregroundStyle(Theme.ink.ui)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)

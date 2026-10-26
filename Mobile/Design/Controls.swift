@@ -1,3 +1,4 @@
+import QueenBeeDesign
 import SwiftUI
 
 /// The parts every screen is built from, drawn from the tokens so a button, a badge and a panel all look
@@ -7,9 +8,12 @@ import SwiftUI
 /// The look of anything that sits on the paper: a surface and an ink outline, with no shadow.
 struct FloatingPanel: ViewModifier {
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
         content
-            .background(Theme.surface.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+            .background(Palette.overlay.color, in: shape)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Palette.hairlineStrong.color, lineWidth: DS.Stroke.hairline))
+            .shadow(color: .black.opacity(0.10), radius: 8, y: 2)
     }
 }
 
@@ -20,8 +24,8 @@ extension View {
     func fieldBox() -> some View {
         padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.s)
-            .background(Theme.bar.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.hairline.ui))
+            .background(Palette.raised.color, in: RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous).strokeBorder(Palette.hairlineStrong.color))
     }
 }
 
@@ -51,11 +55,11 @@ struct Badge: View {
             if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .bold)).accessibilityHidden(true) }
             if !text.isEmpty { Text(text) }
         }
-        .dsMono(Theme.Touch.caption, .medium)
+        .dsSans(Theme.Touch.caption, .medium)
         .foregroundStyle(foreground.ui)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(background.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
+        .padding(.horizontal, tone == .plain ? 8 : 10)
+        .frame(minHeight: 24)
+        .background(background.ui, in: Capsule())
     }
 
     private var foreground: UIColor {
@@ -101,8 +105,18 @@ struct PanelButtonStyle: ButtonStyle {
     /// As wide as the space it is given, for the one button at the foot of a screen.
     var isWide = false
 
+    // The design system's buttons, so a panel's buttons look like every other button in the app. The buttons of a
+    // bar that has its own outline keep their own look.
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        PanelButton(configuration: configuration, kind: kind, isWide: isWide)
+        switch kind {
+        case .outline: DSButtonStyle(.secondary, wide: isWide).makeBody(configuration: configuration)
+        case .quiet: DSButtonStyle(.ghost, wide: isWide).makeBody(configuration: configuration)
+        case .filled, .run: DSButtonStyle(.primary, wide: isWide).makeBody(configuration: configuration)
+        case .danger: DSButtonStyle(.danger, wide: isWide).makeBody(configuration: configuration)
+        case .live, .stop: DSButtonStyle(.live, wide: isWide).makeBody(configuration: configuration)
+        case .tool, .toolOn: PanelButton(configuration: configuration, kind: kind, isWide: isWide)
+        }
     }
 }
 
@@ -114,7 +128,7 @@ private struct PanelButton: View {
 
     var body: some View {
         configuration.label
-            .dsMono(Theme.Touch.body, .medium)
+            .dsSans(Theme.Touch.body, .medium)
             .lineLimit(1)
             .foregroundStyle(foreground.ui)
             .padding(.horizontal, kind == .quiet || kind == .tool || kind == .toolOn ? Theme.Space.s : Theme.Space.l)
@@ -203,7 +217,7 @@ struct PanelSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Text(title)
-                .dsMono(Theme.Touch.caption)
+                .dsSans(Theme.Touch.caption)
                 .foregroundStyle(Theme.inkSecondary.ui)
                 .accessibilityAddTraits(.isHeader)
             VStack(alignment: .leading, spacing: 0) { content }
@@ -223,7 +237,7 @@ struct PanelRow: View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
             Text(label).dsSans().foregroundStyle(Theme.ink.ui)
             Spacer(minLength: Theme.Space.s)
-            Text(value).dsMono().foregroundStyle(Theme.inkSecondary.ui).multilineTextAlignment(.trailing)
+            Text(value).dsSans().foregroundStyle(Theme.inkSecondary.ui).multilineTextAlignment(.trailing)
         }
         .padding(.horizontal, Theme.Space.m)
         .frame(minHeight: Theme.Touch.target)
@@ -249,7 +263,7 @@ struct Plate<Actions: View>: View {
             }
             VStack(spacing: Theme.Space.s) {
                 Text(title)
-                    .dsMono(Theme.Touch.heading, .medium)
+                    .dsSans(Theme.Touch.heading, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .accessibilityAddTraits(.isHeader)
                 if !text.isEmpty {

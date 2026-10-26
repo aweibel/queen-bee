@@ -41,7 +41,7 @@ struct TerminalViewer: View {
                     .foregroundStyle(Theme.ink.ui)
                     .accessibilityHidden(true)
                 Text(caption.name)
-                    .dsMono(Theme.Touch.title, .medium)
+                    .dsSans(Theme.Touch.title, .medium)
                     .foregroundStyle(Theme.ink.ui)
                     .lineLimit(1)
                     .accessibilityAddTraits(.isHeader)

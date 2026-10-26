@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import UIKit
 
 /// A group of cards on the canvas. Unfolded, it is a named frame drawn behind its cards. Folded, it is one
@@ -14,7 +15,8 @@ final class GroupFrameView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         isAccessibilityElement = true
-        layer.cornerRadius = Theme.Radius.card
+        layer.cornerRadius = DS.Radius.l
+        layer.cornerCurve = .continuous
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.textColor = Theme.ink
         detailLabel.lineBreakMode = .byTruncatingTail
@@ -75,15 +77,15 @@ final class GroupFrameView: UIView {
         if look.group.isFolded {
             // The folded card is a fixed size, so its type only grows as far as the card has room for.
             let grown = min(scale, 1.7)
-            nameLabel.font = Theme.mono(Theme.Size.body * grown, .medium)
-            detailLabel.font = Theme.mono(Theme.Size.caption * grown)
+            nameLabel.font = Theme.sans(Theme.Size.body * grown, .medium)
+            detailLabel.font = Theme.sans(Theme.Size.caption * grown)
             let nameHeight = ceil(nameLabel.intrinsicContentSize.height), detailHeight = ceil(detailLabel.intrinsicContentSize.height)
             let top = max(4, (bounds.height - nameHeight - detailHeight - 2) / 2)
             nameLabel.frame = CGRect(x: 12, y: top, width: bounds.width - 24, height: nameHeight)
             detailLabel.frame = CGRect(x: 12, y: top + nameHeight + 2, width: bounds.width - 24, height: detailHeight)
         } else {
-            nameLabel.font = Theme.mono(Theme.Size.body * scale, .medium)
-            detailLabel.font = Theme.mono(Theme.Size.caption * scale)
+            nameLabel.font = Theme.sans(Theme.Size.body * scale, .medium)
+            detailLabel.font = Theme.sans(Theme.Size.caption * scale)
             let strip = CanvasGeometry.groupTitleHeight * scale
             let name = nameLabel.intrinsicContentSize, detail = detailLabel.intrinsicContentSize
             nameLabel.frame = CGRect(x: 10 * scale, y: (strip - ceil(name.height)) / 2, width: min(ceil(name.width), bounds.width * 0.6), height: ceil(name.height))
@@ -94,9 +96,9 @@ final class GroupFrameView: UIView {
 
     private func restyle() {
         let folded = look.group.isFolded, tone = look.tone
-        backgroundColor = folded ? (tone == .fail ? Theme.failTint : tone == .live ? Theme.liveTint : Theme.surface)
+        backgroundColor = folded ? (tone == .fail ? Theme.failTint : tone == .live ? Theme.liveTint : Theme.bar)
                                  : Theme.ink.withAlphaComponent(0.035)
-        let edge = look.isSelected ? Theme.select : tone == .fail ? Theme.failInk : tone == .live ? Theme.live : folded ? Theme.ink : Theme.inkSecondary
+        let edge = look.isSelected ? Theme.select : tone == .fail ? Theme.failInk : tone == .live ? Theme.live : Theme.outline
         layer.borderColor = edge.cg(in: self)
         layer.borderWidth = look.isSelected ? Theme.Stroke.selected : Theme.Stroke.card
         detailLabel.textColor = tone == .live ? Theme.liveInk : tone == .fail ? Theme.failInk : Theme.inkSecondary

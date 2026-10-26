@@ -142,7 +142,7 @@ private struct EditMenuPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text(menu.title)
-                    .dsMono(Theme.Touch.caption, .medium)
+                    .dsSans(Theme.Touch.caption, .medium)
                     .foregroundStyle(Theme.inkSecondary.ui)
                     .lineLimit(1)
                     .padding(.horizontal, Theme.Space.m)
@@ -161,7 +161,7 @@ private struct EditMenuPanel: View {
                                     .frame(width: 24)
                                     .accessibilityHidden(true)
                             }
-                            Text(item.title).dsMono(Theme.Touch.body, .medium).lineLimit(1)
+                            Text(item.title).dsSans(Theme.Touch.body, .medium).lineLimit(1)
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle((item.isDestructive ? Theme.failInk : Theme.ink).ui)
