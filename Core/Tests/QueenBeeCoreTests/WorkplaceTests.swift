@@ -139,6 +139,16 @@ import Testing
         #expect(Workplace.branchesOpenElsewhere(worktrees: [listed[0]], projectRoot: root).isEmpty)
     }
 
+    @Test func theNoteNamesOneBranchLeftOutAndCountsMore() {
+        #expect(Workplace.notListedNote([]) == nil)
+        #expect(Workplace.notListedNote(["qb/x"])
+                == "qb/x isn't listed: it's open in a worktree, and git lets a branch be open in only one place. To use it, choose A worktree.")
+        let many = (1...42).map { "cursor/\($0)" }
+        #expect(Workplace.notListedNote(many)
+                == "42 branches aren't listed: they're open in worktrees, and git lets a branch be open in only one place. To use one, choose A worktree.")
+        #expect(Workplace.notListedNote(["a", "b"])?.hasPrefix("2 branches aren't listed") == true)
+    }
+
     @Test func theChipSaysWhereTheFlowWorksNowNotWhatItIsSetTo() {
         let root = URL(fileURLWithPath: "/Users/k/acme", isDirectory: true)
         let worktree = Workplace.worktreeFolder(for: "qb/x", in: root)

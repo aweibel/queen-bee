@@ -122,6 +122,7 @@ struct WorkspaceView: View {
         })) {
             if let controller = services.current {
                 WorkplaceForm(controller: controller, isFirstRun: true) {}
+                    .presentationBackground(Theme.surface.ui)
             }
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
