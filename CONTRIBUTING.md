@@ -72,8 +72,9 @@ The README's [How it works](README.md#how-it-works) section maps the five parts:
 `Mobile/` and `Plugin/qb-link/`. A few habits the code already follows:
 
 - Anything that can be decided without a window goes in `Core/` and gets a test there.
-- Every colour, type size, spacing step and timing comes from `App/Design/Tokens.swift`. `Mobile/Design/Tokens.swift`
-  mirrors it, so change a value in both.
+- Every colour, type size, spacing step and timing comes from the shared design system in `Core/Sources/QueenBeeDesign`,
+  which both apps use, along with its parts (buttons, status pills, rows, tabs). Screens arrange those and set no
+  colour or size of their own. `swift test` checks that every text colour is readable on every surface, in light and dark.
 - Words people read are plain, with no jargon. Claude Code's own option names (effort, permission modes, model)
   stay exactly as Claude Code writes them.
 - Anything that lets a flow file or the orchestrator do something on the person's Mac without asking needs a
