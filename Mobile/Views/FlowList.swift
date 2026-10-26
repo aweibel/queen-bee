@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import SwiftUI
 
 /// The Mac's projects and their flows. Each flow's row says what it needs from you, in the Mac's words.
@@ -168,14 +169,13 @@ private struct FlowRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Rectangle()
-                .fill(isOpen ? Theme.ink.ui : .clear)
-                .frame(width: 2, height: 18)
-                .padding(.trailing, CGFloat(max(0, depth - 1)) * 14)
             if flow.isSubflow {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.inkSecondary.ui)
+                    .padding(.leading, CGFloat(max(0, depth - 1)) * 14)
+            } else {
+                StatusDot(flow.activity.tone, size: 9).frame(width: 16)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(flow.name)
@@ -199,8 +199,9 @@ private struct FlowRow: View {
         }
         .padding(.horizontal, Theme.Space.s)
         .frame(maxWidth: .infinity, minHeight: Theme.Touch.target, alignment: .leading)
-        .background(isOpen ? Theme.bar.ui : isPressed || isMenuOut ? Theme.barHover.ui : .clear,
-                    in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
+        .background(isOpen ? Palette.selected.color : isPressed || isMenuOut ? Palette.hover.color : .clear,
+                    in: RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous))
+        .accessibilityAddTraits(isOpen ? .isSelected : [])
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
         .onLongPressGesture(minimumDuration: 0.4, perform: hold) { isPressed = $0 }

@@ -1,3 +1,4 @@
+import QueenBeeDesign
 import SwiftUI
 
 /// The app once it has a Mac: the flows, the open flow's canvas, and the panel with the details of what is
@@ -162,6 +163,15 @@ private struct StackShell: View {
     @State private var foot: CGFloat = 0
     /// How far up the sheet is pulled.
     @State private var detent = PresentationDetent.medium
+    /// Which list the first screen shows, and whether the bar at its foot is open into its menu.
+    @State private var tab = PhoneTab.flows
+    @State private var showsMenu = false
+
+    private var needsConnectionBar: Bool {
+        let status = ConnectionStatus(client)
+        if case .connected = status { return status.hasHelp }
+        return true
+    }
 
     private var sheet: Binding<PanelSheet?> {
         Binding {
@@ -188,13 +198,39 @@ private struct StackShell: View {
 
     var body: some View {
         NavigationStack(path: path) {
-            FlowList()
-                .safeAreaInset(edge: .bottom, alignment: .leading, spacing: 0) {
-                    ConnectionBar(showSettings: showSettings).padding(Theme.Space.m)
+            Group {
+                switch tab {
+                case .flows: FlowList()
+                case .needsYou: WaitingList()
                 }
-                .background(Theme.surface.ui)
-                .navigationTitle("Flows")
-                .navigationBarTitleDisplayMode(.inline)
+            }
+                // The menu dims what is behind it, and a tap there puts it away.
+                .overlay {
+                    if showsMenu {
+                        Palette.scrim.color.ignoresSafeArea()
+                            .onTapGesture { withAnimation(DS.Motion.standard) { showsMenu = false } }
+                            .transition(.opacity)
+                    }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(alignment: .leading, spacing: DS.Space.s) {
+                        if showsMenu {
+                            PhoneMenu(showSettings: showSettings) { showsMenu = false }
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottomLeading)))
+                        } else if needsConnectionBar {
+                            // Something is wrong with the connection, or there is something to know about it: it
+                            // stays in sight, over the bar, rather than inside the menu.
+                            ConnectionBar(showSettings: showSettings)
+                        }
+                        PhoneTabBar(tab: $tab, showsMenu: $showsMenu)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DS.Space.l)
+                    .padding(.bottom, DS.Space.xs)
+                }
+                .background(Palette.panel.color)
+                .navigationTitle(tab == .flows ? "Flows" : "Needs you")
+                .navigationBarTitleDisplayMode(.large)
                 .navigationDestination(for: String.self) { _ in
                     CanvasArea(showSettings: showSettings)
                         .navigationTitle(client.openFlow?.flow.name ?? "")
