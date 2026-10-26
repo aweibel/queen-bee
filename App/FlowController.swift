@@ -248,7 +248,10 @@ final class FlowController: ToolHost {
 
     /// Whether a Start card's schedule is one the person turned on in this app.
     func isArmed(_ card: Card) -> Bool {
-        card.trigger.map { ScheduleArming.isArmed($0, command: card.command ?? "", scope: allowScope, cardID: card.id) } ?? false
+        // Which schedules are on is kept in the app's settings, which nothing watches. Reading the revision here
+        // redraws whatever asks when one goes on or off.
+        _ = schedulesRevision
+        return card.trigger.map { ScheduleArming.isArmed($0, command: card.command ?? "", scope: allowScope, cardID: card.id) } ?? false
     }
 
     /// Turns a Start card's schedule off and leaves it set, so that it does nothing until it is turned on again.
@@ -263,12 +266,13 @@ final class FlowController: ToolHost {
     func setTrigger(_ trigger: Trigger?, onCard id: String) {
         guard let card = flow.card(id), card.kind == .start else { return }
         ScheduleArming.arm(trigger, command: card.command ?? "", scope: allowScope, cardID: id)
-        let changed = perform("Change Schedule", key: "trigger:\(id)") {
+        _ = perform("Change Schedule", key: "trigger:\(id)") {
             guard let index = $0.cards.firstIndex(where: { $0.id == id && $0.kind == .start }) else { return }
             $0.cards[index].trigger = trigger
         }
-        // Turning on a schedule that came with the flow changes nothing in the flow itself.
-        if changed { reschedule() }
+        // Even when the flow itself doesn't change, as when turning on a schedule that came with the flow, it is
+        // now on, so it has to be given its next time.
+        reschedule()
     }
 
     /// Works out what fires next and waits for it. Called whenever a schedule changes.

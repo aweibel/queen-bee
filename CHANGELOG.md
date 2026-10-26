@@ -6,6 +6,10 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Turning on a schedule that came with the flow, in its file or from an undo, starts it at once. Before, the Start card kept saying "off" and nothing ran until Queen Bee was opened again.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added
