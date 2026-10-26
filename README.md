@@ -6,7 +6,7 @@ Queen Bee is a work in progress. It is open source, and [contributions are welco
 
 Each agent is a live `claude` session in a terminal that sits on the canvas. You can click into any of them and type. Logic cards (If / Else, Switch, And, Or, Prompt, Loop until, Approval, Script, Flow, End) route each agent's finished reply to the next cards. Every flow also has an orchestrator, a Claude Code session docked beside the canvas that can edit the flow, run it and talk to the agents.
 
-![A finished run of a flow with three agents, a sub-flow, a script check and an approval: cards the run passed through carry a check and a count, and travelled links are green](docs/queen-bee-flight-plan-light.png)
+![A finished run of a flow with two agents, a check and an approval: the sidebar lists three projects and the places above them, cards the run passed through carry a check, and travelled links are green with a count](docs/queen-bee-flight-plan-light.png)
 
 The app follows light and dark. [The same run in dark](docs/queen-bee-flight-plan-dark.png).
 
@@ -63,14 +63,14 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 
 - An empty flow shows a note pointing at the orchestrator: describe the flow you want there and it builds it. Close the note to build by hand.
 - The **palette** at the canvas's top-left holds the card types. Click one to add it, or drag it to where you want it. Rest the pointer on one to read what it does. Each agent card starts its own Claude Code session.
-- An **Approval** card stops a run until you approve, edit or reject the message. A **Script** card runs a shell command and goes out Pass or Fail; a command you didn't type yourself asks before it first runs. A **Flow** card runs another flow as one step: double-click it to open that flow, or to make a new sub-flow with an Input and an Output, and use the names in the title bar to go back. Sub-flows can hold Flow cards of their own, three levels deep unless you change the limit in the top flow's settings (the sliders button in the toolbar).
+- An **Approval** card stops a run until you approve, edit or reject the message. A **Script** card runs a shell command and goes out Pass or Fail; a command you didn't type yourself asks before it first runs. A **Flow** card runs another flow as one step: double-click it to open that flow, or to make a new sub-flow with an Input and an Output, and use the names in the header above the canvas to go back. Sub-flows can hold Flow cards of their own, three levels deep unless you change the limit in the top flow's settings (the **Settings** tab above the canvas).
 
-  ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and toolbar say the flow needs you](docs/queen-bee-approval.png)
+  ![A run stopped at an Approval card: the card's settings show the message with Approve and Reject, and the sidebar and the header say the flow needs you](docs/queen-bee-approval.png)
 
 - An Approval card can be told to wait at most so long, then approve or reject the message itself. A Script card can be told how long to wait for you to allow a command before skipping it.
 - A **For each** card splits a list into items, one per line or the items of a JSON list, and sends them out Each one at a time. Link the last card that works on an item back into the For each card: what comes back that way is that item's result. When every item is back, all the results go out Done together. A **Loop until** card that runs out of tries goes out Gave up, or Done if nothing is linked to Gave up.
-- In a git repository, each flow works on one branch. The first time a flow opens, Queen Bee asks where: **This folder**, on its branch or switched to another, or **A worktree**, a separate copy on a branch of its own made from main or a branch you pick. The chip after the project's name in the title bar shows the branch and opens the same choice later. Worktrees are kept in the project's `.queenbee/worktrees` folder, and a sub-flow works wherever the flow at the top does. Switching the folder to another branch waits while it has uncommitted changes or another flow is running in it.
-- A flow's settings (the sliders button in the toolbar) can stop a run once it has spent a set amount, reckoned at API prices from what its agents have used.
+- In a git repository, each flow works on one branch. The first time a flow opens, Queen Bee asks where: **This folder**, on its branch or switched to another, or **A worktree**, a separate copy on a branch of its own made from main or a branch you pick. The branch chip in the header, beside Run, shows the branch and opens the same choice later. Worktrees are kept in the project's `.queenbee/worktrees` folder, and a sub-flow works wherever the flow at the top does. Switching the folder to another branch waits while it has uncommitted changes or another flow is running in it.
+- A flow's settings (the **Settings** tab above the canvas) can stop a run once it has spent a set amount, reckoned at API prices from what its agents have used.
 - Turn on **Browser** in an agent's settings to give it a web browser in its card: terminal on the left, the live page on the right. The agent opens and reads pages by itself and asks before it clicks or types, unless its permissions say otherwise. Click into the page to use it yourself, for instance to sign in to a site; agents with a browser in the same project share those sign-ins, and **Clear browser data** in the flow's settings forgets them. It uses Chrome, Chromium, Edge or Brave if one is installed, and offers to download a browser of its own if not.
 - A Start card's settings can make it run on a schedule or when a file changes. Schedules run only while Queen Bee is open.
 - **Run from here…** in a card's settings starts a run at that card with a message you give it. A card a run stopped at offers **Retry**.
@@ -88,7 +88,7 @@ A build from source is called Queen Bee Dev. It keeps its own settings and suppo
 - Click a link to read the messages it carried in the run on show.
 - The figure beside the zoom control is what the flow has used, at API prices, as Claude Code reports it. Click it for a breakdown by agent and by run.
 - When the app is in the background, a notification tells you that a card needs you or a run has ended. **Settings** turns this off.
-- A flow that needs you says so on its sidebar row, and the toolbar shows a button that takes you to the waiting card.
+- A flow that needs you says so on its sidebar row, and the header shows a button that takes you to the waiting card. **Needs you** at the top of the sidebar lists every card waiting on you, in every project; **Runs** lists every flow's runs, numbered, with each one's log; **Schedules** lists every schedule, on and off; and **Devices** holds your paired iPad and iPhone.
 - **View → Appearance** switches between light, dark and following the system.
 - **Remote.** An iPad or iPhone on the same Wi-Fi can watch your flows, and run, answer and edit them if you let it. **Settings → Remote** turns it on and pairs a device. See [On your iPad or iPhone](#on-your-ipad-or-iphone).
 

@@ -6,6 +6,16 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A new look, after Linear's apps, in Queen Bee's own colours, on the Mac and on the iPhone and iPad. On the Mac the sidebar sits on the window's colour and the flow in a rounded panel, with its header and Canvas and Settings tabs along the top; cards, panels, buttons and the ⌘K menu are redrawn to match. On the iPhone a floating bar at the foot of the first screen holds Needs you, Flows and a menu with your Mac, Settings and pinned flows. Light and dark both follow it. Agents and the orchestrator are still live Claude Code sessions.
+- Both apps now share one design system, so a colour or a size is set in one place for both.
+
+### Added
+
+- Needs you, Runs, Schedules and Devices at the top of the Mac's sidebar: what waits on you, every flow's runs with each one's log, every schedule with Turn on and Turn off, and your paired devices.
+- Runs are numbered (#12), and a run keeps its number after older runs are let go.
+
 ## [0.7.1] - 2026-10-26
 
 ### Fixed
