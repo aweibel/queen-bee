@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import SwiftUI
 
 /// The chip after the project's name in the title bar: the branch the flow works on, and "worktree" when it
@@ -10,23 +11,17 @@ struct WorkplaceChip: View {
 
     var body: some View {
         Button { showsForm.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.triangle.branch").font(.system(size: 9, weight: .semibold))
-                // A long branch name is cut short in the middle rather than taking over the title bar.
-                Text(text).lineLimit(1).truncationMode(.middle).frame(maxWidth: 260)
-                Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted.color)
+                // A long branch name is cut short in the middle rather than taking over the header.
+                Text(text).textRole(.mono).lineLimit(1).truncationMode(.middle).frame(maxWidth: 260)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Palette.textFaint.color)
             }
-            .font(.dsMono(Theme.Size.caption, .medium))
-            .foregroundStyle(Theme.select.ui)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Theme.select.ui.opacity(0.12), in: Capsule())
-            .contentShape(Capsule())
-            // Its whole width, always: the title bar measures its item once, and would otherwise cut the
-            // branch short when the chip's words change after the flow opens.
             .fixedSize()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.ds(.ghost))
         .help("Where this flow works. Click to check or change it.")
         .popover(isPresented: $showsForm, arrowEdge: .bottom) {
             WorkplaceForm(controller: controller, isFirstRun: false) { showsForm = false }

@@ -1,51 +1,27 @@
+import QueenBeeDesign
 import SwiftUI
 
-/// Project folders and their flows, in a panel that floats over the canvas's left edge.
-/// Each flow's row says what it needs from you.
+/// The sidebar, on the window's own colour: what the app is, a search, and every project's flows. Each flow's
+/// row says with its dot what it needs from you.
 struct SidebarView: View {
     @State private var search = ""
+    @State private var isSearching = false
+    @FocusState private var searchFocused: Bool
     @State private var renaming: String?
     @State private var draftName = ""
     @State private var deleting: FlowController?
+    @Environment(\.openSettings) private var openSettings
     private var services: AppServices { AppServices.shared }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium))
-                TextField("Flows and cards", text: $search)
-                    .textFieldStyle(.plain)
-                    .font(.dsSans(Theme.Size.body))
-                if !search.isEmpty {
-                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain)
-                }
-            }
-            .foregroundStyle(Theme.inkSecondary.ui)
-            .padding(.horizontal, Theme.Space.s)
-            .padding(.vertical, 6)
-            .background(Theme.bar.ui)
-            Rectangle().fill(Theme.hairline.ui).frame(height: 1)
-            if !RemoteHost.shared.sessions.isEmpty {
-                // "Can control" is read from the list of devices, which is watched, so turning it on or off shows here at once.
-                let devices = RemoteHost.shared.devices
-                let controls = RemoteHost.shared.sessions.contains { devices.canControl($0.device.id) }
-                let names = RemoteHost.shared.sessions.map { devices.canControl($0.device.id) ? "\($0.device.name) · can control" : $0.device.name }
-                    .joined(separator: ", ")
-                Label(names, systemImage: "ipad.and.iphone")
-                    .font(.dsMono(Theme.Size.caption))
-                    .foregroundStyle(Theme.inkSecondary.ui)
-                    .lineLimit(1)
-                    .padding(.horizontal, Theme.Space.s)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .help(controls ? "Connected to this Mac now. A device that can control can start and stop runs, answer approvals, type into sessions and edit flows. You can turn that off, or remove a device, in Settings."
-                          : "Connected to this Mac now. You can remove a device in Settings.")
-                Rectangle().fill(Theme.hairline.ui).frame(height: 1)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            // The window's close, minimise and zoom buttons sit here.
+            Color.clear.frame(height: 30)
+            topRow
+            if isSearching { searchField }
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     let pinned = services.allFlows.filter { services.pinnedFlowIDs.contains($0.flow.id) && matches($0) }
                     if !pinned.isEmpty {
                         header("Pinned")
@@ -55,6 +31,7 @@ struct SidebarView: View {
                         header(project.name) {
                             Button { project.newFlow() } label: { Image(systemName: "plus").font(.system(size: 10, weight: .semibold)) }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("New flow in \(project.name)")
                                 .help("New flow in \(project.name)")
                         }
                         .contextMenu {
@@ -67,27 +44,20 @@ struct SidebarView: View {
                         }
                         ForEach(project.unreadable, id: \.self) { url in
                             Label(url.lastPathComponent, systemImage: "exclamationmark.triangle")
-                                .font(.dsMono(Theme.Size.caption))
-                                .foregroundStyle(Theme.failInk.ui)
-                                .padding(.horizontal, Theme.Space.s)
-                                .padding(.vertical, 4)
+                                .textRole(.caption)
+                                .foregroundStyle(Palette.failText.color)
+                                .padding(.horizontal, DS.Space.s)
+                                .padding(.vertical, DS.Space.xs)
                                 .help("Queen Bee can't read this file as a flow, so it has left it alone.")
                         }
                     }
                 }
-                .padding(Theme.Space.xs)
+                .padding(.horizontal, DS.Space.s)
+                .padding(.bottom, DS.Space.s)
             }
+            .scrollIndicators(.never)
 
-            Rectangle().fill(Theme.hairline.ui).frame(height: 1)
-            Button { WorkspaceView.pickProjectFolder() } label: {
-                Label("Add Project Folder…", systemImage: "folder.badge.plus")
-                    .font(.dsSans(Theme.Size.body))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.ink.ui)
-            .padding(Theme.Space.s)
+            footer
         }
         .confirmationDialog("Move \"\(deleting?.flow.name ?? "")\" to the Trash?",
                             isPresented: .init(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
@@ -102,23 +72,109 @@ struct SidebarView: View {
         }
     }
 
+    /// The app's menu, then search and a new flow.
+    private var topRow: some View {
+        HStack(spacing: DS.Space.xs) {
+            Menu {
+                Button("Add Project Folder…") { WorkspaceView.pickProjectFolder() }
+                Button("Settings…") { openSettings() }
+                Divider()
+                Button("Welcome to Queen Bee") { services.showsWelcome = true }
+            } label: {
+                HStack(spacing: DS.Space.s) {
+                    Text("QB")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Palette.onAccent.color)
+                        .frame(width: 20, height: 20)
+                        .background(Palette.live.color, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    Text("Queen Bee").textRole(.headline).foregroundStyle(Palette.text.color)
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Palette.textFaint.color)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Queen Bee")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.ds(.ghost))
+            .fixedSize()
+            Spacer(minLength: 0)
+            Button {
+                isSearching.toggle()
+                if isSearching { searchFocused = true } else { search = "" }
+            } label: { Image(systemName: "magnifyingglass") }
+                .buttonStyle(.dsIcon)
+                .accessibilityLabel("Search flows and cards")
+                .help("Search flows and cards")
+            Button { (services.current?.project ?? services.projects.first)?.newFlow() } label: { Image(systemName: "square.and.pencil") }
+                .buttonStyle(.dsIcon)
+                .disabled(services.projects.isEmpty)
+                .accessibilityLabel("New flow")
+                .help("New flow (⇧⌘N)")
+        }
+        .padding(.horizontal, DS.Space.s)
+        .padding(.bottom, DS.Space.s)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.textFaint.color)
+            TextField("Flows and cards", text: $search)
+                .textFieldStyle(.plain)
+                .textRole(.body)
+                .focused($searchFocused)
+                .onExitCommand { search = ""; isSearching = false }
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Palette.textFaint.color)
+                    .accessibilityLabel("Clear the search")
+            }
+        }
+        .padding(.horizontal, DS.Space.s)
+        .frame(height: DS.Size.control)
+        .raisedSurface(radius: DS.Radius.s)
+        .padding(.horizontal, DS.Space.s)
+        .padding(.bottom, DS.Space.s)
+    }
+
+    /// Who is connected from an iPad or iPhone, and adding a project.
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if !RemoteHost.shared.sessions.isEmpty {
+                // "Can control" is read from the list of devices, which is watched, so turning it on or off shows here at once.
+                let devices = RemoteHost.shared.devices
+                let controls = RemoteHost.shared.sessions.contains { devices.canControl($0.device.id) }
+                let names = RemoteHost.shared.sessions.map { devices.canControl($0.device.id) ? "\($0.device.name) · can control" : $0.device.name }
+                    .joined(separator: ", ")
+                HStack(spacing: DS.Space.s) {
+                    Image(systemName: "ipad.and.iphone").frame(width: 16)
+                    Text(names).lineLimit(1)
+                    Spacer(minLength: 0)
+                    StatusDot(.pass, size: 6)
+                }
+                .textRole(.caption)
+                .foregroundStyle(Palette.textMuted.color)
+                .padding(.horizontal, DS.Space.s)
+                .frame(height: DS.Size.navRow)
+                .help(controls ? "Connected to this Mac now. A device that can control can start and stop runs, answer approvals, type into sessions and edit flows. You can turn that off, or remove a device, in Settings."
+                      : "Connected to this Mac now. You can remove a device in Settings.")
+            }
+            Button { WorkspaceView.pickProjectFolder() } label: {
+                NavRow("Add Project Folder…") { Image(systemName: "folder.badge.plus") }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(DS.Space.s)
+    }
+
     private func header(_ title: String) -> some View {
         header(title) { EmptyView() }
     }
 
     private func header<Trailing: View>(_ title: String, @ViewBuilder trailing: () -> Trailing) -> some View {
-        HStack {
-            Text(title)
-                .font(.dsMono(Theme.Size.caption))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            trailing()
-        }
-        .foregroundStyle(Theme.inkSecondary.ui)
-        .padding(.horizontal, Theme.Space.s)
-        .padding(.top, Theme.Space.s)
-        .padding(.bottom, 2)
-        .contentShape(Rectangle())
+        SectionHeader(title, trailing: trailing)
+            .padding(.top, DS.Space.m)
+            .contentShape(Rectangle())
     }
 
     /// A flow matches a search by its own name or by the name of any card in it.
@@ -151,21 +207,29 @@ struct SidebarView: View {
     private func row(for controller: FlowController, outer: FlowController? = nil) -> some View {
         let id = controller.flow.id
         let selected = services.selectedFlowID == id
-        FlowRow(isSelected: selected) {
+        Group {
             if renaming == id {
                 TextField("Name", text: $draftName)
                     .textFieldStyle(.plain)
+                    .textRole(.body)
                     .onSubmit {
                         controller.rename(to: draftName)
                         renaming = nil
                     }
+                    .onExitCommand { renaming = nil }
+                    .padding(.horizontal, DS.Space.s)
+                    .frame(height: DS.Size.navRow)
+                    .raisedSurface(radius: DS.Radius.s)
             } else {
-                if controller.flow.isSubflow == true {
-                    Image(systemName: "arrow.turn.down.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.inkSecondary.ui)
+                NavRow(controller.flow.name, selected: selected) {
+                    if controller.flow.isSubflow == true {
+                        Image(systemName: "arrow.turn.down.right").font(.system(size: 9, weight: .semibold))
+                    } else {
+                        StatusDot(tone(of: controller))
+                    }
+                } trailing: {
+                    activity(of: controller)
                 }
-                Text(controller.flow.name).lineLimit(1)
-                Spacer(minLength: 4)
-                activity(of: controller)
             }
         }
         .onTapGesture {
@@ -186,39 +250,21 @@ struct SidebarView: View {
         }
     }
 
+    private func tone(of controller: FlowController) -> StatusTone {
+        switch controller.activity {
+        case .needsYou, .running: .live
+        case .failed: .fail
+        case .quiet: .neutral
+        }
+    }
+
+    /// Words for the two states worth reading at a glance. Running shows by its dot alone.
     @ViewBuilder
     private func activity(of controller: FlowController) -> some View {
         switch controller.activity {
-        case .needsYou: Badge(text: "needs you", tone: .live)
-        case .running: Badge(text: "running", tone: .live)
-        case .failed: Badge(text: "stopped", tone: .fail)
-        case .quiet: EmptyView()
+        case .needsYou: Text("Needs you").textRole(.caption).foregroundStyle(Palette.liveText.color)
+        case .failed: Text("Stopped").textRole(.caption).foregroundStyle(Palette.failText.color)
+        case .running, .quiet: EmptyView()
         }
-    }
-}
-
-/// One flow in the list: tinted under the pointer, marked with an ink rule when it is the one on the canvas.
-private struct FlowRow<Content: View>: View {
-    let isSelected: Bool
-    @ViewBuilder let content: Content
-    @State private var isHovered = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Rectangle()
-                .fill(isSelected ? Theme.ink.ui : .clear)
-                .frame(width: 2, height: 14)
-            content
-        }
-        .font(.dsMono(Theme.Size.body, isSelected ? .medium : .regular))
-        .foregroundStyle(Theme.ink.ui)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Theme.bar.ui : isHovered ? Theme.barHover.ui.opacity(0.6) : .clear,
-                    in: RoundedRectangle(cornerRadius: Theme.Radius.badge))
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .animation(Theme.Motion.quick, value: isHovered)
     }
 }

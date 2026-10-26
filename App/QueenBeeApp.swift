@@ -18,7 +18,10 @@ struct QueenBeeApp: App {
             WorkspaceView()
         }
         .defaultSize(width: 1500, height: 950)
-        .windowToolbarStyle(.unified)
+        // No title bar: the sidebar runs to the top of the window, under its close, minimise and zoom buttons,
+        // and the flow's header sits in the content panel. The window is dragged by its background.
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { delegate.updater.checkForUpdates(nil) }

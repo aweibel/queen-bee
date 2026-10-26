@@ -12,7 +12,6 @@ struct SidePanel: View {
 
     var body: some View {
         content
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
             .overlay(alignment: .leading) { resizeEdge }
     }
 

@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import SwiftUI
 
 /// The tabs of the panel beside the canvas.
@@ -14,12 +15,11 @@ enum PanelTab: String, CaseIterable {
     }
 }
 
-/// The app's one window. The canvas fills it edge to edge. Everything else floats over the
-/// canvas: the projects panel on the left, the orchestrator panel on the right, and the
-/// canvas's own controls between them.
+/// The app's one window, in Linear's frame: the sidebar sits on the window's own colour, and the flow sits in a
+/// rounded panel inset from the window's edges, with its header and tabs along the top and the side panel
+/// down its right.
 struct WorkspaceView: View {
     static let gap = Theme.Space.m
-    static let sidebarWidth: CGFloat = 236
 
     @AppStorage("showsSidebar") private var showsSidebar = true
     @AppStorage("showsPanel") private var showsPanel = true
@@ -30,48 +30,20 @@ struct WorkspaceView: View {
 
     var body: some View {
         ZStack {
-            Theme.paper.ui.ignoresSafeArea()
-            if let controller = services.current {
-                // Under the title bar too: the bar is see-through, so the canvas is the whole window.
-                CanvasRepresentable(controller: controller)
-                    .ignoresSafeArea()
-                    .id(controller.flow.id)
-            } else if services.projects.isEmpty {
-                WelcomeView()
-            } else {
-                ContentUnavailableView("No flow selected", systemImage: "point.3.connected.trianglepath.dotted",
-                                       description: Text("Pick a flow on the left, or add one to a project."))
-            }
-
-            HStack(alignment: .top, spacing: Self.gap) {
+            Palette.chrome.color.ignoresSafeArea()
+            HStack(spacing: 0) {
                 if showsSidebar {
                     SidebarView()
-                        .frame(width: Self.sidebarWidth)
-                        .floatingPanel()
+                        .frame(width: DS.Size.sidebarWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
-                if let controller = services.current {
-                    CanvasControls(controller: controller) {
-                        tab = .log
-                        showsPanel = true
-                    } showOrchestrator: {
-                        tab = .orchestrator
-                        showsPanel = true
-                    }
-                    .environment(\.orchestratorIsShowing, showsPanel && tab == .orchestrator)
-                    .id(controller.flow.id)
-                } else {
-                    Spacer(minLength: 0)
-                }
-                if showsPanel, let controller = services.current {
-                    SidePanel(controller: controller, tab: $tab, width: $panelWidth)
-                        .frame(width: panelWidth)
-                        .floatingPanel()
-                        .id(controller.flow.id)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
+                panel
+                    .insetPanel()
+                    .padding(.vertical, DS.Size.panelInset)
+                    .padding(.trailing, DS.Size.panelInset)
+                    .padding(.leading, showsSidebar ? 0 : DS.Size.panelInset)
             }
-            .padding(Self.gap)
+            .ignoresSafeArea()
 
             if services.showsFind {
                 // Over everything, near the top, like a search field that came to you.
@@ -112,9 +84,6 @@ struct WorkspaceView: View {
         .animation(Theme.Motion.standard, value: showsPanel)
         .onChange(of: obstruction, initial: true) { services.canvasObstruction = obstruction }
         .navigationTitle(services.current?.flow.name ?? "Queen Bee")
-        .navigationSubtitle(subtitle)
-        .toolbar { toolbar }
-        .toolbar(removing: .title)
         // The first time a flow opens in a git repository, it asks where it works. Its agents wait for the answer.
         .sheet(isPresented: Binding(get: { services.current?.asksForWorkplace == true }, set: { shown in
             guard !shown, let controller = services.current, controller.asksForWorkplace else { return }
@@ -125,92 +94,68 @@ struct WorkspaceView: View {
                     .presentationBackground(Theme.surface.ui)
             }
         }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .frame(minWidth: 900, minHeight: 560)
     }
 
-    /// How much of the canvas's left and right the floating panels and the palette cover,
-    /// so "fit" can keep the flow clear of them.
-    private var obstruction: CanvasObstruction {
-        let left = (showsSidebar ? Self.sidebarWidth + Self.gap : 0) + Self.gap + PaletteView.width + Self.gap
-        let right = showsPanel && services.current != nil ? panelWidth + Self.gap * 2 : Self.gap
-        return CanvasObstruction(left: left, right: right)
-    }
-
-    private var subtitle: String {
-        guard let controller = services.current else { return "" }
-        let project = controller.project.name
-        if controller.isRunning { return "\(project) · running, \(controller.handOffs) \(controller.handOffs == 1 ? "hand-off" : "hand-offs")" }
-        return project
-    }
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button { showsSidebar.toggle() } label: { Label("Projects", systemImage: "sidebar.leading") }
-                .help("Show or hide projects and flows")
-        }
-        // The flow's name sits in a toolbar item of its own, so it gets the same container
-        // the buttons have and doesn't float bare over the canvas.
-        ToolbarItem(placement: .navigation) {
-            TitlePlate(controller: services.current, subtitle: subtitle)
-        }
-        // With the system title gone nothing pushes the actions to the right, so a spacer does.
-        ToolbarSpacer(.flexible)
-        ToolbarItemGroup(placement: .primaryAction) {
+    /// The inset panel: the header, the tabs, and the flow with the side panel beside it.
+    private var panel: some View {
+        VStack(spacing: 0) {
+            FlowHeader(controller: services.current, showsSidebar: $showsSidebar, showsPanel: $showsPanel)
+            DSDivider()
             if let controller = services.current {
-                let waiting = controller.cardsNeedingYou
-                if let first = waiting.first {
-                    Button {
-                        controller.select(.card(first.id))
-                        controller.canvas?.zoom(toCard: first.id)
-                    } label: {
-                        Label(waiting.count == 1 ? "1 needs you" : "\(waiting.count) need you", systemImage: "hand.raised")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .tint(Theme.live.ui)
-                    .help("Go to the card that is waiting on you")
-                }
-                // Run and Stop are filled and named, so it is plain which one is on offer and
-                // whether it can be pressed. Greyed out means there is nothing to run yet.
-                if controller.isRunning {
-                    Button { Task { await controller.stop() } } label: { Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.live.ui)
-                        .help("Stop the run")
-                } else if controller.startCards.count > 1 {
-                    // Several Start cards: say which one. The selected one runs on a plain click.
-                    Menu {
-                        ForEach(controller.startCards) { start in
-                            Button("Run from \(start.name)") { Task { await controller.run(startCardID: start.id) } }
-                        }
-                    } label: {
-                        Label("Run", systemImage: "play.fill").labelStyle(.titleAndIcon)
-                    } primaryAction: {
-                        Task { await controller.run() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.select.ui)
-                    .disabled(!controller.canRun)
-                    .help("This flow has \(controller.startCards.count) Start cards. Click to run from the selected one, or the first. Hold or use the arrow to choose.")
-                } else {
-                    Button { Task { await controller.run() } } label: { Label("Run", systemImage: "play.fill").labelStyle(.titleAndIcon) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.select.ui)
-                        .disabled(!controller.canRun)
-                        .help(controller.canRun ? "Run the flow from its Start card" : controller.flow.isSubflow == true
-                              ? "To try this sub-flow by itself, give its Input something to start with and link it to a card"
-                              : "Nothing to run yet: give the Start card something to start with and link it to a card")
-                }
-                Button {
-                    controller.select(.none)
-                    controller.showsFlowSettings.toggle()
-                } label: { Label("Flow Settings", systemImage: "slider.horizontal.3") }
-                    .help("Settings for this flow: its name, how deep sub-flows may go, and whether its orchestrator hears when a run ends")
-                Button { showsPanel.toggle() } label: { Label("Panel", systemImage: "sidebar.trailing") }
-                    .help("Show or hide the orchestrator, the log and the run's output")
+                FlowTabs(controller: controller)
+                DSDivider()
             }
+            HStack(spacing: 0) {
+                ZStack {
+                    if let controller = services.current {
+                        CanvasRepresentable(controller: controller)
+                            .id(controller.flow.id)
+                        CanvasControls(controller: controller) {
+                            tab = .log
+                            showsPanel = true
+                        } showOrchestrator: {
+                            tab = .orchestrator
+                            showsPanel = true
+                        }
+                        .environment(\.orchestratorIsShowing, showsPanel && tab == .orchestrator)
+                        .padding(Self.gap)
+                        .id(controller.flow.id)
+                        if controller.showsFlowSettings {
+                            // Over the canvas rather than in its place, so the agents' terminals keep their views.
+                            ScrollView {
+                                FlowSettingsView(controller: controller)
+                                    .frame(maxWidth: 520)
+                                    .padding(DS.Space.xl)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .background(Palette.panel.color)
+                            .transition(.opacity)
+                        }
+                    } else if services.projects.isEmpty {
+                        WelcomeView()
+                    } else {
+                        ContentUnavailableView("No flow selected", systemImage: "point.3.connected.trianglepath.dotted",
+                                               description: Text("Pick a flow on the left, or add one to a project."))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                if showsPanel, let controller = services.current {
+                    DSDivider(vertical: true)
+                    SidePanel(controller: controller, tab: $tab, width: $panelWidth)
+                        .frame(width: panelWidth)
+                        .id(controller.flow.id)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(Theme.Motion.standard, value: services.current?.showsFlowSettings)
         }
+    }
+
+    /// How much of the canvas's left and right the floating controls cover, so "fit" can keep the flow clear of them.
+    private var obstruction: CanvasObstruction {
+        CanvasObstruction(left: Self.gap + PaletteView.width + Self.gap, right: Self.gap)
     }
 
     static func pickProjectFolder() {
@@ -224,77 +169,6 @@ struct WorkspaceView: View {
             let project = AppServices.shared.addProject(url)
             if project.controllers.isEmpty { project.newFlow() }
         }
-    }
-}
-
-/// The flow's name and its project, in the title bar. Click the name to rename the flow.
-private struct TitlePlate: View {
-    let controller: FlowController?
-    let subtitle: String
-    @State private var isRenaming = false
-    @State private var draft = ""
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if isRenaming, let controller {
-                TextField("Flow name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(minWidth: 140)
-                    .focused($isFocused)
-                    .onSubmit {
-                        controller.rename(to: draft)
-                        isRenaming = false
-                    }
-                    .onExitCommand { isRenaming = false }
-                    .onChange(of: isFocused) { if !isFocused { isRenaming = false } }
-            } else {
-                HStack(spacing: 4) {
-                    // Inside a sub-flow, the flows it was opened from lead the way back.
-                    ForEach(trail, id: \.flow.id) { outer in
-                        Button { AppServices.shared.goBack(to: outer.flow.id) } label: {
-                            Text(outer.flow.name).font(.system(size: 13)).lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Back to \(outer.flow.name)")
-                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
-                    }
-                    Text(controller?.flow.name ?? "Queen Bee")
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                        .onTapGesture {
-                            guard let controller, !isRenaming else { return }
-                            draft = controller.flow.name
-                            isRenaming = true
-                            isFocused = true
-                        }
-                }
-            }
-            if !subtitle.isEmpty {
-                HStack(spacing: 4) {
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    // The branch the flow works on, or its worktree's: one place for the whole flow.
-                    if let controller, let chip = controller.workplaceChip {
-                        Text("·").font(.system(size: 11)).foregroundStyle(.secondary)
-                        WorkplaceChip(controller: controller, text: chip)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
-        .help(controller == nil ? "" : "Click the flow's name to rename it")
-    }
-
-    /// The flows this one was opened from, outermost first.
-    private var trail: [FlowController] {
-        let services = AppServices.shared
-        return services.flowTrail.dropLast().compactMap { id in services.allFlows.first { $0.flow.id == id } }
     }
 }
 
@@ -323,9 +197,6 @@ struct CanvasControls: View {
             .overlay(alignment: .topTrailing) {
                 if controller.selection != .none {
                     InspectorView(controller: controller)
-                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topTrailing)))
-                } else if controller.showsFlowSettings {
-                    FlowSettingsView(controller: controller)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topTrailing)))
                 }
             }
@@ -364,7 +235,6 @@ struct CanvasControls: View {
                 }
             }
             .animation(Theme.Motion.standard, value: controller.selection)
-            .animation(Theme.Motion.standard, value: controller.showsFlowSettings)
             .animation(Theme.Motion.standard, value: showsCallout)
     }
 }
