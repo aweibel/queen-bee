@@ -13,10 +13,10 @@ private final class PortRowView: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        nameLabel.font = Theme.mono(Theme.Size.caption, .medium)
+        nameLabel.font = Theme.Canvas.label(11.5)
         nameLabel.alignment = .right
         nameLabel.lineBreakMode = .byTruncatingTail
-        countLabel.font = Theme.mono(Theme.Size.caption)
+        countLabel.font = Theme.Canvas.figure()
         addSubview(nameLabel)
         addSubview(countLabel)
     }
@@ -27,8 +27,8 @@ private final class PortRowView: NSView {
         nameLabel.stringValue = name
         countLabel.stringValue = count > 0 ? "\(count)" : ""
         self.isLatest = isLatest
-        nameLabel.textColor = isLatest ? Theme.liveInk : Theme.ink
-        countLabel.textColor = isLatest ? Theme.liveInk : Theme.inkSecondary
+        nameLabel.textColor = isLatest ? Theme.Canvas.liveText : Theme.Canvas.text
+        countLabel.textColor = isLatest ? Theme.Canvas.liveText : Theme.Canvas.textMuted
         needsDisplay = true
     }
 
@@ -41,7 +41,7 @@ private final class PortRowView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = isLatest ? Theme.liveTint.cgColor : NSColor.clear.cgColor
+        layer?.backgroundColor = isLatest ? Theme.Canvas.liveTint.cgColor : NSColor.clear.cgColor
     }
 }
 
@@ -54,12 +54,12 @@ final class LogicCardView: CardView {
 
     override init(card: Card) {
         super.init(card: card)
-        summaryLabel.font = Theme.sans(Theme.Size.body)
+        summaryLabel.font = Theme.Canvas.label(12.5, .regular)
         summaryLabel.maximumNumberOfLines = 0
         summaryLabel.lineBreakMode = .byTruncatingTail
         content.addSubview(summaryLabel)
-        warningLabel.font = Theme.mono(Theme.Size.caption, .medium)
-        warningLabel.textColor = Theme.failInk
+        warningLabel.font = Theme.Canvas.label(11.5)
+        warningLabel.textColor = Theme.Canvas.failText
         warningLabel.lineBreakMode = .byTruncatingTail
         content.addSubview(warningLabel)
     }
@@ -71,7 +71,7 @@ final class LogicCardView: CardView {
         // A schedule that came in the file, or came back with an undo, is off until the person turns it on.
         if new.kind == .start, new.trigger != nil, !context.isArmed { summary += " · off" }
         summaryLabel.stringValue = progress ?? context.result ?? summary
-        summaryLabel.textColor = progress != nil ? Theme.liveInk : context.result != nil ? Theme.ink : Theme.inkSecondary
+        summaryLabel.textColor = progress != nil ? Theme.Canvas.liveText : context.result != nil ? Theme.Canvas.text : Theme.Canvas.textMuted
         warningLabel.stringValue = context.warning ?? ""
         warningLabel.isHidden = context.warning == nil
 

@@ -101,7 +101,7 @@ struct SidePanel: View {
                 TerminalHost(terminal: controller.orchestrator.view)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
-                    .background(Theme.terminal.ui)
+                    .background(Theme.Canvas.terminal.ui)
                     .opacity(tab == .orchestrator ? 1 : 0)
                     .allowsHitTesting(tab == .orchestrator)
                 if tab == .log { LogList(controller: controller) }

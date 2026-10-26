@@ -1,4 +1,5 @@
 import QueenBeeCore
+import QueenBeeDesign
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -207,31 +208,29 @@ struct ZoomPill: View {
             button("minus", help: "Zoom out") { controller.canvas?.zoom(by: 0.8) }
             Button { controller.canvas?.zoomToActualSize() } label: {
                 Text("\(Int((controller.zoom * 100).rounded()))%")
-                    .font(.dsMono(Theme.Size.caption, .medium))
+                    .textRole(.monoCaption)
+                    .foregroundStyle(Palette.textMuted.color)
                     .frame(width: 40)
             }
             .buttonStyle(.plain)
             .help("Back to 100%")
             button("plus", help: "Zoom in") { controller.canvas?.zoom(by: 1.25) }
-            Rectangle().fill(Theme.hairline.ui).frame(width: 1, height: 14).padding(.horizontal, 2)
+            DSDivider(vertical: true).frame(height: 14).padding(.horizontal, 2)
             button("arrow.up.left.and.arrow.down.right", help: "Fit the whole flow") { controller.canvas?.zoomToFit() }
             button(showsMinimap ? "map.fill" : "map", help: showsMinimap ? "Hide the map of the flow" : "Show a map of the whole flow") { showsMinimap.toggle() }
         }
-        .foregroundStyle(Theme.ink.ui)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 3)
+        .frame(height: 30)
         .floatingPanel()
     }
 
     private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 20, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(.dsIcon)
+            .controlSize(.small)
+            .frame(width: 24, height: 24)
+            .accessibilityLabel(help)
+            .help(help)
     }
 }
 
@@ -263,19 +262,18 @@ struct Minimap: View {
                 let failed = controller.marks[card.id]?.failed == true
                 let live = waiting.contains(card.id) || controller.holds.contains { $0.cardID == card.id }
                     || (card.kind == .agent && [.working, .needsYou].contains(controller.sessions[card.id]?.state ?? .notStarted))
-                let fill = failed ? Theme.failInk : live ? Theme.live : card.kind == .agent ? Theme.ink : Theme.inkSecondary
-                context.fill(Path(rect), with: .color(fill.ui.opacity(waiting.contains(card.id) || failed || live ? 1 : 0.55)))
+                let fill = failed ? Palette.fail : live ? Palette.live : card.kind == .agent ? Palette.textMuted : Palette.textFaint
+                context.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(fill.color.opacity(waiting.contains(card.id) || failed || live ? 1 : 0.55)))
                 if selected.contains(card.id) {
-                    context.stroke(Path(rect.insetBy(dx: -1.5, dy: -1.5)), with: .color(Theme.select.ui), lineWidth: 1.5)
+                    context.stroke(Path(rect.insetBy(dx: -1.5, dy: -1.5)), with: .color(Palette.accent.color), lineWidth: 1.5)
                 }
             }
             if !controller.viewport.isEmpty {
-                context.stroke(Path(place(controller.viewport)), with: .color(Theme.select.ui), lineWidth: 1)
+                context.stroke(Path(roundedRect: place(controller.viewport), cornerRadius: 3), with: .color(Palette.accent.color), lineWidth: 1)
             }
         }
         .frame(width: Self.size.width, height: Self.size.height)
-        .background(Theme.paper.ui)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card))
+        .background(Palette.panel.color)
         .floatingPanel()
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
@@ -402,15 +400,13 @@ struct CostPill: View {
         Button { showsBreakdown.toggle() } label: {
             HStack(spacing: 5) {
                 Text(total.price)
-                    .font(.dsMono(Theme.Size.caption, .medium))
+                    .textRole(.monoCaption)
                     .contentTransition(.numericText())
-                if controller.isRunning {
-                    Circle().fill(Theme.live.ui).frame(width: 5, height: 5)
-                }
+                if controller.isRunning { StatusDot(.live, size: 5) }
             }
-            .foregroundStyle((total.isZero ? Theme.inkSecondary : Theme.ink).ui)
-            .padding(.horizontal, Theme.Space.s)
-            .frame(height: 24)
+            .foregroundStyle((total.isZero ? Palette.textMuted : Palette.text).color)
+            .padding(.horizontal, DS.Space.m)
+            .frame(height: 30)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -588,22 +584,20 @@ struct StatusStrip: View {
         if let last = controller.log.last {
             Button(action: showLog) {
                 HStack(spacing: Theme.Space.s) {
-                    Circle()
-                        .fill((controller.isRunning ? Theme.live : Theme.inkSecondary).ui)
-                        .frame(width: 6, height: 6)
+                    StatusDot(controller.isRunning ? .live : .neutral, size: 6)
                     Text(last.text)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if controller.handOffs > 0 {
                         Text("\(controller.handOffs) \(controller.handOffs == 1 ? "hand-off" : "hand-offs")")
-                            .foregroundStyle(Theme.inkSecondary.ui)
+                            .foregroundStyle(Palette.textMuted.color)
                             .contentTransition(.numericText())
                     }
                 }
-                .font(.dsMono(Theme.Size.caption))
-                .foregroundStyle(Theme.ink.ui)
-                .padding(.horizontal, Theme.Space.s)
-                .padding(.vertical, 5)
+                .textRole(.caption)
+                .foregroundStyle(Palette.text.color)
+                .padding(.horizontal, DS.Space.m)
+                .frame(height: 30)
                 .frame(maxWidth: 460, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
             }
@@ -622,12 +616,12 @@ struct BannerView: View {
 
     var body: some View {
         Text(text)
-            .font(.dsSans(Theme.Size.body))
-            .foregroundStyle(Theme.failInk.ui)
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, 6)
-            .background(Theme.failTint.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.failInk.ui, lineWidth: Theme.Stroke.card))
+            .textRole(.body)
+            .foregroundStyle(Palette.failText.color)
+            .padding(.horizontal, DS.Space.m)
+            .padding(.vertical, DS.Space.s)
+            .background(Palette.failTint.color, in: RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous).strokeBorder(Palette.fail.opacity(0.4).color, lineWidth: DS.Stroke.hairline))
             .frame(maxWidth: 520)
             .onTapGesture(perform: dismiss)
             .help("Click to dismiss")

@@ -69,7 +69,7 @@ final class LinkLayerView: NSView {
         marching.bounds = box
         marching.position = box.origin
         marching.path = live.isEmpty ? nil : live
-        marching.strokeColor = Theme.live.cg(in: effectiveAppearance)
+        marching.strokeColor = Theme.Canvas.live.cg(in: effectiveAppearance)
         CATransaction.commit()
 
         let key = "march"
@@ -96,12 +96,13 @@ final class LinkLayerView: NSView {
             let selected = link.id == selectedLinkID
             let live = liveLinkIDs.contains(link.id)
             let count = passes[link.id] ?? 0
-            let color = selected ? Theme.select : live ? Theme.live : count > 0 ? Theme.passInk : Theme.ink
+            // At rest a link is quiet, so the cards it joins stay the thing to look at.
+            let color = selected ? Theme.Canvas.accent : live ? Theme.Canvas.live : count > 0 ? Theme.Canvas.pass : Theme.Canvas.textFaint
             // The marching layer draws a live link's line; here it only gets its arrowhead.
             if !live || selected {
                 ctx.addPath(LinkRouter.path(through: points))
                 ctx.setStrokeColor(color.cgColor)
-                ctx.setLineWidth(selected ? Theme.Stroke.selected : Theme.Stroke.link)
+                ctx.setLineWidth(selected ? 2 : 1.5)
                 ctx.strokePath()
             }
             if let tip = points.last { arrowhead(at: tip, in: ctx, color: color) }
@@ -110,8 +111,8 @@ final class LinkLayerView: NSView {
         if let pending {
             ctx.saveGState()
             ctx.addPath(LinkRouter.path(through: pending))
-            ctx.setStrokeColor(Theme.select.cgColor)
-            ctx.setLineWidth(Theme.Stroke.link)
+            ctx.setStrokeColor(Theme.Canvas.accent.cgColor)
+            ctx.setLineWidth(1.5)
             ctx.setLineDash(phase: 0, lengths: [5, 4])
             ctx.strokePath()
             ctx.restoreGState()
@@ -131,12 +132,12 @@ final class LinkLayerView: NSView {
 
     /// A pass count on a small green plate, so it reads against the line under it.
     private func label(_ text: String, at point: CGPoint) {
-        let attributes: [NSAttributedString.Key: Any] = [.font: Theme.mono(Theme.Size.caption, .medium), .foregroundColor: Theme.passInk]
+        let attributes: [NSAttributedString.Key: Any] = [.font: Theme.Canvas.figure(), .foregroundColor: Theme.Canvas.passText]
         let size = (text as NSString).size(withAttributes: attributes)
-        let plate = CGRect(x: point.x - size.width / 2 - 4, y: point.y - size.height / 2 - 1, width: size.width + 8, height: size.height + 2)
-        Theme.passTint.setFill()
-        NSBezierPath(roundedRect: plate, xRadius: Theme.Radius.badge, yRadius: Theme.Radius.badge).fill()
-        (text as NSString).draw(at: CGPoint(x: plate.minX + 4, y: plate.minY + 1), withAttributes: attributes)
+        let plate = CGRect(x: point.x - size.width / 2 - 6, y: point.y - size.height / 2 - 1, width: size.width + 12, height: size.height + 2)
+        Theme.Canvas.passTint.setFill()
+        NSBezierPath(roundedRect: plate, xRadius: plate.height / 2, yRadius: plate.height / 2).fill()
+        (text as NSString).draw(at: CGPoint(x: plate.minX + 6, y: plate.minY + 1), withAttributes: attributes)
     }
 
     /// The link whose route passes within a few points of `point`.

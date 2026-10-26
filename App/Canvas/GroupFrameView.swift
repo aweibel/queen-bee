@@ -1,4 +1,5 @@
 import AppKit
+import QueenBeeDesign
 import QueenBeeCore
 
 /// A group of cards on the canvas. Unfolded, it is a named frame drawn behind its cards.
@@ -27,12 +28,13 @@ final class GroupFrameView: NSView, NSGestureRecognizerDelegate {
         self.group = group
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = Theme.Radius.card
+        layer?.cornerRadius = DS.Radius.l
+        layer?.cornerCurve = .continuous
         handle.wantsLayer = true
         addSubview(handle)
-        nameLabel.font = Theme.mono(Theme.Size.body, .medium)
+        nameLabel.font = Theme.Canvas.name()
         nameLabel.lineBreakMode = .byTruncatingTail
-        detailLabel.font = Theme.mono(Theme.Size.caption)
+        detailLabel.font = Theme.Canvas.label(11.5, .regular)
         detailLabel.lineBreakMode = .byTruncatingTail
         handle.addSubview(nameLabel)
         handle.addSubview(detailLabel)
@@ -84,16 +86,16 @@ final class GroupFrameView: NSView, NSGestureRecognizerDelegate {
         if group.isFolded {
             // The folded card is a fixed size, so its type only grows as far as the card has room for.
             let grown = min(scale, 1.7)
-            nameLabel.font = Theme.mono(Theme.Size.body * grown, .medium)
-            detailLabel.font = Theme.mono(Theme.Size.caption * grown)
+            nameLabel.font = Theme.Canvas.name(13 * grown)
+            detailLabel.font = Theme.Canvas.label(11.5 * grown, .regular)
             handle.frame = bounds
             let nameHeight = ceil(nameLabel.intrinsicContentSize.height), detailHeight = ceil(detailLabel.intrinsicContentSize.height)
             let top = max(4, (bounds.height - nameHeight - detailHeight - 2) / 2)
             nameLabel.frame = NSRect(x: 12, y: top, width: bounds.width - 24, height: nameHeight)
             detailLabel.frame = NSRect(x: 12, y: top + nameHeight + 2, width: bounds.width - 24, height: detailHeight)
         } else {
-            nameLabel.font = Theme.mono(Theme.Size.body * scale, .medium)
-            detailLabel.font = Theme.mono(Theme.Size.caption * scale)
+            nameLabel.font = Theme.Canvas.name(13 * scale)
+            detailLabel.font = Theme.Canvas.label(11.5 * scale, .regular)
             let strip = Self.titleHeight * scale
             handle.frame = NSRect(x: 0, y: 0, width: bounds.width, height: strip)
             nameLabel.sizeToFit()
@@ -121,14 +123,14 @@ final class GroupFrameView: NSView, NSGestureRecognizerDelegate {
 
     override func updateLayer() {
         let folded = group.isFolded
-        let fill: NSColor = folded ? (tone == .fail ? Theme.failTint : tone == .live ? Theme.liveTint : Theme.surface)
-                                   : Theme.ink.withAlphaComponent(0.035)
-        let edge: NSColor = isSelected ? Theme.select : tone == .fail ? Theme.failInk : tone == .live ? Theme.live : folded ? Theme.ink : Theme.inkSecondary
+        let fill: NSColor = folded ? (tone == .fail ? Theme.Canvas.failTint : tone == .live ? Theme.Canvas.liveTint : Theme.Canvas.card)
+                                   : Theme.Canvas.groupFill
+        let edge: NSColor = isSelected ? Theme.Canvas.accent : tone == .fail ? Theme.Canvas.fail : tone == .live ? Theme.Canvas.live : Theme.Canvas.outline
         layer?.ease("backgroundColor", to: fill.cgColor, animated: hasDrawn)
         layer?.ease("borderColor", to: edge.cgColor, animated: hasDrawn)
-        layer?.borderWidth = isSelected ? Theme.Stroke.selected : Theme.Stroke.card
-        nameLabel.textColor = Theme.ink
-        detailLabel.textColor = tone == .live ? Theme.liveInk : tone == .fail ? Theme.failInk : Theme.inkSecondary
+        layer?.borderWidth = isSelected ? DS.Stroke.focus : DS.Stroke.hairline
+        nameLabel.textColor = Theme.Canvas.text
+        detailLabel.textColor = tone == .live ? Theme.Canvas.liveText : tone == .fail ? Theme.Canvas.failText : Theme.Canvas.textMuted
         hasDrawn = true
     }
 

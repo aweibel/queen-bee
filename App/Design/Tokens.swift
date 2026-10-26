@@ -34,6 +34,44 @@ enum Theme {
     static let terminal = Palette.Classic.terminal.platform
     static let terminalInk = Palette.Classic.terminalInk.platform
 
+    /// The canvas, its cards and links, and the terminals in them, in the redesign's colours. AppKit views draw
+    /// with these; SwiftUI views take `Palette` directly.
+    enum Canvas {
+        static let paper = Palette.panel.platform
+        static let dot = Palette.canvasDot.platform
+        static let card = Palette.raised.platform
+        static let cardHover = Palette.hover.platform
+        static let outline = Palette.hairlineStrong.platform
+        static let rule = Palette.hairline.platform
+        /// A group's wash behind its cards.
+        static let groupFill = Palette.text.opacity(0.035).platform
+
+        static let text = Palette.text.platform
+        static let textMuted = Palette.textMuted.platform
+        static let textFaint = Palette.textFaint.platform
+        static let accent = Palette.accent.platform
+
+        static let live = Palette.live.platform
+        static let liveTint = Palette.liveTint.platform
+        static let liveText = Palette.liveText.platform
+        static let pass = Palette.pass.platform
+        static let passTint = Palette.passTint.platform
+        static let passText = Palette.passText.platform
+        static let fail = Palette.fail.platform
+        static let failTint = Palette.failTint.platform
+        static let failText = Palette.failText.platform
+
+        static let terminal = Palette.terminal.platform
+        static let terminalText = Palette.terminalText.platform
+
+        /// A card's name in its title bar.
+        static func name(_ size: CGFloat = 13) -> NSFont { .systemFont(ofSize: size, weight: .semibold) }
+        /// A word on a card: a state, a port, a summary.
+        static func label(_ size: CGFloat = 11.5, _ weight: NSFont.Weight = .medium) -> NSFont { .systemFont(ofSize: size, weight: weight) }
+        /// A figure on a card: a cost, a count.
+        static func figure(_ size: CGFloat = 11) -> NSFont { .monospacedDigitSystemFont(ofSize: size, weight: .medium) }
+    }
+
     // MARK: Type
 
     /// Monospace, for anything that names or counts: card titles, ports, badges, the log.
@@ -184,13 +222,16 @@ extension Font {
 }
 
 /// The look shared by the controls that float over the canvas: the palette, the settings
-/// panel, the zoom pill, the status strip. Drawn like a card: a surface and an ink outline,
-/// with no shadow.
+/// panel, the zoom pill, the status strip. Raised off the canvas by a hairline and a soft shadow,
+/// with rounded corners that clip whatever is inside.
 struct FloatingPanel: ViewModifier {
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous)
         content
-            .background(Theme.surface.ui, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.ink.ui, lineWidth: Theme.Stroke.card))
+            .background(Palette.overlay.color, in: shape)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Palette.hairlineStrong.color, lineWidth: DS.Stroke.hairline))
+            .shadow(color: .black.opacity(0.10), radius: 6, y: 2)
     }
 }
 

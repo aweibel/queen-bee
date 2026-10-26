@@ -1,5 +1,6 @@
 import AppKit
 import QueenBeeCore
+import QueenBeeDesign
 
 /// An agent's card: its live terminal under the title, its session's state beside the name,
 /// and a Start button while no session is running.
@@ -31,7 +32,7 @@ final class AgentCardView: CardView {
         content.addSubview(terminalHolder)
 
         startButton.bezelStyle = .rounded
-        startButton.font = Theme.mono(Theme.Size.body)
+        startButton.font = Theme.Canvas.label(12.5)
         startButton.target = self
         startButton.action = #selector(startSession)
         content.addSubview(startButton)
@@ -133,8 +134,8 @@ final class AgentCardView: CardView {
     }
 
     override func updateContentLayers() {
-        terminalHolder.layer?.backgroundColor = Theme.terminal.cgColor
-        browserRule.layer?.backgroundColor = Theme.hairline.cgColor
+        terminalHolder.layer?.backgroundColor = Theme.Canvas.terminal.cgColor
+        browserRule.layer?.backgroundColor = Theme.Canvas.rule.cgColor
     }
 
     @objc private func startSession() {

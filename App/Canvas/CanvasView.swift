@@ -15,7 +15,7 @@ final class CanvasDocumentView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.paper.setFill()
+        Theme.Canvas.paper.setFill()
         dirtyRect.fill()
 
         // Zoomed out, dots crowd together and shrink below a pixel. Every second or fourth
@@ -24,7 +24,7 @@ final class CanvasDocumentView: NSView {
         var step = CanvasGeometry.gridStep
         while step * zoom < 14 { step *= 2 }
         let size = max(1.6, 1.6 / zoom)
-        Theme.dot.setFill()
+        Theme.Canvas.dot.setFill()
         var y = (dirtyRect.minY / step).rounded(.down) * step
         while y <= dirtyRect.maxY {
             var x = (dirtyRect.minX / step).rounded(.down) * step
@@ -150,7 +150,7 @@ final class CanvasOverlayView: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         // A hairline on screen at any zoom.
         let hairline = 1 / max(convert(CGSize(width: 1, height: 1), to: nil).width, 0.01)
-        ctx.setStrokeColor(Theme.select.cgColor)
+        ctx.setStrokeColor(Theme.Canvas.accent.cgColor)
         ctx.setLineWidth(hairline)
         for guide in guides {
             let pad = 12 * hairline
@@ -164,7 +164,7 @@ final class CanvasOverlayView: NSView {
         }
         ctx.strokePath()
         if let marquee {
-            ctx.setFillColor(Theme.select.withAlphaComponent(0.08).cgColor)
+            ctx.setFillColor(Theme.Canvas.accent.withAlphaComponent(0.08).cgColor)
             ctx.fill(marquee)
             ctx.stroke(marquee)
         }
