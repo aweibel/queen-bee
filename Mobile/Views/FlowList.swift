@@ -156,7 +156,7 @@ struct FlowList: View {
     }
 }
 
-/// One flow in the list: tinted under the finger, marked with an ink rule when it is the one on the canvas.
+/// One flow in the list: a dot for its state, tinted under the finger, and filled when it is the one on the canvas.
 /// A tap opens it. A finger held on it brings out its menu, under it.
 private struct FlowRow: View {
     let flow: RemoteFlowSummary

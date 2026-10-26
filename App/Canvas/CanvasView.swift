@@ -3,7 +3,7 @@ import Observation
 import QueenBeeCore
 import SwiftTerm
 
-/// The surface cards sit on: drafting paper with a dot matrix. Flipped so a card's y grows
+/// The surface cards sit on: the panel's colour with a dot matrix. Flipped so a card's y grows
 /// downward, as the flow file stores it.
 final class CanvasDocumentView: NSView {
     /// What the add-card palette puts on the pasteboard when a row is dragged. Nothing else

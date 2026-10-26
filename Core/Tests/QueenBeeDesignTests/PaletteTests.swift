@@ -57,7 +57,6 @@ import Testing
     @Test(arguments: Shade.Mode.allCases)
     func terminalTextIsReadable(mode: Shade.Mode) {
         #expect(Palette.terminalText.contrast(with: Palette.terminal, in: mode) >= 7)
-        #expect(Palette.terminalMuted.contrast(with: Palette.terminal, in: mode) >= 4.5)
     }
 
     /// The surfaces step up from the back of the window to the front in dark mode, as Linear's do, so a raised
@@ -82,16 +81,5 @@ import Testing
         let white = Shade(0xFFFFFF, 0xFFFFFF)
         let mixed = halfBlack.resolved(.light, over: white)
         #expect(abs(mixed.r - 0.5) < 0.001 && abs(mixed.g - 0.5) < 0.001 && abs(mixed.b - 0.5) < 0.001)
-    }
-
-    /// Until the screens move over, both apps draw with these. They must stay exactly as they were.
-    @Test func classicColoursAreUnchanged() {
-        #expect(Palette.Classic.paper == Shade(0xE3EAF1, 0x0F1B2B))
-        #expect(Palette.Classic.ink == Shade(0x1F3A5F, 0xCFE0F5))
-        #expect(Palette.Classic.inkSecondary == Shade(0x5A7190, 0x8AA3C2))
-        #expect(Palette.Classic.hairline == Shade(0x1F3A5F, 0xCFE0F5, alpha: 0.22, 0.2))
-        #expect(Palette.Classic.live == Shade(0xFF6B2C, 0xFF8A4C))
-        #expect(Palette.Classic.select == Shade(0x2F6FED, 0x6EA0FF))
-        #expect(Palette.Classic.terminal == Shade(0x10243D, 0x0A1420))
     }
 }

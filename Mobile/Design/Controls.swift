@@ -5,7 +5,7 @@ import SwiftUI
 /// like parts of the same drawing. They mirror `App/Design/Controls.swift` and the panel and badge in the
 /// Mac's `Tokens.swift`, made big enough for a finger.
 
-/// The look of anything that sits on the paper: a surface and an ink outline, with no shadow.
+/// The look of anything that floats over the canvas or a list: a raised surface, a hairline and a soft shadow.
 struct FloatingPanel: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: DS.Radius.xl, style: .continuous)
@@ -81,10 +81,10 @@ struct Badge: View {
     }
 }
 
-/// A button in a panel: an ink outline by default, quieter or louder by kind.
+/// A button in a panel: an ordinary button by default, quieter or louder by kind.
 struct PanelButtonStyle: ButtonStyle {
     enum Kind {
-        /// The usual button: ink text in an ink outline.
+        /// The usual button: a raised surface with an outline.
         case outline
         /// For an action that should stay out of the way: text only.
         case quiet
@@ -185,7 +185,7 @@ extension ButtonStyle where Self == PanelButtonStyle {
     }
 }
 
-/// The drafting paper with its dot matrix: what the canvas is drawn on, and what stands behind every
+/// The canvas's ground with its dot matrix: what the canvas is drawn on, and what stands behind every
 /// full-screen message.
 struct Paper: View {
     var body: some View {

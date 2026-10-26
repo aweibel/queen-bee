@@ -70,33 +70,4 @@ public enum Palette {
     /// Behind a terminal. Dark in both modes, as a terminal is.
     public static let terminal = Shade(0x10243D, 0x08111C)
     public static let terminalText = Shade(0xCFE0F5, 0xCFE0F5)
-    public static let terminalMuted = Shade(0x8AA3C2, 0x7E97B8)
-
-    /// The surfaces text can sit on, for the checks in the tests.
-    public static let grounds: [Shade] = [chrome, panel, raised, overlay, hover, selected]
-
-    /// The colours as they were before the redesign. Screens that haven't moved to the new layout still draw
-    /// with these, through each app's `Theme`. Delete this once the last one has moved.
-    public enum Classic {
-        public static let paper = Shade(0xE3EAF1, 0x0F1B2B)
-        public static let surface = Shade(0xFFFFFF, 0x16263A)
-        public static let bar = Shade(0xF3F6FA, 0x1B2E46)
-        public static let barHover = Shade(0xE7EDF4, 0x223955)
-        public static let ink = Shade(0x1F3A5F, 0xCFE0F5)
-        public static let inkSecondary = Shade(0x5A7190, 0x8AA3C2)
-        public static let hairline = Shade(0x1F3A5F, 0xCFE0F5, alpha: 0.22, 0.2)
-        public static let dot = Shade(0x1F3A5F, 0xCFE0F5, alpha: 0.26, 0.2)
-
-        public static let live = Shade(0xFF6B2C, 0xFF8A4C)
-        public static let liveTint = Shade(0xFFE4D6, 0x4A2413)
-        public static let liveInk = Shade(0x8A3410, 0xFFC7A8)
-        public static let passTint = Shade(0xDDF3E4, 0x143524)
-        public static let passInk = Shade(0x17603A, 0x7FD6A0)
-        public static let failTint = Shade(0xFBE3E3, 0x4A1B1B)
-        public static let failInk = Shade(0xA32D2D, 0xF09595)
-        public static let select = Shade(0x2F6FED, 0x6EA0FF)
-
-        public static let terminal = Shade(0x10243D, 0x0A1420)
-        public static let terminalInk = Shade(0xCFE0F5, 0xCFE0F5)
-    }
 }

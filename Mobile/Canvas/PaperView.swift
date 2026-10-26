@@ -1,6 +1,6 @@
 import UIKit
 
-/// The drafting paper behind the canvas, with its dot matrix. It stays still while the canvas scrolls over
+/// The ground behind the canvas, with its dot matrix. It stays still while the canvas scrolls over
 /// it, and moves its dots to where the canvas's grid is, so it looks as if the paper scrolls and zooms too.
 ///
 /// The Mac paints the dots onto the canvas itself. A canvas this size can't be painted on here, and

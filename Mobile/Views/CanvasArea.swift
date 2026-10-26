@@ -1,7 +1,7 @@
 import QueenBeeCore
 import SwiftUI
 
-/// The middle of the app: the drafting paper, and the open flow on it.
+/// The middle of the app: the canvas, and the open flow on it.
 struct CanvasArea: View {
     @Environment(RemoteClient.self) private var client
     /// Brings the list of flows back when it is hidden, if it can be. Nil when the list is on show or one tap back.

@@ -115,7 +115,7 @@ final class CardButtonView: UIView {
         label.frame = bounds.insetBy(dx: 4, dy: 0)
     }
 
-    /// The Mac's panel buttons: an ink outline, or the live colours for the answer a card is waiting for.
+    /// The Mac's panel buttons: an outline, or the live colours for the answer a card is waiting for.
     private func restyle() {
         backgroundColor = button.isMain ? Theme.liveTint : Theme.bar
         label.textColor = button.isMain ? Theme.liveInk : Theme.ink
