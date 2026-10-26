@@ -6,6 +6,8 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-26
+
 ### Added
 
 - Each flow works on one branch, in the project folder or in a worktree of its own. The first time a flow opens in a git repository it asks where it should work, and its agents wait for the answer. After that the chip after the project's name in the title bar shows the branch, with "worktree" when it is one, and opens the setting to check or change it. A worktree is made from the branch you pick, main by default, in the project's `.queenbee/worktrees` folder, and used again from then on. Sub-flows work wherever the flow at the top does. Runs, schedules and `qb run` all go by the setting.
@@ -262,7 +264,8 @@ First public release.
 - The test harness is compiled out of release builds.
 - Releases are signed with a Developer ID and use the hardened runtime. They are not yet notarized by Apple.
 
-[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bamboozledkitty/queen-bee/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bamboozledkitty/queen-bee/compare/v0.3.4...v0.4.0
