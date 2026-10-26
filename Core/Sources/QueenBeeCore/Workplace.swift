@@ -152,6 +152,16 @@ public struct Workplace: Codable, Equatable, Sendable {
             .compactMap(\.branch)
     }
 
+    /// Why some branches aren't offered for the project folder, or nil when none are left out. One is named; a
+    /// repository can have dozens open in worktrees, so more are counted.
+    public static func notListedNote(_ branches: [String]) -> String? {
+        guard let first = branches.first else { return nil }
+        if branches.count == 1 {
+            return "\(first) isn't listed: it's open in a worktree, and git lets a branch be open in only one place. To use it, choose A worktree."
+        }
+        return "\(branches.count) branches aren't listed: they're open in worktrees, and git lets a branch be open in only one place. To use one, choose A worktree."
+    }
+
     public static func worktreePlan(branch: String, base: String, root: URL, worktrees: [Worktree], branches: [String]) -> WorktreePlan {
         if let have = worktrees.first(where: { $0.branch == branch }) { return .reuse(path: have.path) }
         let path = worktreeFolder(for: branch, in: root).path

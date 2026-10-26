@@ -86,6 +86,9 @@ extension ButtonStyle where Self == PanelButtonStyle {
 struct MenuField<Value: Hashable>: View {
     let options: [(value: Value, label: String)]
     let selection: Value
+    /// Lets a long label be cut short in the middle to fit, for names of any length such as branches. Otherwise
+    /// the field is always as wide as its label.
+    var shortensToFit = false
     let pick: (Value) -> Void
 
     var body: some View {
@@ -97,6 +100,7 @@ struct MenuField<Value: Hashable>: View {
             HStack(spacing: 4) {
                 Text(options.first { $0.value == selection }?.label ?? "")
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(Theme.inkSecondary.ui)
@@ -108,7 +112,7 @@ struct MenuField<Value: Hashable>: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .fixedSize(horizontal: !shortensToFit, vertical: true)
     }
 }
 

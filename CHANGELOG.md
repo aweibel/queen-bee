@@ -6,6 +6,10 @@ All notable changes to Queen Bee are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The question of where a flow works, and the title bar's branch chip, fit any project. Long branch names are cut short in the middle, the branch the folder is on is named in full below the menu, and branches open in other worktrees are counted rather than listed one by one. In a light window, the chip's popover no longer turns dark over a terminal behind it.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added

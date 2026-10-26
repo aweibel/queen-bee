@@ -12,7 +12,8 @@ struct WorkplaceChip: View {
         Button { showsForm.toggle() } label: {
             HStack(spacing: 3) {
                 Image(systemName: "arrow.triangle.branch").font(.system(size: 9, weight: .semibold))
-                Text(text).lineLimit(1)
+                // A long branch name is cut short in the middle rather than taking over the title bar.
+                Text(text).lineLimit(1).truncationMode(.middle).frame(maxWidth: 260)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
             }
             .font(.dsMono(Theme.Size.caption, .medium))
@@ -29,6 +30,9 @@ struct WorkplaceChip: View {
         .help("Where this flow works. Click to check or change it.")
         .popover(isPresented: $showsForm, arrowEdge: .bottom) {
             WorkplaceForm(controller: controller, isFirstRun: false) { showsForm = false }
+                // A popover's glass takes its tint from what is behind it, which can be a dark terminal while the
+                // app is light, leaving the form's ink on a dark ground. The app's own surface keeps them apart.
+                .presentationBackground(Theme.surface.ui)
         }
     }
 }
@@ -109,16 +113,13 @@ struct WorkplaceForm: View {
         switch kind {
         case .folder:
             row("Branch") {
-                MenuField(options: folderOptions(git), selection: folderBranch) { folderBranch = $0 }
+                MenuField(options: folderOptions(git), selection: folderBranch, shortensToFit: true) { folderBranch = $0 }
             }
-            note("Agents work in \(controller.project.name) itself" + (folderBranch.map { ", switched to \($0)." } ?? ", on whatever branch it is on.")
+            note("Agents work in \(controller.project.name) itself"
+                 + (folderBranch.map { ", switched to \($0)." } ?? ", on whatever branch it is on" + (git.current.map { " (now \($0))." } ?? "."))
                  + " Your own edits there show up for them too.")
-            let elsewhere = openElsewhere(git)
-            if !elsewhere.isEmpty {
-                note("Not listed: \(elsewhere.joined(separator: ", ")). "
-                     + (elsewhere.count == 1 ? "It's" : "They're")
-                     + " open in a worktree, and git lets a branch be open in only one place. To use "
-                     + (elsewhere.count == 1 ? "it" : "one") + ", choose A worktree.")
+            if let notListed = Workplace.notListedNote(openElsewhere(git)) {
+                note(notListed)
             }
         case .worktree:
             row("Branch") {
@@ -129,7 +130,7 @@ struct WorkplaceForm: View {
             }
             if !git.branches.contains(trimmed(worktreeBranch)) {
                 row("Made from") {
-                    MenuField(options: git.branches.map { (value: $0, label: $0) }, selection: base) { base = $0 }
+                    MenuField(options: git.branches.map { (value: $0, label: $0) }, selection: base, shortensToFit: true) { base = $0 }
                 }
             }
             note(worktreeNote(git))
@@ -176,8 +177,8 @@ struct WorkplaceForm: View {
     }
 
     private func folderOptions(_ git: Git.Info) -> [(value: String?, label: String)] {
-        let current = git.current.map { " (\($0))" } ?? ""
-        let asItIs: [(value: String?, label: String)] = [(value: nil, label: "Leave as it is" + current)]
+        // The branch it is on now is named in the note below, where a long name has room.
+        let asItIs: [(value: String?, label: String)] = [(value: nil, label: "Leave as it is")]
         let elsewhere = openElsewhere(git)
         return asItIs + git.branches.filter { !elsewhere.contains($0) }.map { (value: Optional($0), label: $0) }
     }
