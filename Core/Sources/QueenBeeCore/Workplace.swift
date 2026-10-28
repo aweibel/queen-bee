@@ -162,15 +162,39 @@ public struct Workplace: Codable, Equatable, Sendable {
         return "\(branches.count) branches aren't listed: they're open in worktrees, and git lets a branch be open in only one place. To use one, choose A worktree."
     }
 
-    public static func worktreePlan(branch: String, base: String, root: URL, worktrees: [Worktree], branches: [String]) -> WorktreePlan {
+    /// A short, stable tag for a branch name (FNV-1a), so two branches whose folders would clash each get their own.
+    static func shortHash(_ text: String) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: 8 - hex.count) + hex
+    }
+
+    /// Where a new worktree for `branch` goes. Usually `worktreeFolder`, but `feature/foo` and `feature-foo` share
+    /// that folder, so when a listed worktree on another branch already has it, or `isOccupied` says something is
+    /// there, the branch's own tag is added to the name.
+    public static func newWorktreePath(branch: String, root: URL, worktrees: [Worktree], isOccupied: (String) -> Bool = { _ in false }) -> String {
+        let usual = worktreeFolder(for: branch, in: root)
+        func same(_ a: String, _ b: String) -> Bool {
+            URL(fileURLWithPath: a).resolvingSymlinksInPath().standardizedFileURL.path
+                == URL(fileURLWithPath: b).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        let taken = worktrees.contains { $0.branch != branch && same($0.path, usual.path) } || isOccupied(usual.path)
+        guard taken else { return usual.path }
+        return usual.path + "-" + shortHash(branch)
+    }
+
+    /// `isOccupied` is asked about the usual folder for a new worktree: pass a check that the path exists on disk.
+    public static func worktreePlan(branch: String, base: String, root: URL, worktrees: [Worktree], branches: [String],
+                                    isOccupied: (String) -> Bool = { _ in false }) -> WorktreePlan {
         if let have = worktrees.first(where: { $0.branch == branch }) { return .reuse(path: have.path) }
-        let path = worktreeFolder(for: branch, in: root).path
+        let path = newWorktreePath(branch: branch, root: root, worktrees: worktrees, isOccupied: isOccupied)
         return branches.contains(branch) ? .add(path: path, branch: branch) : .create(path: path, branch: branch, base: base)
     }
 
     // MARK: Showing it
 
-    /// The words in the title bar's chip: where the flow works now, not what it is set to. The two differ
+    /// The words in the header's branch chip: where the flow works now, not what it is set to. The two differ
     /// while a switch is refused, or after the folder was switched by hand. `current` is the branch the
     /// project folder is on; `expected` names a worktree git hasn't listed yet.
     public static func chipText(workRoot: URL, projectRoot: URL, current: String?, worktrees: [Worktree], expected: String?) -> String {
@@ -188,6 +212,169 @@ public struct Workplace: Codable, Equatable, Sendable {
             return "Works in \(project), on whatever branch it is on" + (current.map { " (now \($0))" } ?? "") + "."
         case .worktree:
             return "Works in a worktree of \(project) on \(branch ?? "its own branch")" + (base.map { ", made from \($0)" } ?? "") + "."
+        }
+    }
+}
+
+/// What the "Where this flow works" form shows and decides, apart from how it looks: the choices, the notes under
+/// them, what is wrong with the inputs, and the setting Apply would save. The facts about the repository are
+/// plain values so this can be tested without git.
+public struct WorkplaceChoice: Equatable, Sendable {
+    public enum Mode: Equatable, Sendable { case folder, newBranch, existingBranch }
+
+    /// One local branch offered under "Existing branch".
+    public struct ExistingBranch: Equatable, Sendable, Identifiable {
+        public var id: String { branch }
+        public var branch: String
+        public var note: String?
+        public var disabledReason: String?
+        public var isPinned: Bool
+    }
+
+    /// One local branch offered as the start of a new branch.
+    public struct Base: Equatable, Sendable, Identifiable {
+        public var id: String { branch }
+        public var branch: String
+        public var isPinned: Bool
+    }
+
+    // The repository.
+    public let projectName: String
+    public let projectRoot: URL
+    /// The branch the project folder is on, or nil at a detached HEAD.
+    public let current: String?
+    /// Local branches only.
+    public let branches: [String]
+    public let defaultBranch: String
+    public let worktrees: [Workplace.Worktree]
+    /// A flow set to switch the project folder to this branch, from before the folder stopped switching.
+    public let legacyFolderBranch: String?
+
+    // What the person has chosen.
+    public var mode: Mode
+    public var newName: String
+    public var base: String
+    public var existing: String?
+
+    public init(saved: Workplace?, current: String?, branches: [String], defaultBranch: String, worktrees: [Workplace.Worktree],
+                projectRoot: URL, projectName: String, flowName: String, flowID: String) {
+        self.projectName = projectName; self.projectRoot = projectRoot
+        self.current = current; self.branches = branches; self.defaultBranch = defaultBranch; self.worktrees = worktrees
+        legacyFolderBranch = saved?.kind == .folder ? saved?.branch : nil
+        mode = .folder
+        newName = Workplace.suggestedBranch(forFlowNamed: flowName, id: flowID)
+        base = defaultBranch
+        existing = nil
+        if saved?.kind == .worktree, let branch = saved?.branch {
+            if branches.contains(branch) {
+                mode = .existingBranch
+                existing = branch
+            } else {
+                mode = .newBranch
+                newName = branch
+                base = saved?.base ?? defaultBranch
+            }
+        }
+    }
+
+    /// The outer choice: the folder or a worktree.
+    public var kind: Workplace.Kind {
+        get { mode == .folder ? .folder : .worktree }
+        set { mode = newValue == .folder ? .folder : (mode == .folder ? .newBranch : mode) }
+    }
+
+    public var trimmedName: String { newName.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    // MARK: Choices
+
+    private var openElsewhere: Set<String> {
+        Set(Workplace.branchesOpenElsewhere(worktrees: worktrees, projectRoot: projectRoot))
+    }
+
+    public static let inYourFolder = "Checked out in your folder"
+    public static let hasWorktreeNote = "Has a worktree: the flow works in it"
+
+    /// Why `branch` can't be the flow's worktree branch, or nil.
+    public func disabledReason(forExisting branch: String) -> String? {
+        branch == current ? Self.inYourFolder : nil
+    }
+
+    /// Every local branch, for "Existing branch".
+    public var existingChoices: [ExistingBranch] {
+        branches.map { name in
+            ExistingBranch(branch: name,
+                           note: openElsewhere.contains(name) ? Self.hasWorktreeNote : nil,
+                           disabledReason: disabledReason(forExisting: name),
+                           isPinned: name == current || name == defaultBranch)
+        }
+    }
+
+    /// Every local branch, for "Starting from". Any will do, even one open in a worktree.
+    public var baseChoices: [Base] {
+        branches.map { Base(branch: $0, isPinned: $0 == current || $0 == defaultBranch) }
+    }
+
+    // MARK: Words
+
+    /// Notes about where the person's saved setting differs from what Apply will save.
+    public var legacyNote: String? {
+        guard mode == .folder, let legacyFolderBranch else { return nil }
+        return "This flow was set to switch your folder to \(legacyFolderBranch). Applying here leaves your folder on the branch it's on."
+    }
+
+    /// What the choice means, in plain words, to show under it.
+    public var notes: [String] {
+        switch mode {
+        case .folder:
+            var found: [String] = []
+            if let current {
+                found.append("Agents work in \(projectName) itself, on whatever branch it has checked out (now \(current)). Your own edits there show up for them too.")
+            } else {
+                found.append("Agents work in \(projectName) itself, which is at a commit with no branch checked out (a detached HEAD). Your own edits there show up for them too.")
+            }
+            if let legacyNote { found.append(legacyNote) }
+            return found
+        case .newBranch:
+            return ["Makes the new branch \(trimmedName.isEmpty ? "named above" : trimmedName) from \(base) in a new worktree of \(projectName). Your folder stays as it is."]
+        case .existingBranch:
+            guard let existing else { return [] }
+            if worktrees.contains(where: { $0.branch == existing }) {
+                return ["A worktree on \(existing) is already there, so the flow works in it."]
+            }
+            return ["Adds a worktree of \(projectName) on \(existing). Your folder stays as it is."]
+        }
+    }
+
+    // MARK: Checking
+
+    /// What is wrong with the inputs, or nil when Apply can go ahead. The selected existing branch is checked
+    /// here on its own, whatever the picker shows.
+    public var problem: String? {
+        switch mode {
+        case .folder:
+            return nil
+        case .newBranch:
+            if let bad = Workplace.problem(branchName: trimmedName) { return bad }
+            if branches.contains(trimmedName) {
+                return "A branch called \(trimmedName) already exists. Choose it under Existing branch."
+            }
+            if !branches.contains(base) { return "\(base) isn't a local branch. Choose one to start from." }
+            return nil
+        case .existingBranch:
+            guard let existing else { return "Choose a branch." }
+            if !branches.contains(existing) { return "\(existing) isn't a local branch." }
+            return disabledReason(forExisting: existing)
+        }
+    }
+
+    public var canApply: Bool { problem == nil }
+
+    /// The setting Apply saves. The folder is never switched, so it is always left on its branch.
+    public var workplace: Workplace {
+        switch mode {
+        case .folder: .folder(on: nil)
+        case .newBranch: .worktree(trimmedName, from: base)
+        case .existingBranch: .worktree(existing ?? "", from: nil)
         }
     }
 }

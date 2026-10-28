@@ -165,4 +165,103 @@ import Testing
         #expect(Workplace.worktree("qb/x", from: nil).summary(project: "acme", current: "main") == "Works in a worktree of acme on qb/x.")
         #expect(Workplace.folder(on: "dev").summary(project: "acme", current: "main") == "Works in acme, switched to dev.")
     }
+
+    // MARK: The form's choices
+
+    private func choice(_ saved: Workplace?, current: String? = "main", branches: [String] = ["main", "dev", "qb/x", "cursor/a"],
+                        worktrees: [Workplace.Worktree]? = nil) -> WorkplaceChoice {
+        let listed = worktrees ?? [.init(path: root.path, branch: current), .init(path: "/Users/k/acme/.claude/worktrees/a", branch: "cursor/a")]
+        return WorkplaceChoice(saved: saved, current: current, branches: branches, defaultBranch: "main", worktrees: listed,
+                               projectRoot: root, projectName: "acme", flowName: "Fix login", flowID: "f1")
+    }
+
+    @Test func theFormStartsFromWhatTheFlowIsSetTo() {
+        let none = choice(nil)
+        #expect(none.mode == .folder && none.newName == "qb/fix-login" && none.base == "main")
+        #expect(choice(.asItIs).mode == .folder)
+        #expect(choice(.folder(on: "dev")).mode == .folder)
+
+        let existing = choice(.worktree("qb/x", from: "dev"))
+        #expect(existing.mode == .existingBranch && existing.existing == "qb/x")
+        #expect(existing.workplace == .worktree("qb/x", from: nil))
+
+        let gone = choice(.worktree("qb/new", from: "dev"))
+        #expect(gone.mode == .newBranch && gone.newName == "qb/new" && gone.base == "dev")
+        #expect(gone.workplace == .worktree("qb/new", from: "dev"))
+        #expect(choice(.worktree("qb/new", from: nil)).base == "main")
+    }
+
+    @Test func theFolderNoLongerSwitchesBranchesAndSaysSoForOldSettings() {
+        let old = choice(.folder(on: "dev"))
+        #expect(old.legacyNote == "This flow was set to switch your folder to dev. Applying here leaves your folder on the branch it's on.")
+        #expect(old.notes.contains(old.legacyNote!))
+        #expect(old.workplace == .folder(on: nil))
+        #expect(choice(.asItIs).legacyNote == nil && choice(nil).legacyNote == nil)
+        #expect(choice(nil).notes == ["Agents work in acme itself, on whatever branch it has checked out (now main). Your own edits there show up for them too."])
+        #expect(choice(nil).workplace == .folder(on: nil) && choice(nil).canApply)
+    }
+
+    @Test func aDetachedHeadIsExplainedPlainly() {
+        let detached = choice(nil, current: nil)
+        #expect(detached.notes.first?.contains("no branch checked out (a detached HEAD)") == true)
+        #expect(detached.existingChoices.allSatisfy { $0.disabledReason == nil })
+    }
+
+    @Test func aNewBranchCantTakeTheNameOfOneThatExists() {
+        var form = choice(nil)
+        form.mode = .newBranch
+        #expect(form.problem == nil && form.workplace == .worktree("qb/fix-login", from: "main"))
+        form.newName = " dev "
+        #expect(form.problem == "A branch called dev already exists. Choose it under Existing branch.")
+        form.newName = "bad name"
+        #expect(form.problem == Workplace.problem(branchName: "bad name"))
+        form.newName = "qb/ok"; form.base = "nope"
+        #expect(form.problem != nil && !form.canApply)
+        form.base = "cursor/a"
+        #expect(form.canApply)
+    }
+
+    @Test func theFoldersBranchCantBeAnExistingWorktreeBranch() {
+        var form = choice(nil)
+        form.mode = .existingBranch
+        #expect(form.problem == "Choose a branch.")
+        let current = form.existingChoices.first { $0.branch == "main" }
+        #expect(current?.disabledReason == "Checked out in your folder" && current?.isPinned == true)
+        // A saved setting whose branch has since been checked out in the folder can't be applied.
+        let stale = choice(.worktree("dev", from: nil), current: "dev")
+        #expect(stale.mode == .existingBranch && stale.existing == "dev")
+        #expect(stale.problem == "Checked out in your folder" && !stale.canApply)
+        form.existing = "dev"
+        #expect(form.canApply && form.workplace == .worktree("dev", from: nil))
+        form.existing = "gone"
+        #expect(form.problem == "gone isn't a local branch.")
+    }
+
+    @Test func aBranchOpenInAnotherWorktreeIsNotedAndCanBePicked() {
+        var form = choice(nil)
+        form.mode = .existingBranch
+        let open = form.existingChoices.first { $0.branch == "cursor/a" }
+        #expect(open?.note == "Has a worktree: the flow works in it" && open?.disabledReason == nil)
+        form.existing = "cursor/a"
+        #expect(form.canApply && form.notes == ["A worktree on cursor/a is already there, so the flow works in it."])
+        form.existing = "dev"
+        #expect(form.notes == ["Adds a worktree of acme on dev. Your folder stays as it is."])
+        // Any local branch, including one open elsewhere, can start a new branch.
+        #expect(form.baseChoices.map(\.branch).contains("cursor/a"))
+    }
+
+    @Test func branchesWhoseFoldersWouldClashGetDistinctPaths() {
+        let have = [Workplace.Worktree(path: "/Users/k/acme/.queenbee/worktrees/feature-foo", branch: "feature/foo")]
+        let plan = Workplace.worktreePlan(branch: "feature-foo", base: "main", root: root, worktrees: have, branches: ["main", "feature/foo"])
+        let usual = "/Users/k/acme/.queenbee/worktrees/feature-foo"
+        #expect(plan.path != usual && plan.path.hasPrefix(usual + "-"))
+        #expect(plan == Workplace.worktreePlan(branch: "feature-foo", base: "main", root: root, worktrees: have, branches: ["main", "feature/foo"]))
+        // The branch that has the folder keeps it.
+        #expect(Workplace.worktreePlan(branch: "feature/foo", base: "main", root: root, worktrees: have, branches: ["feature/foo"]) == .reuse(path: usual))
+        // A folder already on disk is not built over.
+        let onDisk = Workplace.worktreePlan(branch: "dev", base: "main", root: root, worktrees: [], branches: ["dev"], isOccupied: { $0 == "/Users/k/acme/.queenbee/worktrees/dev" })
+        #expect(onDisk.path.hasPrefix("/Users/k/acme/.queenbee/worktrees/dev-") && onDisk.path != "/Users/k/acme/.queenbee/worktrees/dev")
+        // Nothing in the way: the usual folder.
+        #expect(Workplace.worktreePlan(branch: "dev", base: "main", root: root, worktrees: [], branches: ["dev"]).path == "/Users/k/acme/.queenbee/worktrees/dev")
+    }
 }

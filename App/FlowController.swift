@@ -1851,7 +1851,7 @@ final class FlowController: ToolHost {
     /// True for a flow another flow runs, which can't choose a place of its own.
     var inheritsWorkplace: Bool { !nesting.outerFlows(of: flow.id).isEmpty }
 
-    /// The words of the title bar's chip, or nil outside a git repository: where the flow works now, which
+    /// The words of the header's branch chip, or nil outside a git repository: where the flow works now, which
     /// is not what it is set to while a switch is refused.
     var workplaceChip: String? {
         guard let git else { return nil }
@@ -1957,7 +1957,7 @@ final class FlowController: ToolHost {
             guard let branch = setting.branch, branch != info.current else { return move(to: root) }
             if let problem = Workplace.problem(branchName: branch) { return refuse("The flow's branch can't be used: \(problem)") }
             guard info.branches.contains(branch) else {
-                return refuse("\(branch) isn't a branch of \(project.name) any more. Choose another in the title bar.")
+                return refuse("\(branch) isn't a branch of \(project.name) any more. Choose another from the branch chip in the header.")
             }
             if Workplace.branchesOpenElsewhere(worktrees: info.worktrees, projectRoot: root).contains(branch) {
                 return refuse("\(project.name) can't be switched to \(branch): it's open in a worktree, and git lets a branch be open in only one place. Have the flow work in that worktree instead, or choose another branch.")
@@ -1974,13 +1974,14 @@ final class FlowController: ToolHost {
             return move(to: root)
         case .worktree:
             guard let branch = setting.branch, Workplace.problem(branchName: branch) == nil else {
-                return refuse("The flow's worktree has no branch git allows. Choose one in the title bar.")
+                return refuse("The flow's worktree has no branch git allows. Choose one from the branch chip in the header.")
             }
             let base = setting.base ?? info.defaultBranch
-            let plan = Workplace.worktreePlan(branch: branch, base: base, root: root, worktrees: info.worktrees, branches: info.branches)
+            let plan = Workplace.worktreePlan(branch: branch, base: base, root: root, worktrees: info.worktrees, branches: info.branches,
+                                              isOccupied: { FileManager.default.fileExists(atPath: $0) })
             if case .create = plan {
                 guard Workplace.problem(branchName: base) == nil, info.branches.contains(base) else {
-                    return refuse("A worktree on \(branch) is made from \(base), which isn't a branch of \(project.name). Choose another in the title bar.")
+                    return refuse("A worktree on \(branch) is made from \(base), which isn't a branch of \(project.name). Choose another from the branch chip in the header.")
                 }
             }
             if let error = await Git.make(plan, at: root) { return refuse("The worktree on \(branch) couldn't be made: \(error)") }
