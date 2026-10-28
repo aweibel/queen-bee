@@ -1,0 +1,183 @@
+{
+  "cards": [
+    {
+      "command": "Turn the research in inputs/ into a Decisions for Today pre-read for Thursday's agent handoff review with Product, Engineering and XD.",
+      "height": 104,
+      "id": "start",
+      "kind": "start",
+      "name": "Brief",
+      "width": 816,
+      "x": -576,
+      "y": 40
+    },
+    {
+      "height": 380,
+      "id": "synth",
+      "instructions": "You are the Synthesizer. Read every file in inputs/. Write work/findings.md with the 4 to 6 findings that matter most. For each one give the evidence behind it (participant quotes with their participant number, and numbers from the telemetry) and say plainly where the evidence is thin. Then list the real decisions this evidence forces: each one a genuine either/or where both sides are defensible. Don't recommend a side yet. Use only what is in inputs/: never invent a quote, a person or a number. When you're done, reply with one line per finding and the list of decisions. Don't paste the whole file.",
+      "kind": "agent",
+      "model": "sonnet",
+      "name": "Synthesizer",
+      "permissionMode": "acceptEdits",
+      "width": 560,
+      "x": 340,
+      "y": 40
+    },
+    {
+      "height": 380,
+      "id": "writer",
+      "instructions": "You are the Writer. You turn research findings into a pre-read in the \"Decisions for Today\" format Rachel Kobetz uses. Before your first draft, read .claude/skills/wwrkd/references/pre-read-format.md and .claude/skills/wwrkd/references/voice-and-style.md. The evidence is in work/findings.md, and behind it inputs/. Write the pre-read to work/pre-read.md, following the skeleton in pre-read-format.md and its rules: the finding comes before the positions, each decision is a real fork, exactly one position per decision is starred, the recommended default is stated plainly in its first sentence, and the closing \"If the room only settles\" list is shorter than the number of decisions. Every finding must come from work/findings.md or inputs/; never invent evidence or a quote. Don't use the em-dash or arrow characters anywhere: write the title as \"Agent Handoff: Decisions for Today\" and each heading as \"Decision 1: ...\", and use a colon, comma or period where the format shows a dash. After your first draft, reply with \"Draft written to work/pre-read.md\" and the decisions' titles. When the Bar check sends feedback, revise work/pre-read.md to address it and reply with what you changed, in three bullets at most.",
+      "kind": "agent",
+      "model": "sonnet",
+      "name": "Writer",
+      "permissionMode": "acceptEdits",
+      "width": 560,
+      "x": 960,
+      "y": 40
+    },
+    {
+      "height": 380,
+      "id": "barcheck",
+      "instructions": "You are the Bar check. You hold the draft in work/pre-read.md to the bar Rachel Kobetz has described in her own words, using the wwrkd skill in .claude/skills/wwrkd in its EVALUATE mode. Before your first review read .claude/skills/wwrkd/references/evaluation-criteria.md, .claude/skills/wwrkd/references/pre-read-format.md and .claude/skills/wwrkd/references/voice-and-style.md, and the file in .claude/skills/wwrkd/sources/ that any judgment rests on. Check the draft against inputs/ too: every finding must be backed there. Don't edit any file.\n\nReply in exactly one of these two shapes and nothing else:\n1. Ready to send: the first line is VERDICT: READY, then a blank line, then the full text of work/pre-read.md exactly as it is now.\n2. Not ready: the first line is VERDICT: NOT YET. Then what is working, in two bullets at most. Then the one or two changes that would move it most from good toward great, each tied to a named criterion and specific enough for the Writer to act on without asking.\n\nDon't hold out for perfect. Once the format's rules hold, the evidence backs every claim and no high-leverage change is left, call it ready. You are a model of her bar built from her own words, not Rachel: never present your view as hers.",
+      "kind": "agent",
+      "model": "opus",
+      "name": "Bar check",
+      "permissionMode": "acceptEdits",
+      "width": 560,
+      "x": 1580,
+      "y": 40
+    },
+    {
+      "check": "contains",
+      "height": 144,
+      "id": "loop",
+      "kind": "loop",
+      "maxTries": 3,
+      "name": "Ready?",
+      "value": "VERDICT: READY",
+      "width": 240,
+      "x": 2208,
+      "y": 40
+    },
+    {
+      "height": 120,
+      "id": "approve",
+      "kind": "approval",
+      "name": "Your call",
+      "text": "Read the pre-read. Edit anything you'd change, then Approve to save it to output/pre-read.md, or Reject to stop without saving.",
+      "width": 240,
+      "x": 2500,
+      "y": 40
+    },
+    {
+      "height": 96,
+      "id": "endsave",
+      "kind": "end",
+      "name": "Pre-read",
+      "saveTo": "output/pre-read.md",
+      "width": 240,
+      "x": 2800,
+      "y": 40
+    },
+    {
+      "height": 96,
+      "id": "endstop",
+      "kind": "end",
+      "name": "Not sent",
+      "saveTo": "",
+      "width": 240,
+      "x": 2800,
+      "y": 180
+    },
+    {
+      "height": 96,
+      "id": "endopen",
+      "kind": "end",
+      "name": "Still open",
+      "saveTo": "output/bar-check-notes.md",
+      "width": 240,
+      "x": 2500,
+      "y": 192
+    },
+    {
+      "height": 168,
+      "id": "note",
+      "kind": "note",
+      "name": "About this demo",
+      "text": "Findings to Decisions\n\nSix (fictitious) customer interviews and a telemetry snapshot go in. A pre-read in the Decisions for Today format comes out.\n\nSynthesizer pulls the findings. Writer drafts the pre-read. Bar check holds it to the bar, grounded in the wwrkd skill, and sends it back until it's ready (three tries at most). Nothing is saved until a person approves it, and they can edit it first.\n\nEvery agent is a live Claude Code session: click into any card to watch or type.",
+      "width": 1416,
+      "x": -576,
+      "y": -168
+    }
+  ],
+  "id": "rkdemo01",
+  "links": [
+    {
+      "from": "start",
+      "id": "l1",
+      "maxPasses": 1,
+      "port": "out",
+      "to": "synth"
+    },
+    {
+      "from": "synth",
+      "id": "l2",
+      "maxPasses": 1,
+      "port": "out",
+      "to": "writer"
+    },
+    {
+      "from": "writer",
+      "id": "l3",
+      "maxPasses": 3,
+      "port": "out",
+      "to": "barcheck"
+    },
+    {
+      "from": "barcheck",
+      "id": "l4",
+      "maxPasses": 3,
+      "port": "out",
+      "to": "loop"
+    },
+    {
+      "from": "loop",
+      "id": "l5",
+      "maxPasses": 3,
+      "port": "again",
+      "to": "writer"
+    },
+    {
+      "from": "loop",
+      "id": "l6",
+      "maxPasses": 1,
+      "port": "done",
+      "to": "approve"
+    },
+    {
+      "from": "loop",
+      "id": "l7",
+      "maxPasses": 1,
+      "port": "gave-up",
+      "to": "endopen"
+    },
+    {
+      "from": "approve",
+      "id": "l8",
+      "maxPasses": 1,
+      "port": "approved",
+      "to": "endsave"
+    },
+    {
+      "from": "approve",
+      "id": "l9",
+      "maxPasses": 1,
+      "port": "rejected",
+      "to": "endstop"
+    }
+  ],
+  "name": "Findings to Decisions",
+  "notifyOrchestrator": true,
+  "orchestratorSessionID": "af39df13-ac57-4c7e-9af4-41453be7b10d",
+  "spendingLimit": 15,
+  "version": 1
+}

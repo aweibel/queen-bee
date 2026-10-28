@@ -1,0 +1,151 @@
+{
+  "cards": [
+    {
+      "command": "Build the experience risk log for the agent handoff release from the cuts in inputs/descoped.txt.",
+      "height": 96,
+      "id": "start",
+      "kind": "start",
+      "name": "Brief",
+      "width": 240,
+      "x": 40,
+      "y": 170
+    },
+    {
+      "command": "cat inputs/descoped.txt",
+      "height": 120,
+      "id": "read",
+      "kind": "script",
+      "name": "Read the cuts",
+      "width": 240,
+      "x": 340,
+      "y": 170
+    },
+    {
+      "height": 120,
+      "id": "each",
+      "kind": "for-each",
+      "maxItems": 20,
+      "name": "Each cut",
+      "split": "lines",
+      "width": 240,
+      "x": 640,
+      "y": 170
+    },
+    {
+      "height": 380,
+      "id": "analyst",
+      "instructions": "You are the Risk analyst. You keep the experience risk log for a release: for each thing that was cut or shipped differently from its design, a record of the original intent, the tradeoff and why, so the cost is visible and owned instead of becoming a paper cut nobody wrote down. Before the first item, read .claude/skills/wwrkd/references/evaluation-criteria.md for the dimensions of craft and the bar, and inputs/interviews.md and inputs/telemetry.md for what reps and customers have said. Don't edit any file.\n\nEach message is one cut, a line from inputs/descoped.txt. Reply with one JSON object and nothing else, with no code fence, and with these keys, every value a string:\n- item: the cut's short name, as it is at the start of the line.\n- original_intent: what was meant to ship, in one sentence.\n- what_shipped: what shipped instead, in one sentence.\n- why: the reason given, in one sentence.\n- quality_dimension: the one dimension of craft given up, one of: interaction behavior, information architecture, language, accessibility, trust, edge cases, performance, recovery, coherence.\n- customer_consequence: what a rep or customer will actually feel, in one plain sentence.\n- severity: High, Medium or Low, by how much it hurts the outcomes in inputs/: trust in the handoff, satisfaction after a handoff, and handle time.\n- evidence: the participant (P1 to P6) or telemetry line in inputs/ that backs the consequence, quoted briefly, or \"None in inputs\" if nothing does. Never invent evidence.\n- owner_question: the one question the owner of this cut should answer before the next release.\n\nDon't use the em-dash or arrow characters.",
+      "kind": "agent",
+      "model": "sonnet",
+      "name": "Risk analyst",
+      "permissionMode": "acceptEdits",
+      "width": 560,
+      "x": 940,
+      "y": 40
+    },
+    {
+      "command": "python3 tools/risk_log.py output/experience-risk-log.csv",
+      "height": 120,
+      "id": "build",
+      "kind": "script",
+      "name": "Build the log",
+      "width": 240,
+      "x": 1560,
+      "y": 170
+    },
+    {
+      "height": 96,
+      "id": "endlog",
+      "kind": "end",
+      "name": "Risk log",
+      "saveTo": "output/experience-risk-log.md",
+      "width": 240,
+      "x": 1860,
+      "y": 100
+    },
+    {
+      "height": 96,
+      "id": "endnone",
+      "kind": "end",
+      "name": "No log",
+      "saveTo": "",
+      "width": 240,
+      "x": 1860,
+      "y": 260
+    },
+    {
+      "height": 144,
+      "id": "note",
+      "kind": "note",
+      "name": "About this demo",
+      "text": "Keep the Receipts\n\nSeven things cut from the (fictitious) handoff release go in. A spreadsheet comes out: for each cut, the original intent, what shipped, why, the quality given up, what the customer will feel and how bad it is.\n\nRead the cuts and Build the log are plain scripts. For each hands the cuts to the Risk analyst one at a time and gathers the answers. The log lands in output/experience-risk-log.csv, with a summary beside it.",
+      "width": 1212,
+      "x": 34,
+      "y": -168
+    }
+  ],
+  "id": "rkdemo03",
+  "links": [
+    {
+      "from": "start",
+      "id": "l1",
+      "maxPasses": 1,
+      "port": "out",
+      "to": "read"
+    },
+    {
+      "from": "read",
+      "id": "l2",
+      "maxPasses": 1,
+      "port": "pass",
+      "to": "each"
+    },
+    {
+      "from": "read",
+      "id": "l3",
+      "maxPasses": 1,
+      "port": "fail",
+      "to": "endnone"
+    },
+    {
+      "from": "each",
+      "id": "l4",
+      "maxPasses": 3,
+      "port": "each",
+      "to": "analyst"
+    },
+    {
+      "from": "analyst",
+      "id": "l5",
+      "maxPasses": 3,
+      "port": "out",
+      "to": "each"
+    },
+    {
+      "from": "each",
+      "id": "l6",
+      "maxPasses": 1,
+      "port": "done",
+      "to": "build"
+    },
+    {
+      "from": "build",
+      "id": "l7",
+      "maxPasses": 1,
+      "port": "pass",
+      "to": "endlog"
+    },
+    {
+      "from": "build",
+      "id": "l8",
+      "maxPasses": 1,
+      "port": "fail",
+      "to": "endnone"
+    }
+  ],
+  "name": "Keep the Receipts",
+  "notifyOrchestrator": true,
+  "orchestratorSessionID": "9010a9eb-2988-42ad-92f9-38ae4dae566f",
+  "spendingLimit": 10,
+  "version": 1
+}

@@ -1,0 +1,5 @@
+work/
+output/
+prototype/
+# The wwrkd skill comes from its own private repo. See README.md.
+.claude/skills/wwrkd/

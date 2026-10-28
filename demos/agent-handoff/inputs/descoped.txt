@@ -1,0 +1,7 @@
+Handoff summary checklist. Intent: the summary lists what the agent checked and what it didn't. Shipped: one free-text summary paragraph. Why: cut to hit the release date.
+Take over shortcut. Intent: a rep can take over a conversation they are watching with one key. Shipped: a Take over button reachable by mouse only. Why: the keyboard shortcut clashed with an existing console shortcut and there was no time to resolve it.
+Handoff announcement. Intent: a screen reader announces a new handoff and reads its summary. Shipped: a visual badge only. Why: deferred to the next release because the accessibility review was scheduled after code freeze.
+Customer mood. Intent: show how the conversation has gone, with the customer's own words as evidence. Shipped: nothing. Why: legal asked that we not label customer sentiment, and there wasn't time to design an alternative.
+Agent promises. Intent: a list of everything the agent told the customer it would do. Shipped: promises are highlighted inside the transcript. Why: a separate list needed a new data field the platform team couldn't add this release.
+Panel placement. Intent: the handoff panel docks beside the case timeline. Shipped: the panel overlays the timeline. Why: the console's layout engine can't dock a third column at common laptop widths.
+Re-verification message. Intent: tell the customer why a person needs to check their identity again. Shipped: the generic line "Please verify your identity." Why: the explanatory copy didn't finish compliance review in time.

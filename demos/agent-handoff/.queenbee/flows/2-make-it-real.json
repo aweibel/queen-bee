@@ -1,0 +1,213 @@
+{
+  "cards": [
+    {
+      "command": "Make Decision 1 real: build a working prototype of the rep's handoff view for the conversation in inputs/conversation.md.",
+      "height": 118,
+      "id": "start",
+      "kind": "start",
+      "name": "Brief",
+      "width": 744,
+      "x": -576,
+      "y": 40
+    },
+    {
+      "height": 380,
+      "id": "proto",
+      "instructions": "You are the Prototyper. You build a working prototype, not a mock: one self-contained file, prototype/index.html, with its CSS and JavaScript inline and nothing loaded from the internet. It is the view a service rep, Adrienne Montero, sees when the AI agent hands her the conversation in inputs/conversation.md. Read that file, inputs/interviews.md and inputs/telemetry.md, and output/pre-read.md if it exists: Decision 1 there is what to build. If it doesn't exist, build the rebuilt summary that inputs/interviews.md asks for.\n\nThe view must:\n- lead with a summary that separates what the agent verified from what it couldn't, using the tool record in the conversation file, so the unknown card status and the fee waiver nobody recorded can't be missed;\n- show what the agent promised the customer, and whether the record backs each promise;\n- show how the conversation has gone, with the customer's own words as evidence, not a sentiment label;\n- let the rep open the full transcript, and take over with a button and with a keyboard shortcut;\n- work with the keyboard alone, with visible focus (a :focus-visible style), labelled buttons, a main landmark and text that meets WCAG AA contrast.\n\nUse only the people, numbers and words in inputs/. Don't use the em-dash or arrow characters.\n\nWhen you're done, reply with \"Prototype written to prototype/index.html\" and three lines on the choices you made. When check results or walkthrough notes come back, fix what they name in prototype/index.html and reply with what you changed, in three bullets at most.",
+      "kind": "agent",
+      "model": "sonnet",
+      "name": "Prototyper",
+      "permissionMode": "acceptEdits",
+      "width": 560,
+      "x": 340,
+      "y": 40
+    },
+    {
+      "command": "python3 tools/check_prototype.py prototype/index.html",
+      "height": 120,
+      "id": "checks",
+      "kind": "script",
+      "name": "Checks",
+      "width": 240,
+      "x": 960,
+      "y": 170
+    },
+    {
+      "command": "python3 tools/serve.py prototype 8765",
+      "height": 120,
+      "id": "serve",
+      "kind": "script",
+      "name": "Serve",
+      "width": 240,
+      "x": 1260,
+      "y": 170
+    },
+    {
+      "browser": true,
+      "height": 560,
+      "id": "walk",
+      "instructions": "You are Walk the store. You go through the prototype end to end the way a rep would, in the browser in your card, so the person can watch. The message you get names the prototype's address: open that address and no other. Don't edit any file.\n\nBe Adrienne Montero, who has just accepted this handoff. In order: read the page and take a screenshot. Ask whether, in the first five seconds, a rep can tell what the agent verified and what it couldn't, what it promised, and how upset the customer is. Open the full transcript. Take over the conversation with the button. Reload, and do it again with the keyboard alone, pressing Tab to move. Check against inputs/conversation.md that nothing on the page is wrong.\n\nReply in exactly one of two shapes and nothing else:\n1. The first line is WALKTHROUGH: PASS. Then what worked, in three bullets at most, then any small seams worth knowing.\n2. The first line is WALKTHROUGH: FIX. Then the one or two problems that would hurt a rep most, each with where it is and what to change, specific enough for the Prototyper to act on.\n\nCall it a pass when a rep could act correctly on this conversation within a few seconds and nothing on the page is wrong. Don't hold out for polish.",
+      "kind": "agent",
+      "model": "sonnet",
+      "name": "Walk the store",
+      "permissionMode": "acceptEdits",
+      "width": 1120,
+      "x": 1560,
+      "y": 40
+    },
+    {
+      "check": "contains",
+      "height": 144,
+      "id": "loop",
+      "kind": "loop",
+      "maxTries": 2,
+      "name": "Good enough?",
+      "value": "WALKTHROUGH: PASS",
+      "width": 240,
+      "x": 2740,
+      "y": 158
+    },
+    {
+      "height": 120,
+      "id": "approve",
+      "kind": "approval",
+      "name": "Your call",
+      "text": "Try the prototype yourself in the Walk the store card, or open prototype/index.html. Approve to keep the walkthrough notes in output/prototype-walkthrough.md.",
+      "width": 240,
+      "x": 3040,
+      "y": 100
+    },
+    {
+      "height": 96,
+      "id": "endkeep",
+      "kind": "end",
+      "name": "Prototype",
+      "saveTo": "output/prototype-walkthrough.md",
+      "width": 240,
+      "x": 3340,
+      "y": 40
+    },
+    {
+      "height": 96,
+      "id": "endstop",
+      "kind": "end",
+      "name": "Not kept",
+      "saveTo": "",
+      "width": 240,
+      "x": 3340,
+      "y": 180
+    },
+    {
+      "height": 96,
+      "id": "endfail",
+      "kind": "end",
+      "name": "Couldn't serve",
+      "saveTo": "",
+      "width": 240,
+      "x": 1260,
+      "y": 340
+    },
+    {
+      "height": 168,
+      "id": "note",
+      "kind": "note",
+      "name": "About this demo",
+      "text": "Make It Real\n\nDecision 1 from the pre-read, built as a working prototype instead of described in a deck.\n\nPrototyper builds one HTML file from a (fictitious) handed-off conversation. Checks runs plain tests on it. Serve puts it on this Mac only. Walk the store uses the page in its card the way a rep would, end to end, and sends it back if a rep would be misled. You try it last and decide.\n\nClick into the page in Walk the store to use it yourself.",
+      "width": 1656,
+      "x": 0,
+      "y": -168
+    }
+  ],
+  "id": "rkdemo02",
+  "links": [
+    {
+      "from": "start",
+      "id": "l1",
+      "maxPasses": 1,
+      "port": "out",
+      "to": "proto"
+    },
+    {
+      "from": "proto",
+      "id": "l2",
+      "maxPasses": 3,
+      "port": "out",
+      "to": "checks"
+    },
+    {
+      "from": "checks",
+      "id": "l3",
+      "maxPasses": 2,
+      "port": "fail",
+      "to": "proto"
+    },
+    {
+      "from": "checks",
+      "id": "l4",
+      "maxPasses": 3,
+      "port": "pass",
+      "to": "serve"
+    },
+    {
+      "from": "serve",
+      "id": "l5",
+      "maxPasses": 3,
+      "port": "pass",
+      "to": "walk"
+    },
+    {
+      "from": "serve",
+      "id": "l6",
+      "maxPasses": 1,
+      "port": "fail",
+      "to": "endfail"
+    },
+    {
+      "from": "walk",
+      "id": "l7",
+      "maxPasses": 3,
+      "port": "out",
+      "to": "loop"
+    },
+    {
+      "from": "loop",
+      "id": "l8",
+      "maxPasses": 2,
+      "port": "again",
+      "to": "proto"
+    },
+    {
+      "from": "loop",
+      "id": "l9",
+      "maxPasses": 1,
+      "port": "done",
+      "to": "approve"
+    },
+    {
+      "from": "loop",
+      "id": "l10",
+      "maxPasses": 1,
+      "port": "gave-up",
+      "to": "approve"
+    },
+    {
+      "from": "approve",
+      "id": "l11",
+      "maxPasses": 1,
+      "port": "approved",
+      "to": "endkeep"
+    },
+    {
+      "from": "approve",
+      "id": "l12",
+      "maxPasses": 1,
+      "port": "rejected",
+      "to": "endstop"
+    }
+  ],
+  "name": "Make It Real",
+  "notifyOrchestrator": true,
+  "orchestratorSessionID": "f364665b-da53-4731-9980-9a99bd0a1153",
+  "spendingLimit": 10,
+  "version": 1
+}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__qb-browser__click",
+      "mcp__qb-browser__type",
+      "mcp__qb-browser__press"
+    ]
+  }
+}
