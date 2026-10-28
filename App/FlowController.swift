@@ -1976,6 +1976,7 @@ final class FlowController: ToolHost {
             guard let branch = setting.branch, Workplace.problem(branchName: branch) == nil else {
                 return refuse("The flow's worktree has no branch git allows. Choose one from the branch chip in the header.")
             }
+            if let problem = Workplace.worktreeProblem(branch: branch, root: root, worktrees: info.worktrees) { return refuse(problem) }
             let base = setting.base ?? info.defaultBranch
             let plan = Workplace.worktreePlan(branch: branch, base: base, root: root, worktrees: info.worktrees, branches: info.branches,
                                               isOccupied: { FileManager.default.fileExists(atPath: $0) })

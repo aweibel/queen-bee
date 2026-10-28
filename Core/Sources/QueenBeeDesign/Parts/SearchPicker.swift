@@ -43,14 +43,16 @@ public struct SearchPicker<ID: Hashable>: View {
     let selection: ID?
     let placeholder: String
     let prompt: String
+    let accessibilityLabel: String?
     let onPick: (ID) -> Void
 
-    public init(_ items: [SearchPickerItem<ID>], selection: ID?, placeholder: String, prompt: String = "Search",
+    public init(_ items: [SearchPickerItem<ID>], selection: ID?, placeholder: String, prompt: String = "Search", accessibilityLabel: String? = nil,
                 onPick: @escaping (ID) -> Void) {
         self.items = items
         self.selection = selection
         self.placeholder = placeholder
         self.prompt = prompt
+        self.accessibilityLabel = accessibilityLabel
         self.onPick = onPick
     }
 
@@ -80,7 +82,8 @@ public struct SearchPicker<ID: Hashable>: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(selectedTitle ?? placeholder)
+        .accessibilityLabel(accessibilityLabel ?? selectedTitle ?? placeholder)
+        .accessibilityValue(accessibilityLabel == nil ? "" : (selectedTitle ?? placeholder))
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             SearchPickerList(items: items, selection: selection, prompt: prompt) { id in
                 onPick(id)

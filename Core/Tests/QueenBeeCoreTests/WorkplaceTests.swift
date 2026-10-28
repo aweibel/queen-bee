@@ -234,7 +234,7 @@ import Testing
         form.existing = "dev"
         #expect(form.canApply && form.workplace == .worktree("dev", from: nil))
         form.existing = "gone"
-        #expect(form.problem == "gone isn't a local branch.")
+        #expect(form.problem == "gone isn't a branch any more. Choose another.")
     }
 
     @Test func aBranchOpenInAnotherWorktreeIsNotedAndCanBePicked() {
@@ -263,5 +263,45 @@ import Testing
         #expect(onDisk.path.hasPrefix("/Users/k/acme/.queenbee/worktrees/dev-") && onDisk.path != "/Users/k/acme/.queenbee/worktrees/dev")
         // Nothing in the way: the usual folder.
         #expect(Workplace.worktreePlan(branch: "dev", base: "main", root: root, worktrees: [], branches: ["dev"]).path == "/Users/k/acme/.queenbee/worktrees/dev")
+    }
+
+    @Test func theNextFreeFolderIsChosenInOrderAndTheSameWayEachTime() {
+        let dir = "/Users/k/acme/.queenbee/worktrees/"
+        let tag = Workplace.shortHash("feature-foo")
+        func path(_ taken: Set<String>, listed: [Workplace.Worktree] = []) -> String {
+            Workplace.newWorktreePath(branch: "feature-foo", root: root, worktrees: listed, isOccupied: { taken.contains($0) })
+        }
+        #expect(path([]) == dir + "feature-foo")
+        #expect(path([dir + "feature-foo"]) == dir + "feature-foo-" + tag)
+        #expect(path([dir + "feature-foo", dir + "feature-foo-" + tag]) == dir + "feature-foo-" + tag + "-2")
+        // A listed worktree of any branch holds its folder; a folder left on disk does too.
+        let listed = [Workplace.Worktree(path: dir + "feature-foo", branch: "other"), .init(path: dir + "feature-foo-" + tag, branch: nil)]
+        #expect(path([], listed: listed) == dir + "feature-foo-" + tag + "-2")
+        #expect(path([dir + "feature-foo-" + tag + "-2"], listed: listed) == dir + "feature-foo-" + tag + "-3")
+        #expect(path([dir + "feature-foo"]) == path([dir + "feature-foo"]))
+        // Everything taken: the last candidate, not a crash.
+        #expect(Workplace.newWorktreePath(branch: "x", root: root, worktrees: [], isOccupied: { _ in true }).hasSuffix("-50"))
+    }
+
+    @Test func aBranchCheckedOutInTheFolderCantHaveAWorktreeToo() {
+        let listed = [Workplace.Worktree(path: "/Users/k/acme/", branch: "main"), .init(path: "/elsewhere", branch: "dev")]
+        let message = Workplace.worktreeProblem(branch: "main", root: root, worktrees: listed)
+        #expect(message == "main is checked out in your folder, so it can't have a worktree too. Switch your folder to another branch, or choose another branch for the flow.")
+        #expect(Workplace.worktreeProblem(branch: "dev", root: root, worktrees: listed) == nil)
+        #expect(Workplace.worktreeProblem(branch: "new", root: root, worktrees: listed) == nil)
+    }
+
+    @Test func aSelectedBranchThatIsGoneOrNowInTheFolderBlocksApply() {
+        var form = choice(nil)
+        form.mode = .existingBranch
+        form.existing = "dev"
+        #expect(form.canApply)
+        let gone = form.revalidated(current: "main", branches: ["main", "qb/x"], defaultBranch: "main", worktrees: form.worktrees)
+        #expect(gone.problem == "dev isn't a branch any more. Choose another." && gone.existing == "dev")
+        let taken = form.revalidated(current: "dev", branches: form.branches, defaultBranch: "main", worktrees: form.worktrees)
+        #expect(taken.problem == "Checked out in your folder")
+        form.mode = .newBranch; form.newName = "qb/ok"; form.base = "dev"
+        let noBase = form.revalidated(current: "main", branches: ["main"], defaultBranch: "main", worktrees: form.worktrees)
+        #expect(noBase.problem != nil && noBase.newName == "qb/ok")
     }
 }

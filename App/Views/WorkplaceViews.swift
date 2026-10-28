@@ -43,6 +43,8 @@ struct WorkplaceForm: View {
     /// What the form shows and decides. Nil until the repository has been read.
     @State private var model: WorkplaceChoice?
     @State private var isApplying = false
+    /// Why Apply stopped after the repository was read again, until the person changes something.
+    @State private var staleProblem: String?
 
     var body: some View {
         let setting = controller.workplaceSetting
@@ -102,6 +104,7 @@ struct WorkplaceForm: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .accessibilityLabel("Where the flow works")
 
             if !isFolder {
                 Picker("", selection: Binding(get: { model.mode }, set: { self.model?.mode = $0 })) {
@@ -110,6 +113,7 @@ struct WorkplaceForm: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .accessibilityLabel("Worktree branch")
             }
 
             switch model.mode {
@@ -124,7 +128,7 @@ struct WorkplaceForm: View {
                 }
                 row("Starting from") {
                     SearchPicker(model.baseChoices.map { SearchPickerItem(id: $0.branch, title: $0.branch, isPinned: $0.isPinned) },
-                                 selection: model.base, placeholder: "Choose a branch", prompt: "Search local branches") {
+                                 selection: model.base, placeholder: "Choose a branch", prompt: "Search local branches", accessibilityLabel: "Starting from") {
                         self.model?.base = $0
                     }
                 }
@@ -132,13 +136,13 @@ struct WorkplaceForm: View {
                 row("Branch") {
                     SearchPicker(model.existingChoices.map {
                         SearchPickerItem(id: $0.branch, title: $0.branch, note: $0.note, disabledReason: $0.disabledReason, isPinned: $0.isPinned)
-                    }, selection: model.existing, placeholder: "Choose a local branch", prompt: "Search local branches") {
+                    }, selection: model.existing, placeholder: "Choose a local branch", prompt: "Search local branches", accessibilityLabel: "Branch") {
                         self.model?.existing = $0
                     }
                 }
             }
             ForEach(model.notes, id: \.self) { note($0) }
-            if let problem = model.problem {
+            if let problem = model.problem ?? staleProblem {
                 Text(problem)
                     .font(.dsSans(Theme.Size.caption))
                     .foregroundStyle(Theme.failInk.ui)
@@ -188,14 +192,27 @@ struct WorkplaceForm: View {
                                 projectName: controller.project.name, flowName: controller.flow.name, flowID: controller.flow.id)
     }
 
-    private func apply(_ model: WorkplaceChoice) {
-        let chosen = model.workplace
+    private func apply(_ chosen: WorkplaceChoice) {
         isApplying = true
+        staleProblem = nil
         Task {
+            // The repository may have changed since the form was read: check the choices against it once more.
+            await controller.refreshGit()
+            var ready = chosen
+            if let git = controller.git {
+                ready = chosen.revalidated(current: git.current, branches: git.branches, defaultBranch: git.defaultBranch, worktrees: git.worktrees)
+                model = ready
+            }
+            if let problem = ready.problem {
+                staleProblem = problem
+                isApplying = false
+                return
+            }
+            let setting = ready.workplace
             if isFirstRun {
-                await controller.answerWorkplaceQuestion(chosen)
+                await controller.answerWorkplaceQuestion(setting)
             } else {
-                await controller.setWorkplace(chosen)
+                await controller.setWorkplace(setting)
             }
             isApplying = false
             done()

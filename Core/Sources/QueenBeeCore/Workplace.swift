@@ -171,17 +171,24 @@ public struct Workplace: Codable, Equatable, Sendable {
     }
 
     /// Where a new worktree for `branch` goes. Usually `worktreeFolder`, but `feature/foo` and `feature-foo` share
-    /// that folder, so when a listed worktree on another branch already has it, or `isOccupied` says something is
-    /// there, the branch's own tag is added to the name.
+    /// that folder, so each of these is tried in turn until one is free: the usual folder, then the usual folder
+    /// with the branch's own tag, then the tagged one numbered 2, 3 and so on. A folder is taken when any listed
+    /// worktree is in it, or `isOccupied` says something is there. The same facts always give the same folder.
     public static func newWorktreePath(branch: String, root: URL, worktrees: [Worktree], isOccupied: (String) -> Bool = { _ in false }) -> String {
-        let usual = worktreeFolder(for: branch, in: root)
-        func same(_ a: String, _ b: String) -> Bool {
-            URL(fileURLWithPath: a).resolvingSymlinksInPath().standardizedFileURL.path
-                == URL(fileURLWithPath: b).resolvingSymlinksInPath().standardizedFileURL.path
-        }
-        let taken = worktrees.contains { $0.branch != branch && same($0.path, usual.path) } || isOccupied(usual.path)
-        guard taken else { return usual.path }
-        return usual.path + "-" + shortHash(branch)
+        let usual = worktreeFolder(for: branch, in: root).path
+        func resolved(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
+        let used = Set(worktrees.map { resolved($0.path) })
+        let tagged = usual + "-" + shortHash(branch)
+        let candidates = [usual, tagged] + (2...50).map { "\(tagged)-\($0)" }
+        return candidates.first { !used.contains(resolved($0)) && !isOccupied($0) } ?? candidates[candidates.count - 1]
+    }
+
+    /// Why `branch` can't get a worktree, or nil. A branch checked out in the project folder can't also be
+    /// checked out in a worktree, and the folder isn't a worktree for the flow to use.
+    public static func worktreeProblem(branch: String, root: URL, worktrees: [Worktree]) -> String? {
+        let here = root.resolvingSymlinksInPath().standardizedFileURL.path
+        guard worktrees.contains(where: { $0.branch == branch && URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path == here }) else { return nil }
+        return "\(branch) is checked out in your folder, so it can't have a worktree too. Switch your folder to another branch, or choose another branch for the flow."
     }
 
     /// `isOccupied` is asked about the usual folder for a new worktree: pass a check that the path exists on disk.
@@ -277,6 +284,14 @@ public struct WorkplaceChoice: Equatable, Sendable {
         }
     }
 
+    /// The same choices made again against fresh facts about the repository.
+    public func revalidated(current: String?, branches: [String], defaultBranch: String, worktrees: [Workplace.Worktree]) -> WorkplaceChoice {
+        var fresh = WorkplaceChoice(saved: nil, current: current, branches: branches, defaultBranch: defaultBranch, worktrees: worktrees,
+                                    projectRoot: projectRoot, projectName: projectName, flowName: "", flowID: "")
+        fresh.mode = mode; fresh.newName = newName; fresh.base = base; fresh.existing = existing
+        return fresh
+    }
+
     /// The outer choice: the folder or a worktree.
     public var kind: Workplace.Kind {
         get { mode == .folder ? .folder : .worktree }
@@ -362,7 +377,7 @@ public struct WorkplaceChoice: Equatable, Sendable {
             return nil
         case .existingBranch:
             guard let existing else { return "Choose a branch." }
-            if !branches.contains(existing) { return "\(existing) isn't a local branch." }
+            if !branches.contains(existing) { return "\(existing) isn't a branch any more. Choose another." }
             return disabledReason(forExisting: existing)
         }
     }
