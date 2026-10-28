@@ -52,9 +52,24 @@ app moves what it "deletes to the Trash" into its own support folder, so the tes
 run them on an iPad and on an iPhone, because the two lay the app out differently. Keep one simulator booted at a
 time: each is heavy, and the scripts use whichever is already running. The app's launch arguments for tests are
 listed at the top of `Mobile/Link/DebugLaunch.swift`, and with `-qbCannedRun 3` the app shows a made-up run with
-no Mac at all, which is the quick way to look at a screen.
+no Mac at all, which is the quick way to look at a screen. `mirror` checks the copy of a terminal a device is sent.
 
-To put the app on a real device, follow [the README](README.md#install-it-on-your-own-device). Your team id and
+The end-to-end script starts a separate test copy of the app with its own support folder, so a copy you have open is
+left alone. A scenario that can't run on this Mac, such as one whose app isn't built, is counted as skipped. The run
+fails when a scenario you named was skipped, or when nothing passed. `QB_E2E_SHOTS=<folder>` says where screenshots go.
+
+### Launch flags
+
+- `--open <folder>` opens that project folder in the first window. Give it more than once to open several.
+- `--float` keeps the window above others without taking focus. Terminals stop painting in a hidden window, so a
+  check that looks at the window needs it.
+- `--welcome` shows the first-run walk-through in a test copy, which otherwise skips it.
+- `--testing` turns on the test harness and lets a second copy of the app run. `QB_SUPPORT_DIR` in the environment
+  moves that copy's socket and plugin.
+
+`--testing`, `--welcome` and `QB_SUPPORT_DIR` only work in a debug build.
+
+To put the app on a real device, follow [docs/mobile.md](docs/mobile.md#install-it-on-your-own-device). Your team id and
 bundle id go in `Mobile/Local.xcconfig`, which git ignores. Never commit that file, and never put a team id in
 `project.yml` or `Mobile/Config.xcconfig`.
 
@@ -68,8 +83,24 @@ hand-offs, the canvas or the engine, and say in the pull request which ones you 
 
 ## Where things live
 
-The README's [How it works](README.md#how-it-works) section maps the five parts: `Core/`, `App/`, `Helper/`,
-`Mobile/` and `Plugin/qb-link/`. A few habits the code already follows:
+- `Core/` is a Swift package with no UI: the flow model, the file store, the routing engine, the orchestrator's tools
+  and the socket messages. `cd Core && swift test` runs its tests.
+- `App/` is the SwiftUI and AppKit app. The canvas is an `NSScrollView` with magnification, and each terminal is a
+  SwiftTerm view inside a card.
+- `App/Browser/` runs a hidden Chromium for agent cards that have a browser, one per project, and controls it over a
+  private pipe with the Chrome DevTools Protocol. The page is streamed into the card as pictures, and the agent's
+  tools are served by `qb browser-mcp`.
+- `Core/Sources/QueenBeeCore/Capabilities.swift` is the one place that says what each card and each agent can do. The
+  app writes it into each project as `.queenbee/CAPABILITIES.md` for the orchestrator to read, its tools take their
+  settings from it, and the build writes it out as [CAPABILITIES.md](CAPABILITIES.md).
+- `Helper/` builds `qb`, a small binary inside the app bundle. Claude Code hooks, the plugin and the orchestrator's
+  tool server all run it, and it talks to the app over a unix socket in `~/Library/Application Support/QueenBee/`.
+- `Mobile/` is the iPad and iPhone app. It links the same `Core/` package, draws the canvas with UIKit and the panels
+  with SwiftUI, and feeds each terminal the output the Mac sends.
+- `Plugin/qb-link/` is the plugin the app loads into every session. When an agent's turn ends it asks the app where
+  the reply goes and sends it there as a Claude Code session message.
+
+A few habits the code already follows:
 
 - Anything that can be decided without a window goes in `Core/` and gets a test there.
 - Every colour, type size, spacing step and timing comes from `App/Design/Tokens.swift`. `Mobile/Design/Tokens.swift`
@@ -86,6 +117,24 @@ Fork, branch from `main`, keep the pull request to one thing, and describe what 
 
 The repository is public, so run `./scripts/check-clean.sh` before you commit and before you push. It fails if a
 signing file, `Mobile/Local.xcconfig`, a team id, a key or a home folder path is tracked.
+
+## Releasing
+
+For maintainers. Raise `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, put the same version in
+`Plugin/qb-link/.claude-plugin/plugin.json` and in `MCPServer.version` in `Core/Sources/QueenBeeCore/MCP.swift`, add a
+section for the version to `CHANGELOG.md`, commit, then:
+
+```sh
+./scripts/release.sh check      # the checks alone: the version matches everywhere, the build number is above appcast.xml's, the tree is clean
+./scripts/release.sh            # build, sign, notarize and write the feed, into dist/
+./scripts/release.sh publish    # the same, then release it on GitHub, tag it and push appcast.xml
+```
+
+`swift test` fails too when the three versions disagree. Publish puts the disk image on GitHub before it pushes
+`appcast.xml`, so installed copies are never pointed at a download that isn't there, and running it again after a
+failure carries on from the step that failed. Releases from a `release/<version>` branch reach installed copies once
+that branch is merged into `main`, where they read the feed. The script's header lists the certificate, notarization
+profile and update key it needs.
 
 ## Known issues and where help is wanted
 
